@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>orqi (TonyBot) — what it is and how it works</title>
+<style>
+  :root {
+    --ivory:   #FAF9F5;
+    --slate:   #141413;
+    --clay:    #D97757;
+    --oat:     #E3DACC;
+    --olive:   #788C5D;
+    --gray-150:#F0EEE6;
+    --gray-300:#D1CFC5;
+    --gray-500:#87867F;
+    --gray-700:#3D3D3A;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans:  system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--ivory);
+    color: var(--gray-700);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    padding: 56px 24px 120px;
+  }
+  .page {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: 48px;
+  }
+  @media (max-width: 920px) { .page { grid-template-columns: 1fr; } nav { display: none; } }
+
+  /* ── nav ──────────────────────────────── */
+  nav {
+    position: sticky;
+    top: 32px;
+    align-self: start;
+    font-size: 13px;
+  }
+  nav .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+    margin-bottom: 12px;
+  }
+  nav a {
+    display: block;
+    padding: 5px 0 5px 12px;
+    border-left: 2px solid var(--gray-300);
+    color: var(--gray-700);
+    text-decoration: none;
+  }
+  nav a:hover { color: var(--slate); border-color: var(--slate); }
+  nav a.l2 { padding-left: 24px; font-size: 12.5px; color: var(--gray-500); }
+  nav .files {
+    margin-top: 28px;
+    border-top: 1px solid var(--gray-300);
+    padding-top: 16px;
+  }
+  nav .files code {
+    display: block;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--gray-500);
+    padding: 3px 0;
+  }
+
+  /* ── header ───────────────────────────── */
+  header { margin-bottom: 12px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+    margin-bottom: 10px;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 32px;
+    color: var(--slate);
+    letter-spacing: -0.01em;
+    margin-bottom: 14px;
+  }
+  .tldr {
+    border: 1.5px solid var(--gray-300);
+    border-left: 3px solid var(--clay);
+    border-radius: 10px;
+    background: #fff;
+    padding: 16px 18px;
+    margin-bottom: 8px;
+  }
+  .tldr b { color: var(--slate); }
+
+  h2 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 22px;
+    color: var(--slate);
+    margin: 40px 0 14px;
+    scroll-margin-top: 24px;
+  }
+  p { margin-bottom: 12px; max-width: 680px; }
+  code { font-family: var(--mono); font-size: 13px; }
+
+  /* ── collapsible ─────────────────────── */
+  details {
+    border: 1.5px solid var(--gray-300);
+    border-radius: 10px;
+    background: #fff;
+    margin: 14px 0;
+    overflow: hidden;
+  }
+  summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 14px 16px;
+    font-family: var(--serif);
+    font-size: 16px;
+    color: var(--slate);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before {
+    content: "▸";
+    color: var(--clay);
+    font-family: var(--sans);
+    font-size: 12px;
+    transition: transform 120ms;
+  }
+  details[open] summary::before { transform: rotate(90deg); }
+  summary .where {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--gray-500);
+    margin-left: auto;
+  }
+  details .body { padding: 0 16px 16px; }
+  details .body p { font-size: 14px; }
+
+  /* ── tabs ─────────────────────────────── */
+  .tabs {
+    border: 1.5px solid var(--gray-300);
+    border-radius: 10px;
+    background: #fff;
+    margin: 16px 0 8px;
+    overflow: hidden;
+  }
+  .tabbar {
+    display: flex;
+    border-bottom: 1px solid var(--gray-300);
+    background: var(--gray-150);
+  }
+  .tabbar button {
+    appearance: none;
+    border: none;
+    background: none;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--gray-500);
+    padding: 10px 16px;
+    cursor: pointer;
+    border-right: 1px solid var(--gray-300);
+  }
+  .tabbar button.on {
+    background: #fff;
+    color: var(--slate);
+    border-bottom: 2px solid var(--clay);
+    margin-bottom: -1px;
+  }
+  .tabs pre {
+    display: none;
+    margin: 0;
+    padding: 16px 18px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--slate);
+    overflow-x: auto;
+  }
+  .tabs pre.on { display: block; }
+  .hl { color: var(--clay); }
+  .cm { color: var(--gray-500); }
+
+  /* ── callout ──────────────────────────── */
+  .callout {
+    display: flex;
+    gap: 12px;
+    border: 1.5px solid var(--oat);
+    background: rgba(227,218,204,0.35);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 18px 0;
+    font-size: 14px;
+  }
+  .callout .ico { color: var(--clay); font-weight: 600; }
+
+  /* ── faq ──────────────────────────────── */
+  dl.faq { margin-top: 8px; }
+  dl.faq dt {
+    font-family: var(--serif);
+    font-size: 16px;
+    color: var(--slate);
+    margin-top: 18px;
+  }
+  dl.faq dd { font-size: 14px; margin: 4px 0 0; max-width: 640px; }
+
+  /* ── stat strip (added) ───────────────── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin: 20px 0 8px;
+  }
+  @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    border: 1.5px solid var(--gray-300);
+    border-radius: 10px;
+    background: #fff;
+    padding: 14px 16px;
+  }
+  .stat .n {
+    font-family: var(--serif);
+    font-size: 30px;
+    line-height: 1;
+    color: var(--slate);
+  }
+  .stat .l {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+    margin-top: 8px;
+  }
+
+  /* ── terminal sample (added) ──────────── */
+  .term {
+    border: 1.5px solid var(--gray-300);
+    border-radius: 10px;
+    background: var(--slate);
+    color: var(--oat);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.6;
+    padding: 16px 18px;
+    margin: 16px 0;
+    overflow-x: auto;
+  }
+  .term .o { color: var(--clay); }
+  .term .g { color: var(--gray-500); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── side nav ── -->
+  <nav>
+    <div class="label">On this page</div>
+    <a href="#tldr">TL;DR</a>
+    <a href="#why">Why a CLI</a>
+    <a href="#does">What it can do</a>
+    <a href="#boot">Boot path</a>
+    <a href="#boot" class="l2">1. Credentials</a>
+    <a href="#boot" class="l2">2. MCP tools</a>
+    <a href="#boot" class="l2">3. Models</a>
+    <a href="#boot" class="l2">4. Skills + prompt</a>
+    <a href="#boot" class="l2">5. TUI</a>
+    <a href="#arch">Architecture</a>
+    <a href="#subagents">Subagents</a>
+    <a href="#build">Running, building, sharing</a>
+    <a href="#gotchas">Gotchas</a>
+    <a href="#faq">FAQ</a>
+    <div class="files">
+      <div class="label">Source</div>
+      <code>src/main.ts</code>
+      <code>src/auth.ts</code>
+      <code>src/mcp.ts</code>
+      <code>src/model.ts</code>
+      <code>src/subagent.ts</code>
+      <code>src/commands.ts</code>
+      <code>src/branding.ts</code>
+      <code>build.ts</code>
+    </div>
+  </nav>
+
+  <!-- ── main ── -->
+  <main>
+    <header>
+      <div class="eyebrow">Research · RES-824 · proof of concept</div>
+      <h1><code>orqi</code> — TonyBot as a dedicated CLI</h1>
+      <div class="tldr" id="tldr">
+        <b>TL;DR</b> — <code>orqi</code> is a single binary that embeds the
+        <a href="https://github.com/earendil-works/pi">pi</a> coding agent and boots with the orq.ai workspace
+        already wired in: <b>46 MCP tools</b>, <b>21 skills</b>, the TonyBot system prompt, three subagents,
+        and the orq AI Router as its only model provider. No <code>claude mcp add</code>, no plugin install,
+        no per-user setup — <code>orq auth login</code> and you are talking to your workspace. It compiles to
+        one 71&nbsp;MB file with the skills baked in, and runs fullscreen in the terminal. Same shape as
+        Raindrop's <code>workshop</code> and OpenRouter's <code>ori</code> (which is also pi underneath).
+      </div>
+    </header>
+
+    <div class="stats">
+      <div class="stat"><div class="n">46</div><div class="l">orq MCP tools</div></div>
+      <div class="stat"><div class="n">21</div><div class="l">bundled skills</div></div>
+      <div class="stat"><div class="n">133</div><div class="l">workspace models</div></div>
+      <div class="stat"><div class="n">3</div><div class="l">subagents</div></div>
+    </div>
+
+    <h2 id="why">Why a CLI at all</h2>
+    <p>TonyBot already exists as a hub prompt and a sidebar agent. The gap this POC probes is the other half
+      of the workflow: engineers debugging agents live in a terminal, next to the repo that produced the
+      failing trace. The design plan's Milestone 4 called for a coding-agent wrapper; this is that, taken
+      one step further — instead of shipping skills that <em>assume</em> the orq MCP server is configured,
+      the tools and skills ship <em>inside</em> the binary.</p>
+    <p>The bet: distribution is the feature. A branded binary is one <code>curl</code> away from any laptop,
+      and it cannot be misconfigured, because there is nothing to configure.</p>
+
+    <h2 id="does">What it can do</h2>
+    <p>Two modes. One-shot for scripting and CI, interactive TUI for actual debugging:</p>
+
+    <div class="term"><span class="g">$</span> orqi <span class="o">"why did customer-support fail today?"</span>   <span class="g"># one-shot</span>
+<span class="g">$</span> orqi                                       <span class="g"># interactive TUI</span></div>
+
+    <p>Because it is a full pi session, it also has <code>read</code>, <code>bash</code>, <code>edit</code>
+      and <code>write</code> — so it can read the trace <em>and</em> the code that produced it, then propose
+      the patch. That combination is what the sidebar cannot do.</p>
+
+    <div class="tabs" data-tabs>
+      <div class="tabbar">
+        <button class="on" data-t="0">investigate</button>
+        <button data-t="1">analyse</button>
+        <button data-t="2">build</button>
+        <button data-t="3">commands</button>
+      </div>
+<pre class="on"><span class="cm"># root-cause a failing agent, span by span</span>
+orqi <span class="hl">"list the failed traces on customer-support in the last 24h,
+      then walk the worst one to the first upstream failure"</span>
+
+<span class="cm"># tools it will reach for</span>
+orq_list_traces · orq_list_spans · orq_get_span · orq_get_agent</pre>
+<pre><span class="cm"># cost and health questions</span>
+orqi <span class="hl">"where is my spend going this month, by model?"</span>
+orqi <span class="hl">"what changed in the workspace in the last 7 days?"</span>
+
+<span class="cm"># tools</span>
+orq_get_analytics_overview · orq_query_analytics · orq_list_models</pre>
+<pre><span class="cm"># create things, not just read them</span>
+orqi <span class="hl">"make an LLM judge for citation accuracy and
+      run it against the agent-eval-samples dataset"</span>
+
+<span class="cm"># tools</span>
+orq_create_llm_eval · orq_create_dataset · orq_create_experiment</pre>
+<pre><span class="cm"># in-session slash commands</span>
+/tools              <span class="cm"># the 46 orq tools, grouped by entity</span>
+/whoami             <span class="cm"># orq user + active workspace</span>
+/workspace          <span class="cm"># list workspaces</span>
+/workspace &lt;key&gt;    <span class="cm"># switch, then reconnect the tools</span>
+/doctor             <span class="cm"># orq config, auth, endpoint reachability</span>
+/login              <span class="cm"># pi's own: set an orq API key</span>
+/model              <span class="cm"># pick from the 133 workspace models</span></pre>
+    </div>
+
+    <h2 id="boot">The boot path, step by step</h2>
+    <p>Startup is five steps and about a second when the caches are warm. Each one is a single small module.</p>
+
+    <details open>
+      <summary>1 · Resolve a credential <span class="where">src/auth.ts › credentialCandidates</span></summary>
+      <div class="body">
+        <p>Two candidates, best first: <code>ORQ_API_KEY</code> from the environment, then the active-workspace
+          token from the <code>orq auth login</code> session (<code>~/.orq/sessions/default.json</code>, read
+          only after <code>orq auth whoami</code> has refreshed it). Login, workspace switching and token
+          refresh are the orq CLI's job — orqi shells out rather than reimplementing any of it.</p>
+        <p>The candidates are <em>not</em> pre-probed. They are tried on the real MCP connection, so a
+          401 selects the next candidate while a server hang stays a server hang. An exported key that is
+          stale or scoped to another workspace therefore falls back to the login session automatically —
+          which is exactly what happens on the machine this was built on.</p>
+        <p>The active workspace is resolved here too, because it silently scopes every tool call. With a
+          login session it is <code>activeWorkspaceKey</code>; with only an API key it comes from the key
+          itself — orq keys are <code>sk-orq-&lt;jwt&gt;</code> whose payload carries
+          <code>workspace_id</code>. That yields a UUID, so with no session to map it against the short id
+          is shown rather than a guessed name. It is highlighted in the header and pinned to the footer as
+          <code>orq:&lt;workspace&gt;</code>, and re-rendered after <code>/workspace &lt;key&gt;</code>.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>2 · Wrap the orq MCP tools <span class="where">src/mcp.ts › connectOrqTools</span></summary>
+      <div class="body">
+        <p>pi ships no MCP support by design ("4 tools, no sub-agents, no permissions"), so each of the 46
+          tools on <code>https://api.orq.ai/v2/mcp</code> is wrapped as a native pi tool named
+          <code>orq_&lt;name&gt;</code>. The MCP JSON schema is passed straight through with
+          <code>Type.Unsafe</code>, which keeps the bridge indifferent to the server's catalogue — new orq
+          tools appear without a code change.</p>
+        <p>The catalogue is cached for 24h in <code>~/.orqi/agent/tool-catalogue.json</code>, with retries and
+          a stale-cache fallback, because the server hangs often enough to matter (see Gotchas).</p>
+        <p>Results render as a one-line summary — <code>23 items · 6.0 KB</code> — via a custom
+          <code>renderResult</code>; <code>ctrl+o</code> expands to pretty-printed JSON. The model still
+          receives the full payload. This is necessary because the server answers with a single unbroken
+          line, so pi's built-in 10-line result preview never trims anything and a list of agents wraps
+          into a screenful.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>3 · Register the router as the only provider <span class="where">src/model.ts › createOrqModelRuntime</span></summary>
+      <div class="body">
+        <p>A TypeScript port of what <code>orq launch pi</code> does in the orq CLI
+          (<code>cli/custom/launch/pi.go</code>): fetch the workspace's enabled models from
+          <code>GET /v2/models</code>, keep the ones that are chat models with tool calling, and write a
+          <code>models.json</code> declaring the AI Router as one <code>openai-completions</code> provider
+          called <code>orq</code>. The key never lands in the file — pi expands <code>$ORQ_API_KEY</code> at
+          request time.</p>
+        <p><code>onlyOrq()</code> then wraps the runtime in a Proxy that filters every model read to
+          <code>provider === "orq"</code>. Without it, any HF or Anthropic key in the environment adds its
+          own catalogue to the picker: 1410 models across 40 providers on this laptop, versus 133 from the
+          workspace. One filter covers the <code>/model</code> picker, the footer and ctrl+P cycling, because
+          they all read through those methods.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>4 · Load skills and the system prompt <span class="where">src/main.ts › createAgentSessionServices</span></summary>
+      <div class="body">
+        <p>21 skills ship in the binary: 14 from <code>orq-ai/assistant-plugins</code> (vendored at the commit
+          the orq CLI pins) and the 7 TonyBot skills from the design plan. They are handed to pi as
+          <code>additionalSkillPaths</code>, so no bespoke <code>SKILL.md</code> parser exists here.</p>
+        <p>Ambient discovery is off by default. pi would otherwise pick up every skill installed on the
+          machine — 105 of them here — which both swamps the prompt and makes orqi behave differently per
+          user. <code>ORQI_LOCAL_SKILLS=1</code> re-enables it.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>5 · Start the session <span class="where">src/main.ts</span></summary>
+      <div class="body">
+        <p>With an argument, it is a one-shot: stream the answer, print it, exit non-zero if the turn ended in
+          a provider error (an empty assistant message would otherwise read as success). With no argument, it
+          builds an <code>AgentSessionRuntime</code> and hands it to pi's <code>InteractiveMode</code> — the
+          real TUI, with streaming, tool rendering and slash commands.</p>
+        <p>The TUI runs in pi's fullscreen mode (0.84+), so the composer stays pinned to the bottom of the
+          terminal and the transcript scrolls on its own — <code>ORQI_TUI=regular</code> falls back to
+          inline rendering. pi's startup header, changelog panel and update notice are all silenced (they
+          advertise pi, and <code>pi update</code> does not apply to this binary); in their place a compact
+          orq header is appended as a session entry, which is what makes it survive the alternate screen.</p>
+      </div>
+    </details>
+
+    <h2 id="arch">Architecture</h2>
+    <p>One process. Everything the agent needs is in memory before the first token.</p>
+
+    <svg width="100%" viewBox="0 0 760 330" role="img" aria-label="orqi architecture diagram" style="margin:8px 0 20px">
+      <rect x="1" y="1" width="758" height="328" rx="12" fill="#fff" stroke="#D1CFC5" stroke-width="1.5"/>
+
+      <text x="24" y="30" font-family="ui-monospace, monospace" font-size="11" fill="#87867F">ORQI PROCESS (single binary)</text>
+
+      <rect x="24" y="46" width="330" height="112" rx="9" fill="#FAF9F5" stroke="#D97757" stroke-width="1.5"/>
+      <text x="40" y="68" font-family="ui-serif, Georgia, serif" font-size="15" fill="#141413">pi agent session</text>
+      <text x="40" y="90" font-family="ui-monospace, monospace" font-size="11" fill="#3D3D3A">read · bash · edit · write</text>
+      <text x="40" y="108" font-family="ui-monospace, monospace" font-size="11" fill="#D97757">orq_* × 46</text>
+      <text x="40" y="126" font-family="ui-monospace, monospace" font-size="11" fill="#3D3D3A">subagent tool</text>
+      <text x="40" y="144" font-family="ui-monospace, monospace" font-size="11" fill="#3D3D3A">skills × 21 · TonyBot prompt</text>
+
+      <rect x="24" y="176" width="330" height="66" rx="9" fill="#FAF9F5" stroke="#D1CFC5" stroke-width="1.5"/>
+      <text x="40" y="198" font-family="ui-serif, Georgia, serif" font-size="15" fill="#141413">subagents (in-process)</text>
+      <text x="40" y="220" font-family="ui-monospace, monospace" font-size="11" fill="#3D3D3A">investigator · analyst · docs</text>
+
+      <rect x="24" y="260" width="330" height="46" rx="9" fill="#FAF9F5" stroke="#D1CFC5" stroke-width="1.5"/>
+      <text x="40" y="288" font-family="ui-monospace, monospace" font-size="11" fill="#3D3D3A">credentials ← orq CLI session / ORQ_API_KEY</text>
+
+      <path d="M354 100 H430" stroke="#D97757" stroke-width="1.5"/>
+      <path d="M424 95 l7 5 -7 5" fill="none" stroke="#D97757" stroke-width="1.5"/>
+      <path d="M354 209 H430" stroke="#D1CFC5" stroke-width="1.5"/>
+      <path d="M424 204 l7 5 -7 5" fill="none" stroke="#D1CFC5" stroke-width="1.5"/>
+      <path d="M354 283 H430" stroke="#D1CFC5" stroke-width="1.5"/>
+      <path d="M424 278 l7 5 -7 5" fill="none" stroke="#D1CFC5" stroke-width="1.5"/>
+
+      <rect x="436" y="46" width="300" height="86" rx="9" fill="#FAF9F5" stroke="#D1CFC5" stroke-width="1.5"/>
+      <text x="452" y="68" font-family="ui-serif, Georgia, serif" font-size="15" fill="#141413">orq MCP server</text>
+      <text x="452" y="88" font-family="ui-monospace, monospace" font-size="10.5" fill="#87867F">api.orq.ai/v2/mcp</text>
+      <text x="452" y="108" font-family="ui-monospace, monospace" font-size="10.5" fill="#3D3D3A">traces · agents · evals · datasets</text>
+      <text x="452" y="124" font-family="ui-monospace, monospace" font-size="10.5" fill="#3D3D3A">experiments · analytics · docs · skills</text>
+
+      <rect x="436" y="176" width="300" height="66" rx="9" fill="#FAF9F5" stroke="#D1CFC5" stroke-width="1.5"/>
+      <text x="452" y="198" font-family="ui-serif, Georgia, serif" font-size="15" fill="#141413">orq AI Router</text>
+      <text x="452" y="220" font-family="ui-monospace, monospace" font-size="10.5" fill="#87867F">api.orq.ai/v3/router · 133 models</text>
+
+      <rect x="436" y="260" width="300" height="46" rx="9" fill="#FAF9F5" stroke="#D1CFC5" stroke-width="1.5"/>
+      <text x="452" y="288" font-family="ui-monospace, monospace" font-size="10.5" fill="#3D3D3A">orq CLI — login, workspace, doctor</text>
+    </svg>
+
+    <p>Roughly 700 lines of TypeScript across eight files. Two things are deliberately <em>not</em>
+      reimplemented: authentication (the orq CLI owns it) and router wiring (ported from that CLI's
+      <code>launch pi</code> path, so the two stay honest with each other).</p>
+
+    <h2 id="subagents">Why the subagents are in-process</h2>
+    <p>Every published pi subagent extension spawns the <code>pi</code> binary as a child process. A child
+      started that way would inherit none of this: the MCP tools live in <em>this</em> process's memory, wired
+      at startup. So the subagent tool is ~50 lines that call <code>createAgentSession</code> recursively with
+      a specialist prompt and a filtered slice of the same tool array.</p>
+    <p>Three types, mirroring the design plan's pillars — <code>investigator</code> (traces, spans, agents),
+      <code>analyst</code> (analytics, models), <code>docs</code> (<code>search_docs</code> only). Each gets a
+      fresh context window, which is the point: walking a 40-span trace should not consume the main
+      conversation.</p>
+
+    <div class="callout">
+      <span class="ico">★</span>
+      <div>Because subagents are ordinary sessions, giving each one its own model is a one-line change —
+        a cheap model for the docs lookup, a strong one for root-cause analysis. That kind of heterogeneous
+        routing is clumsy with subprocess delegation, and it is the obvious next experiment.</div>
+    </div>
+
+    <h2 id="build">Running it, building it, sharing it</h2>
+
+    <div class="tabs" data-tabs>
+      <div class="tabbar">
+        <button class="on" data-t="0">from source</button>
+        <button data-t="1">single binary</button>
+        <button data-t="2">share it</button>
+        <button data-t="3">env</button>
+      </div>
+<pre class="on"><span class="cm"># requires bun + the orq CLI on PATH</span>
+bun install
+orq auth login            <span class="cm"># or export ORQ_API_KEY</span>
+<span class="hl">bun run start</span>             <span class="cm"># TUI</span>
+bun run start <span class="hl">"list my 5 most recent traces"</span>
+bun test                  <span class="cm"># 4 checks</span></pre>
+<pre><span class="cm"># embeds skills/themes/prompt, then compiles</span>
+<span class="hl">bun run build</span>
+<span class="cm">#   embedded 83 files (97928e84…)</span>
+<span class="cm">#   compile  orqi</span>
+
+./orqi <span class="hl">"reply with: compiled ok"</span>
+<span class="cm"># 73 MB, no bun, no node, no node_modules</span>
+
+<span class="cm"># assets unpack once, keyed by content hash:</span>
+<span class="cm">#   ~/.orqi/agent/assets/&lt;hash&gt;/{skills,themes}</span></pre>
+<pre><span class="cm"># cross-compiled tarballs for teammates</span>
+<span class="hl">bun run dist</span>
+<span class="cm">#   orqi-macos-arm64.tar.gz  25.0 MB</span>
+<span class="cm">#   orqi-macos-x64.tar.gz    27.4 MB</span>
+<span class="cm">#   orqi-linux-x64.tar.gz    36.4 MB</span>
+
+<span class="cm"># what the recipient runs</span>
+tar -xzf orqi-macos-arm64.tar.gz &amp;&amp; ./orqi
+
+<span class="cm"># already have a quarantined bare binary?</span>
+xattr -d com.apple.quarantine orqi &amp;&amp; chmod +x orqi</pre>
+<pre>ORQ_API_KEY            <span class="cm"># else the orq login session is used</span>
+ORQI_MODEL             <span class="cm"># default openai/gpt-5.6-terra</span>
+ORQI_LOCAL_SKILLS      <span class="cm"># also discover machine-wide skills</span>
+ORQI_REFRESH_TOOLS     <span class="cm"># refresh the cached MCP catalogue</span>
+ORQI_REFRESH_MODELS    <span class="cm"># refresh the cached model catalogue</span>
+ORQ_API_BASE_URL       <span class="cm"># on-prem / regional deployments</span></pre>
+    </div>
+
+    <h2 id="gotchas">Gotchas worth knowing</h2>
+    <ul style="padding-left:20px; max-width:680px;">
+      <li style="margin-bottom:8px;"><b>The orq MCP server intermittently hangs.</b> Measured over three
+        identical <code>tools/list</code> calls: 1.3&nbsp;s, timeout at 120&nbsp;s, 0.4&nbsp;s. It affects
+        <code>initialize</code> too. This is not auth — the same token succeeds on retry, and real auth
+        failures return 401 immediately. Worked around with 20&nbsp;s timeouts, three attempts on a fresh
+        connection, and a cached catalogue; it is still worth a server-side fix.</li>
+      <li style="margin-bottom:8px;"><b>An exported <code>ORQ_API_KEY</code> can be silently wrong.</b> The
+        one on this machine returns <em>"API key is not valid for this workspace"</em>. orqi falls through to
+        the login session rather than failing, and the startup line always says which credential won.</li>
+      <li style="margin-bottom:8px;"><b>Model errors used to vanish.</b> A rate-limited turn comes back as an
+        assistant message with <code>stopReason: "error"</code> and empty content, which streams as silence.
+        Both the one-shot path and the subagent tool now surface <code>errorMessage</code> explicitly.</li>
+      <li style="margin-bottom:8px;"><b>Workspaces have their own router limits.</b> One workspace here caps
+        at 50 requests/day; switching into it mid-session turns every prompt into a 429.</li>
+      <li style="margin-bottom:8px;"><b>A bare binary sent over Slack is dead on arrival.</b> It is only
+        ad-hoc signed, never notarized, so macOS attaches <code>com.apple.quarantine</code> and SIGKILLs
+        it — the recipient sees <code>zsh: killed ./orqi</code> and <em>"orqi is damaged"</em>. Ship the
+        <code>.tar.gz</code> instead: the flag lands on the archive, <code>tar -xzf</code> does not
+        propagate it, and the executable bit survives. Apple Silicon and Intel need different builds.</li>
+      <li><b>All 46 tool schemas ship in every request.</b> Fine for a POC, but an allowlist matched to the
+        system prompt's tool table is the obvious first optimisation.</li>
+    </ul>
+
+    <h2 id="faq">FAQ</h2>
+    <dl class="faq">
+      <dt>Why pi and not Claude Code or a plain SDK loop?</dt>
+      <dd>pi is explicitly built for embedding: <code>createAgentSession</code> gives the full agent loop
+        in-process, and its TUI, session management, compaction and slash commands come along for free.
+        The orq CLI already knows how to launch it (<code>orq launch pi</code>), so the router wiring was a
+        port rather than a design problem.</dd>
+
+      <dt>Does this replace the sidebar TonyBot?</dt>
+      <dd>No — it is the coding-agent surface of the same product. The sidebar has the platform UI around it;
+        orqi has the repo, the shell and file editing around it. The skills and system prompt are shared,
+        which is the point of vendoring them rather than rewriting.</dd>
+
+      <dt>How do new orq tools reach the CLI?</dt>
+      <dd>Automatically. The tool list comes from the MCP server at runtime and schemas pass through
+        untouched; a new tool appears after the 24h cache expires, or immediately with
+        <code>ORQI_REFRESH_TOOLS=1</code>.</dd>
+
+      <dt>How do skill updates reach it?</dt>
+      <dd>Today: re-copy from <code>orq-ai/assistant-plugins</code> and rebuild — they are vendored at a
+        pinned commit, deliberately, so a bad upstream push cannot reach users unreviewed. That mirrors how
+        the orq CLI pins the same plugin bundle.</dd>
+
+      <dt>What would it take to ship this?</dt>
+      <dd>Cross-compilation targets and an install script (<code>bun build --compile --target=…</code>),
+        a tool allowlist to cut context, and a decision on the name — <code>orqi</code> avoids colliding
+        with the existing <code>orq</code> CLI it shells out to.</dd>
+    </dl>
+  </main>
+
+</div>
+
+<script>
+document.querySelectorAll("[data-tabs]").forEach(box => {
+  const btns = box.querySelectorAll("button");
+  const panes = box.querySelectorAll("pre");
+  btns.forEach(b => b.addEventListener("click", () => {
+    btns.forEach(x => x.classList.remove("on"));
+    panes.forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    panes[+b.dataset.t].classList.add("on");
+  }));
+});
+</script>
+</body>
+</html>

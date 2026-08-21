@@ -1,0 +1,189 @@
+#!/usr/bin/env bun
+/**
+ * orqi - the orq.ai helper agent (TonyBot) as a CLI.
+ *
+ * A pi coding agent session that boots with the orq MCP tools, the orq skills
+ * and the TonyBot system prompt already wired in.
+ *
+ *   orqi                 interactive TUI
+ *   orqi "<prompt>"      one-shot, prints the answer and exits
+ */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+	createAgentSessionFromServices,
+	createAgentSessionRuntime,
+	createAgentSessionServices,
+	InteractiveMode,
+	SessionManager,
+	type CreateAgentSessionRuntimeFactory,
+} from "@earendil-works/pi-coding-agent";
+import { credentialCandidates, LOGIN_HINT } from "./auth.ts";
+import { dim, type HeaderInfo } from "./branding.ts";
+import { orqCommands } from "./commands.ts";
+import { connectOrqTools } from "./mcp.ts";
+import { createOrqModelRuntime, pickModel } from "./model.ts";
+import { createSubagentTool } from "./subagent.ts";
+
+const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent");
+
+/**
+ * Where skills, themes and the system prompt live.
+ *
+ * A compiled binary has no package directory, so `bun run build` bakes the
+ * asset tree into a generated module and it is unpacked here on first run.
+ * Running from source skips all that and uses the files in place.
+ */
+async function assetDir(): Promise<string> {
+	const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+	if (existsSync(join(pkgDir, "tonybot-system-prompt.txt"))) return pkgDir;
+
+	const { ASSETS, HASH } = await import("./assets.generated.ts");
+	const unpacked = join(AGENT_DIR, "assets", HASH);
+	if (!existsSync(unpacked)) {
+		for (const [path, content] of Object.entries(ASSETS)) {
+			const target = join(unpacked, path);
+			mkdirSync(dirname(target), { recursive: true });
+			writeFileSync(target, content);
+		}
+	}
+	return unpacked;
+}
+
+const pkgDir = await assetDir();
+
+// pi's update notice points at pi.dev and tells the user to run `pi update`,
+// neither of which applies to this binary. The header links orq's changelog.
+process.env.PI_SKIP_VERSION_CHECK ??= "1";
+
+const candidates = credentialCandidates();
+if (candidates.length === 0) {
+	console.error(LOGIN_HINT);
+	process.exit(1);
+}
+
+const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json"));
+const credential = orq.credential;
+const models = await createOrqModelRuntime(AGENT_DIR, credential.token);
+const modelRuntime = models.runtime;
+const model = pickModel(models);
+const customTools = [
+	...orq.tools,
+	createSubagentTool({ orqTools: orq.tools, model, modelRuntime, agentDir: AGENT_DIR }),
+];
+
+// Filled in below, once the services exist: the renderer only reads it at draw
+// time, and the skills count is not known until the resource loader has run.
+const header: HeaderInfo = {
+	name: "orqi (aka TonyBot)",
+	version: "v0.1.0",
+	workspace: undefined,
+	status: "",
+	cwd: process.cwd().replace(homedir(), "~"),
+};
+
+const services = await createAgentSessionServices({
+	cwd: process.cwd(),
+	agentDir: AGENT_DIR,
+	modelRuntime,
+	resourceLoaderOptions: {
+		systemPrompt: readFileSync(join(pkgDir, "tonybot-system-prompt.txt"), "utf8"),
+		// Ship a predictable skill set: the bundled orq + TonyBot skills only.
+		// Ambient discovery finds every skill installed on the machine (100+ here),
+		// which both bloats the prompt and makes orqi behave differently per user.
+		noSkills: !process.env.ORQI_LOCAL_SKILLS,
+		additionalSkillPaths: [join(pkgDir, "skills")],
+		additionalThemePaths: [join(pkgDir, "themes")],
+		extensionFactories: [
+			orqCommands(
+				async () => {
+					const next = credentialCandidates().at(-1); // the login session, freshly read
+					if (!next) return LOGIN_HINT;
+					process.env.ORQ_API_KEY = next.token;
+					const count = await orq.reconnect(next);
+					header.workspace = next.workspace;
+					return `Reconnected to orq: ${count} tools in ${next.workspace ?? "workspace"} (${next.source}).`;
+				},
+				orq.tools.map((tool) => tool.name),
+				header,
+			),
+		],
+	},
+});
+services.settingsManager.setTheme("orq-dark");
+// Silence pi's own startup header - it pitches pi, and this CLI prints its own.
+// ctrl+o still shows the full help and loaded resources on demand.
+services.settingsManager.setQuietStartup(true);
+// Fullscreen keeps the composer pinned to the bottom of the terminal instead of
+// trailing the transcript. Still flagged experimental upstream, hence the opt-out.
+services.settingsManager.setTuiMode(process.env.ORQI_TUI === "regular" ? "regular" : "fullscreen");
+// Every pi upgrade would otherwise open the session with pi's own "What's New"
+// panel. Parking the marker ahead of any real pi version suppresses it; orq's
+// changelog is linked from the header.
+services.settingsManager.setLastChangelogVersion("999.0.0");
+
+const oneShot = process.argv[2];
+const skills = services.resourceLoader.getSkills().skills.length;
+header.workspace = credential.workspace;
+header.status = [
+	model?.id ?? "no model",
+	`${orq.tools.length} tools`,
+	`${skills} skills`,
+	`${models.ids.length} models`,
+	orq.note,
+	models.note,
+]
+	.filter(Boolean)
+	.join(" · ");
+const startupLine = [header.name, header.workspace, header.status, credential.source].filter(Boolean).join(" · ");
+
+try {
+	if (oneShot) {
+		console.error(dim(startupLine));
+		const { session } = await createAgentSessionFromServices({
+			services,
+			sessionManager: SessionManager.inMemory(),
+			model,
+			customTools,
+		});
+		try {
+			session.subscribe((event: any) => {
+				if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+					process.stdout.write(event.assistantMessageEvent.delta);
+				}
+			});
+			await session.prompt(oneShot);
+			console.log();
+			// A failed turn (rate limit, provider error) ends with an empty
+			// assistant message, which would otherwise look like success.
+			const last = (session.state.messages as any[]).at(-1);
+			if (last?.stopReason === "error") {
+				console.error(last.errorMessage ?? "the model call failed");
+				process.exit(1);
+			}
+		} finally {
+			session.dispose();
+		}
+	} else {
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ sessionManager, sessionStartEvent }) => ({
+			...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model, customTools })),
+			services,
+			diagnostics: services.diagnostics,
+		});
+		const runtime = await createAgentSessionRuntime(createRuntime, {
+			cwd: process.cwd(),
+			agentDir: AGENT_DIR,
+			sessionManager: SessionManager.create(process.cwd()),
+		});
+		await new InteractiveMode(runtime, {}).run();
+		await runtime.dispose();
+	}
+} finally {
+	await orq.close().catch(() => {});
+}
+
+// The MCP transport keeps a stream open, so the event loop would not drain.
+process.exit(0);

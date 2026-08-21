@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>orqi (TonyBot) — a dedicated CLI for orq.ai</title>
+<style>
+  /* ------------------------------------------------------------------
+     Design tokens
+     ------------------------------------------------------------------ */
+  :root {
+    --ivory:   #FAF9F5;
+    --slate:   #141413;
+    --clay:    #D97757;
+    --oat:     #E3DACC;
+    --olive:   #788C5D;
+    --gray-150:#F0EEE6;
+    --gray-300:#D1CFC5;
+    --gray-500:#87867F;
+    --gray-700:#3D3D3A;
+
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans:  system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--ivory);
+    color: var(--slate);
+    -webkit-font-smoothing: antialiased;
+    scroll-snap-type: y mandatory;
+    overflow-x: hidden;
+  }
+
+  /* ------------------------------------------------------------------
+     Slide shell
+     ------------------------------------------------------------------ */
+  .slide {
+    width: 100vw;
+    height: 100vh;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8vh 6vw;
+  }
+
+  .slide-inner {
+    width: 100%;
+    max-width: 780px;
+  }
+
+  .slide.invert {
+    background: var(--slate);
+    color: var(--ivory);
+  }
+
+  /* ------------------------------------------------------------------
+     Typography
+     ------------------------------------------------------------------ */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+    margin-bottom: 28px;
+  }
+  .invert .eyebrow { color: var(--gray-300); }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: clamp(40px, 6vw, 64px);
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    margin-bottom: 20px;
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: clamp(30px, 4vw, 42px);
+    line-height: 1.15;
+    letter-spacing: -0.005em;
+    margin-bottom: 44px;
+  }
+
+  .subtitle {
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--gray-700);
+    max-width: 520px;
+  }
+
+  .mono { font-family: var(--mono); }
+
+  /* ------------------------------------------------------------------
+     Slide 1 — title
+     ------------------------------------------------------------------ */
+  .title-slide .slide-inner { text-align: left; }
+
+  .ornament {
+    display: block;
+    margin: 0 0 40px 0;
+  }
+
+  .byline {
+    margin-top: 56px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--gray-500);
+    display: flex;
+    gap: 24px;
+  }
+
+  /* ------------------------------------------------------------------
+     Slide 2 — shipped list
+     ------------------------------------------------------------------ */
+  .ship-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .ship-item {
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    column-gap: 20px;
+    align-items: baseline;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--gray-150);
+  }
+  .ship-item:last-child { border-bottom: none; }
+
+  .ship-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--olive);
+    margin-top: 8px;
+    align-self: start;
+  }
+
+  .ship-title {
+    font-family: var(--serif);
+    font-size: 20px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+
+  .ship-desc {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--gray-700);
+  }
+
+  .ship-ref {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--gray-500);
+    white-space: nowrap;
+    padding-top: 4px;
+  }
+
+  /* ------------------------------------------------------------------
+     Slide 3 — in progress
+     ------------------------------------------------------------------ */
+  .prog-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  .prog-item .prog-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 10px;
+  }
+
+  .prog-title {
+    font-family: var(--serif);
+    font-size: 20px;
+    font-weight: 500;
+  }
+
+  .prog-pct {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--gray-500);
+  }
+
+  .prog-track {
+    width: 100%;
+    height: 5px;
+    background: var(--gray-150);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+
+  .prog-fill {
+    height: 100%;
+    background: var(--clay);
+    border-radius: 3px;
+  }
+
+  .prog-note {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--gray-700);
+  }
+
+  /* ------------------------------------------------------------------
+     Slide 4 — metrics
+     ------------------------------------------------------------------ */
+  .metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 56px;
+    margin-bottom: 48px;
+  }
+
+  .metric-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+    margin-bottom: 14px;
+  }
+
+  .metric-value {
+    font-family: var(--serif);
+    font-size: 52px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: -0.01em;
+  }
+
+  .metric-delta {
+    font-family: var(--mono);
+    font-size: 13px;
+    margin-top: 12px;
+  }
+  .metric-delta.down { color: var(--olive); }
+  .metric-delta.up   { color: var(--clay); }
+
+  .sparkline-wrap {
+    border-top: 1px solid var(--gray-300);
+    padding-top: 28px;
+  }
+
+  .sparkline-caption {
+    font-size: 12px;
+    color: var(--gray-500);
+    margin-top: 10px;
+  }
+
+  /* ------------------------------------------------------------------
+     Slide 5 — decision (inverted)
+     ------------------------------------------------------------------ */
+  .decision-card {
+    border: 1.5px solid var(--clay);
+    border-radius: 14px;
+    padding: 36px 38px;
+    background: rgba(217, 119, 87, 0.06);
+  }
+
+  .decision-q {
+    font-family: var(--serif);
+    font-size: 24px;
+    line-height: 1.4;
+    margin-bottom: 12px;
+  }
+
+  .decision-context {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--gray-300);
+  }
+
+  .options {
+    display: flex;
+    gap: 14px;
+    margin-top: 32px;
+    flex-wrap: wrap;
+  }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    border: 1px solid var(--gray-700);
+    color: var(--ivory);
+    background: transparent;
+  }
+  .chip.lean {
+    border-color: var(--clay);
+    color: var(--clay);
+  }
+
+  /* ------------------------------------------------------------------
+     Slide 6 — next week
+     ------------------------------------------------------------------ */
+  .next-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  .next-list li {
+    font-family: var(--serif);
+    font-size: 21px;
+    line-height: 1.45;
+    padding-left: 36px;
+    position: relative;
+  }
+
+  .next-list li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 18px;
+    height: 1.5px;
+    background: var(--clay);
+  }
+
+  .footnote {
+    margin-top: 56px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--gray-500);
+  }
+
+  /* ------------------------------------------------------------------
+     Slide counter
+     ------------------------------------------------------------------ */
+  #counter {
+    position: fixed;
+    bottom: 22px;
+    right: 28px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--gray-500);
+    user-select: none;
+    z-index: 10;
+  }
+
+  @media (max-width: 640px) {
+    .metrics { grid-template-columns: 1fr; gap: 36px; }
+    .ship-item { grid-template-columns: 14px 1fr; }
+    .ship-ref { grid-column: 2; padding-top: 8px; }
+  }
+</style>
+</head><body>
+
+  <!-- ============================================================
+       Slide 1 — Title
+       ============================================================ -->
+  <section class="slide title-slide" id="s1">
+    <div class="slide-inner">
+      <svg class="ornament" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
+        <circle cx="28" cy="28" r="22" fill="none" stroke="#D1CFC5" stroke-width="1.5"/>
+        <path d="M16 28 H40 M28 16 V40" stroke="#D97757" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="28" cy="28" r="3" fill="#141413"/>
+      </svg>
+      <h1>orqi<br>— TonyBot as a CLI</h1>
+      <p class="subtitle">
+        A single binary that boots with your orq.ai workspace already wired in:
+        46 MCP tools, 21 skills, the TonyBot prompt, three subagents.
+        Working proof of concept, built this week.
+      </p>
+      <div class="byline">
+        <span>Research · RES-824</span>
+        <span>8 slides</span>
+        <span>~6 min</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 2 — The problem
+       ============================================================ -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <div class="eyebrow">The gap</div>
+      <h2>Skills that assume a setup nobody did</h2>
+      <ul class="prog-list">
+        <li class="prog-item">
+          <div class="prog-head"><span class="prog-title">Today</span></div>
+          <p class="prog-note">
+            TonyBot lives in the sidebar. Our skills ship through
+            <span class="mono">assistant-plugins</span> and assume the user has already added the orq MCP
+            server to their coding agent, with the right key, in the right workspace.
+          </p>
+        </li>
+        <li class="prog-item">
+          <div class="prog-head"><span class="prog-title">But debugging happens in a terminal</span></div>
+          <p class="prog-note">
+            Next to the repo that produced the failing trace. The sidebar can read the trace; it cannot
+            read the code, or write the fix.
+          </p>
+        </li>
+        <li class="prog-item">
+          <div class="prog-head"><span class="prog-title">Precedent</span></div>
+          <p class="prog-note">
+            Raindrop ships <span class="mono">workshop</span>. OpenRouter ships <span class="mono">ori</span>.
+            One branded binary, opinionated about one platform, installed with one command.
+          </p>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 3 — What it is
+       ============================================================ -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <div class="eyebrow">What we built</div>
+      <h2>Distribution is the feature</h2>
+      <ul class="ship-list">
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">The orq workspace, in the box</div>
+            <div class="ship-desc">
+              All 46 MCP tools wrapped as native agent tools. pi ships no MCP support by design —
+              we bridge it, and new orq tools appear without a code change.
+            </div>
+          </div>
+          <span class="ship-ref">src/mcp.ts</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">Our skills, pre-installed</div>
+            <div class="ship-desc">
+              14 from assistant-plugins (pinned to the commit the orq CLI pins) plus the 7 TonyBot
+              skills from the design plan. No plugin install step.
+            </div>
+          </div>
+          <span class="ship-ref">skills/ × 21</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">One credential, one provider</div>
+            <div class="ship-desc">
+              Models route through the orq AI Router — the workspace's own 133 enabled models, and
+              nothing else. Same key serves the tools and the LLM.
+            </div>
+          </div>
+          <span class="ship-ref">src/model.ts</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 4 — Demo
+       ============================================================ -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <div class="eyebrow">What it looks like</div>
+      <h2>Two modes, no setup</h2>
+
+      <div style="border:1.5px solid #D1CFC5;border-radius:12px;background:#141413;color:#E3DACC;
+                  font-family:var(--mono);font-size:12.5px;line-height:1.65;padding:22px 24px;overflow-x:auto;">
+<span style="color:#87867F;">$</span> orqi <span style="color:#D97757;">"why did customer-support fail today?"</span>
+<span style="color:#87867F;">$</span> orqi                     <span style="color:#87867F;"># full TUI</span>
+
+<span style="color:#D97757;">▞▚</span>  orqi (aka TonyBot)  <span style="color:#87867F;">v0.1.0</span>
+<span style="color:#D97757;">▚▞</span>  <span style="color:#87867F;">openai/gpt-5.6-terra · orq-research · 46 tools · 21 skills · 133 models</span>
+    <span style="color:#87867F;">~/work/customer-support-agent</span>
+
+    <span style="color:#87867F;">Ask me to: investigate a failing agent · check workspace health ·</span>
+    <span style="color:#87867F;">cut cost · build evaluators · explain the platform.</span>
+      </div>
+
+      <p style="font-size:14px;line-height:1.6;color:var(--gray-700);margin-top:26px;max-width:640px;">
+        Fullscreen TUI — composer pinned to the bottom, transcript scrolling on its own. It is a full
+        coding agent, so it also has read / bash / edit / write: it can pull the trace <em>and</em> the
+        code that produced it, then propose the patch. That is the thing the sidebar cannot do.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 5 — Architecture
+       ============================================================ -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <div class="eyebrow">Architecture</div>
+      <h2>One process, ~700 lines</h2>
+
+      <svg width="100%" viewBox="0 0 760 250" role="img" aria-label="orqi architecture">
+        <rect x="1" y="1" width="360" height="248" rx="10" fill="#fff" stroke="#D97757" stroke-width="1.5"/>
+        <text x="22" y="30" font-family="ui-monospace, monospace" font-size="10.5" fill="#87867F">ORQI — SINGLE BINARY</text>
+        <text x="22" y="60" font-family="ui-serif, Georgia, serif" font-size="16" fill="#141413">pi agent session</text>
+        <text x="22" y="86" font-family="ui-monospace, monospace" font-size="11.5" fill="#3D3D3A">read · bash · edit · write</text>
+        <text x="22" y="108" font-family="ui-monospace, monospace" font-size="11.5" fill="#D97757">orq_* tools × 46</text>
+        <text x="22" y="130" font-family="ui-monospace, monospace" font-size="11.5" fill="#3D3D3A">skills × 21 · TonyBot prompt</text>
+        <text x="22" y="152" font-family="ui-monospace, monospace" font-size="11.5" fill="#3D3D3A">subagent tool</text>
+        <text x="22" y="186" font-family="ui-serif, Georgia, serif" font-size="16" fill="#141413">subagents (in-process)</text>
+        <text x="22" y="212" font-family="ui-monospace, monospace" font-size="11.5" fill="#3D3D3A">investigator · analyst · docs</text>
+
+        <path d="M361 92 H432" stroke="#D97757" stroke-width="1.5"/>
+        <path d="M426 87 l7 5 -7 5" fill="none" stroke="#D97757" stroke-width="1.5"/>
+        <path d="M361 162 H432" stroke="#D1CFC5" stroke-width="1.5"/>
+        <path d="M426 157 l7 5 -7 5" fill="none" stroke="#D1CFC5" stroke-width="1.5"/>
+
+        <rect x="438" y="40" width="320" height="104" rx="10" fill="#fff" stroke="#D1CFC5" stroke-width="1.5"/>
+        <text x="458" y="66" font-family="ui-serif, Georgia, serif" font-size="16" fill="#141413">orq MCP server</text>
+        <text x="458" y="90" font-family="ui-monospace, monospace" font-size="10.5" fill="#87867F">api.orq.ai/v2/mcp</text>
+        <text x="458" y="112" font-family="ui-monospace, monospace" font-size="10.5" fill="#3D3D3A">traces · agents · evals · datasets</text>
+        <text x="458" y="130" font-family="ui-monospace, monospace" font-size="10.5" fill="#3D3D3A">experiments · analytics · docs</text>
+
+        <rect x="438" y="160" width="320" height="80" rx="10" fill="#fff" stroke="#D1CFC5" stroke-width="1.5"/>
+        <text x="458" y="186" font-family="ui-serif, Georgia, serif" font-size="16" fill="#141413">orq AI Router</text>
+        <text x="458" y="210" font-family="ui-monospace, monospace" font-size="10.5" fill="#87867F">api.orq.ai/v3/router</text>
+        <text x="458" y="228" font-family="ui-monospace, monospace" font-size="10.5" fill="#3D3D3A">133 workspace models</text>
+      </svg>
+
+      <p style="font-size:14px;line-height:1.6;color:var(--gray-700);margin-top:22px;max-width:660px;">
+        Two things we deliberately did <em>not</em> reimplement: <b>auth</b> (the orq CLI owns login,
+        workspaces, refresh — we shell out) and <b>router wiring</b> (ported from that CLI's
+        <span class="mono">launch pi</span> path, so the two stay honest with each other).
+        Ships as one file: <span class="mono">bun run dist</span> → cross-compiled tarballs, ~25 MB.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 6 — What we learned
+       ============================================================ -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <div class="eyebrow">Findings</div>
+      <h2>Three things worth acting on</h2>
+
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">MCP tools/list hangs</div>
+          <div class="metric-value">1<span style="font-size:28px"> in 3</span></div>
+          <div class="metric-delta up">1.3s · 120s timeout · 0.4s</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Models in picker, unfiltered</div>
+          <div class="metric-value">1410<span style="font-size:28px"> → 133</span></div>
+          <div class="metric-delta down">40 providers → 1</div>
+        </div>
+      </div>
+
+      <ul class="next-list" style="margin-top:8px;">
+        <li><b>The MCP server stalls</b> on <span class="mono">initialize</span> and
+          <span class="mono">tools/list</span> — no error, just a hang. Not auth: the same token succeeds on
+          retry. Worked around with retries and a cached catalogue; deserves a server-side fix.</li>
+        <li><b>Model errors can be invisible.</b> A rate-limited turn returns an empty assistant message —
+          it streams as silence. Anything embedding pi needs to check
+          <span class="mono">stopReason</span>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 7 — The ask (inverted)
+       ============================================================ -->
+  <section class="slide invert" id="s7">
+    <div class="slide-inner">
+      <div class="eyebrow">Decision needed</div>
+      <h2>Is this a product or a demo?</h2>
+
+      <div class="decision-card">
+        <p class="decision-q">
+          The POC works end to end. Do we invest in shipping it — install script, cross-compiled binaries,
+          a home in an orq repo — or keep it as an internal research tool?
+        </p>
+        <p class="decision-context">
+          Shipping means owning a distribution channel and a support surface. Keeping it internal means the
+          skills stay dependent on each user configuring MCP correctly, which is the gap we set out to test.
+        </p>
+      </div>
+
+      <div class="options">
+        <span class="chip lean">A — Ship it: install script + binaries</span>
+        <span class="chip">B — Internal tool, dogfood first</span>
+        <span class="chip">C — Fold the learnings back into the sidebar</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 8 — Next
+       ============================================================ -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <div class="eyebrow">If we continue</div>
+      <h2>On deck</h2>
+      <ul class="next-list">
+        <li>Tool allowlist — all 46 schemas ship in every request today.</li>
+        <li>A model per subagent: cheap for doc lookups, strong for root-cause analysis.</li>
+        <li>Signing and notarization — unsigned binaries are quarantined by macOS, so today sharing means a tarball plus an <span class="mono">xattr</span> note.</li>
+        <li>An install script (<span class="mono">curl … | bash</span>), the way workshop and ori do it.</li>
+        <li>Dogfood on real incidents and measure it with our own evaluators.</li>
+      </ul>
+      <div class="footnote">
+        Code: github.com/orq-ai/tonybot · Report: reports/orqi-explainer.html · Try it: bun run start
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide counter
+       ============================================================ -->
+  <div id="counter">1 / 8</div>
+
+<script>
+  (function () {
+    const slides = Array.from(document.querySelectorAll('.slide'));
+    const counter = document.getElementById('counter');
+    let current = 0;
+
+    function go(i) {
+      current = Math.max(0, Math.min(slides.length - 1, i));
+      slides[current].scrollIntoView({ behavior: 'smooth' });
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') { e.preventDefault(); go(current + 1); }
+      if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')                     { e.preventDefault(); go(current - 1); }
+    });
+
+    const obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) {
+          current = slides.indexOf(en.target);
+          counter.textContent = (current + 1) + ' / ' + slides.length;
+        }
+      });
+    }, { threshold: 0.6 });
+
+    slides.forEach(function (s) { obs.observe(s); });
+  })();
+</script>
+</body>
+</html>
