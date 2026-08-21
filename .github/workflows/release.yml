@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # The binary users download is whatever this compiles, so the compiler
+          # is pinned and bumped deliberately.
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      # The tag is the version users see: src/branding.ts reads it from
+      # package.json, and nothing else reconciles the two.
+      - name: Check the tag matches package.json
+        run: |
+          version=$(bun -e 'console.log(require("./package.json").version)')
+          [ "$GITHUB_REF_NAME" = "v$version" ] || {
+            echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          }
+
+      - run: bun test
+
+      # bun build --compile does not type-check, so without this a tag can ship
+      # code that does not compile under tsc.
+      - run: bun run typecheck
+
+      - run: bun run dist
+
+      # Proves one of the three tarballs actually runs. --version needs no
+      # credentials and no network, so it exercises the real startup path.
+      - name: Smoke test the linux binary
+        run: |
+          mkdir -p /tmp/smoke
+          tar -xzf dist/orqi-linux-x64.tar.gz -C /tmp/smoke
+          [ "$(/tmp/smoke/orqi --version)" = "$(bun -e 'console.log(require("./package.json").version)')" ]
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Re-running the job for a tag that already has a release replaces the
+        # assets instead of failing with "release already exists".
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes --verify-tag \
+            || gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
