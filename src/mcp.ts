@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { dirname } from "node:path";
 import { Type } from "typebox";
 import { MCP_URL, type Credential } from "./auth.ts";
+import { VERSION } from "./branding.ts";
 
 // The orq MCP server answers tools/list in ~1s most of the time, but hangs
 // outright often enough (roughly one call in three) that a plain fetch-on-boot
@@ -72,6 +73,67 @@ async function catalogue(
 /** orq tool names are prefixed so they never collide with pi's built-ins. */
 export const TOOL_PREFIX = "orq_";
 
+/**
+ * Invocation surfaces, not TonyBot's job. Dropping them takes ~6 KB of the 71 KB
+ * of tool schema that ships with every request (the 96 KB they occupy in the
+ * cached catalogue is mostly `outputSchema`, which is never forwarded).
+ * `ORQI_ALL_TOOLS=1` restores them.
+ */
+export const DENYLISTED_TOOLS = new Set(["invoke_model", "invoke_agent", "retrieve_agent_response"]);
+
+/**
+ * Constraints the server enforces but its schema does not express, appended to
+ * the description the model reads when it composes a call.
+ *
+ * `query_analytics` offers one `group_by` enum for every metric, qualified only
+ * by "Not all dimensions are available for all metrics", and lists `project_id`
+ * as an ordinary optional filter. Both failures that follow are the model doing
+ * exactly what the schema permits, so the fix belongs where it decides. The
+ * matrix below was measured against a live workspace, one call per pair.
+ *
+ * Delete an entry once the server's own schema says it. Upstream wants
+ * per-metric enums and a required `project_id`.
+ */
+export const TOOL_HINTS: Record<string, string> = {
+	query_analytics: [
+		"",
+		"CONSTRAINTS the schema does not express:",
+		"- `filters.project_id` is REQUIRED when the API key spans several projects, which is the",
+		"  usual case. No tool lists projects. Get an id from `list_traces` at",
+		"  `items[].attributes.orq.project_id`, or from the ids this tool enumerates when it rejects",
+		"  the call. Ask the user which project they mean rather than picking one silently: each id",
+		"  is a slice of the workspace, so the wrong one answers confidently with the wrong data.",
+		"- `group_by` valid dimensions per metric, everything else fails as `Unknown expression",
+		"  identifier`:",
+		"    usage, cost, latency, model_performance -> provider, model, project_id",
+		"    errors                                  -> provider, model, project_id, http_status_code",
+		"    agents                                  -> provider, model, project_id, http_status_code, agent_name",
+		"- `agent_name` therefore works ONLY with `metric: \"agents\"`. To break another metric down",
+		"  per agent, query `agents` instead of grouping the other metric by agent_name.",
+	].join("\n"),
+};
+
+/** Server description plus any constraint it left unsaid. */
+export function describe(tool: { name: string; description?: string }): string {
+	const base = tool.description ?? tool.name;
+	const hint = TOOL_HINTS[tool.name];
+	return hint ? `${base}\n${hint}` : base;
+}
+
+/**
+ * The tools the session actually sees.
+ *
+ * Filtered at wrap time, not at cache write: the cache keeps the full server
+ * list, so flipping ORQI_ALL_TOOLS needs no refetch. Matches on the bare server
+ * name, before `TOOL_PREFIX` goes on.
+ */
+export function keptTools<T extends { name: string }>(
+	tools: T[],
+	allowAll = process.env.ORQI_ALL_TOOLS === "1",
+): T[] {
+	return allowAll ? tools : tools.filter((tool) => !DENYLISTED_TOOLS.has(tool.name));
+}
+
 export interface OrqTools {
 	tools: ToolDefinition[];
 	/** The candidate the server accepted. */
@@ -84,7 +146,7 @@ export interface OrqTools {
 }
 
 async function connectOnce(credential: Credential): Promise<Client> {
-	const client = new Client({ name: "orqi", version: "0.1.0" });
+	const client = new Client({ name: "orqi", version: VERSION });
 	// A rejected connect leaves the transport open; its later error would surface
 	// as an unhandled rejection and take the process down while we are calmly
 	// trying the next credential.
@@ -193,11 +255,11 @@ export async function connectOrqTools(candidates: Credential[], cachePath: strin
 
 	const listed = await catalogue(client, cachePath, () => open(credential));
 	client = listed.client;
-	const wrapped = listed.tools.map((tool) =>
+	const wrapped = keptTools(listed.tools).map((tool) =>
 		defineTool({
 			name: `${TOOL_PREFIX}${tool.name}`,
 			label: tool.title ?? tool.name,
-			description: tool.description ?? tool.name,
+			description: describe(tool),
 			// The MCP schema is already JSON Schema; Unsafe passes it through untouched.
 			parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema as object),
 			execute: async (_id, params, signal) => {

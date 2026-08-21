@@ -102,9 +102,25 @@ Aggregate requests and process in bulk during off-peak.
 
 2. **Get detailed breakdown:**
    ```
-   query_analytics(group_by: model, period: 30d) → cost per model
-   query_analytics(group_by: project, period: 30d) → cost per project
+   query_analytics(metric: "cost", time_range: {start: "30d"},
+                   group_by: ["model"], filters: {project_id: PID})    → cost per model
+   query_analytics(metric: "cost", time_range: {start: "30d"},
+                   group_by: ["provider"], filters: {project_id: PID}) → cost per provider
    ```
+   `metric` and `time_range` are required, `group_by` is an array, and `filters.project_id` is
+   required whenever the API key spans several projects. No tool lists projects: read one from
+   `list_traces` at `items[].attributes.orq.project_id`, or from the ids the error enumerates when
+   you omit it. Ask which project the user means rather than picking one silently.
+
+   Valid `group_by` per metric, anything else fails as `Unknown expression identifier`:
+
+   | metric | dimensions |
+   |---|---|
+   | `usage`, `cost`, `latency`, `model_performance` | `provider`, `model`, `project_id` |
+   | `errors` | the above plus `http_status_code` |
+   | `agents` | the above plus `agent_name` |
+
+   So cost per agent means `metric: "agents"`, not `metric: "cost"` grouped by `agent_name`.
 
 ### Step 2: Identify Cost Drivers
 

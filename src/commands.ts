@@ -8,7 +8,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { runOrq } from "./auth.ts";
-import { headerLines, type HeaderInfo } from "./branding.ts";
+import { CHANGELOG_URL, headerLines, type HeaderInfo } from "./branding.ts";
 
 /** Called after a workspace switch: the workspace token changed. */
 export type ReconnectFn = () => Promise<string>;
@@ -49,7 +49,21 @@ export function orqCommands(reconnect: ReconnectFn, toolNames: string[], header:
 		pi.registerEntryRenderer(HEADER_ENTRY, () => new Text(headerLines(header).join("\n"), 0, 1));
 		pi.on("session_start", (event, ctx) => {
 			// Entries are session-persisted, so a resumed session already has one.
-			if (event.reason === "startup" || event.reason === "new") pi.appendEntry(HEADER_ENTRY);
+			if (event.reason === "startup" || event.reason === "new") {
+				// `/new` replaces the session, and pi invalidates the `pi` handle this
+				// closure captured at registration: appendEntry then throws
+				// "extension ctx is stale" and dumps a stack trace over the transcript.
+				// There is no live handle to use instead. The event ctx has no
+				// appendEntry, and `withSession` only applies when the caller is the one
+				// replacing the session, which here is pi's own /new. So the header is
+				// best-effort: it renders on startup, and a new session goes without
+				// rather than greeting the user with a stack trace.
+				try {
+					pi.appendEntry(HEADER_ENTRY);
+				} catch {
+					// Stale handle after session replacement. Nothing to recover.
+				}
+			}
 			// The header scrolls away; the footer is where you look to check which
 			// workspace a tool call just hit.
 			showWorkspace(ctx);
@@ -59,6 +73,22 @@ export function orqCommands(reconnect: ReconnectFn, toolNames: string[], header:
 			description: `list the ${toolNames.length} orq workspace tools`,
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(`${toolNames.length} orq tools\n${groupTools(toolNames)}`);
+			},
+		});
+
+		// Not `/changelog`: that name is pi's. It is in BUILTIN_SLASH_COMMANDS, its
+		// dispatch is hardcoded ahead of extensions, and pi drops any extension
+		// command whose name collides with a built-in, so registering it here would
+		// silently do nothing and still show pi's own release notes. Owning
+		// `/changelog` needs an override hook upstream.
+		pi.registerCommand("whatsnew", {
+			description: "open the orq.ai changelog",
+			handler: async (_args, ctx) => {
+				// Opening the URL beats fetching it: nothing to parse, and no scraper to
+				// break when the docs site changes shape.
+				const opener = process.platform === "darwin" ? "open" : "xdg-open";
+				const opened = Bun.spawnSync([opener, CHANGELOG_URL]).success;
+				ctx.ui.notify(opened ? `Opened ${CHANGELOG_URL}` : CHANGELOG_URL, opened ? "info" : "warning");
 			},
 		});
 

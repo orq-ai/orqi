@@ -7,6 +7,7 @@
  *
  *   orqi                 interactive TUI
  *   orqi "<prompt>"      one-shot, prints the answer and exits
+ *   orqi --version       print the version and exit
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -22,11 +23,32 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { credentialCandidates, LOGIN_HINT } from "./auth.ts";
-import { dim, type HeaderInfo } from "./branding.ts";
+import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { orqCommands } from "./commands.ts";
 import { connectOrqTools } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { createSubagentTool } from "./subagent.ts";
+
+const oneShot = process.argv[2];
+
+// Answered before anything else runs: argv[2] is otherwise a prompt, so `orqi
+// --version` would boot a session, connect to the MCP server and bill a model
+// call to answer it. install.sh calls this to prove the binary it just
+// extracted can execute at all, so it must not need credentials or a network.
+if (oneShot === "--version" || oneShot === "-v") {
+	console.log(VERSION);
+	process.exit(0);
+}
+if (oneShot === "--help" || oneShot === "-h") {
+	console.log(`orqi ${VERSION} - the orq.ai helper agent (TonyBot)
+
+  orqi                 interactive TUI
+  orqi "<prompt>"      one-shot, prints the answer and exits
+  orqi --version       print the version and exit
+
+Sign in with \`orq auth login\` or export ORQ_API_KEY.`);
+	process.exit(0);
+}
 
 const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent");
 
@@ -79,7 +101,7 @@ const customTools = [
 // time, and the skills count is not known until the resource loader has run.
 const header: HeaderInfo = {
 	name: "orqi (aka TonyBot)",
-	version: "v0.1.0",
+	version: `v${VERSION}`,
 	workspace: undefined,
 	status: "",
 	cwd: process.cwd().replace(homedir(), "~"),
@@ -113,7 +135,11 @@ const services = await createAgentSessionServices({
 		],
 	},
 });
-services.settingsManager.setTheme("orq-dark");
+// Two amber phosphor themes ship in themes/: orq-amber is one hue throughout
+// and is the default, orq-dark keeps turquoise for success and red for errors.
+// Both are on additionalThemePaths, so pi's own /theme picker lists them either
+// way and a session can switch without restarting.
+services.settingsManager.setTheme(process.env.ORQI_THEME === "dark" ? "orq-dark" : "orq-amber");
 // Silence pi's own startup header - it pitches pi, and this CLI prints its own.
 // ctrl+o still shows the full help and loaded resources on demand.
 services.settingsManager.setQuietStartup(true);
@@ -125,7 +151,6 @@ services.settingsManager.setTuiMode(process.env.ORQI_TUI === "regular" ? "regula
 // changelog is linked from the header.
 services.settingsManager.setLastChangelogVersion("999.0.0");
 
-const oneShot = process.argv[2];
 const skills = services.resourceLoader.getSkills().skills.length;
 header.workspace = credential.workspace;
 header.status = [
