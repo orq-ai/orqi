@@ -3,3 +3,6 @@ node_modules/
 src/assets.generated.ts
 /orqi
 dist/
+.context/
+.DS_Store
+.DS_Store
