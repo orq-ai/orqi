@@ -44,7 +44,7 @@ term_cols() {
 }
 
 # The banner drops a tier at a time rather than wrapping, because a wrapped logo
-# reads as damage: mark and wordmark at 76 columns, mark and caption at 43, then
+# reads as damage: mark and wordmark at 54 columns, mark and caption at 46, then
 # a plain line.
 #
 # The mark is the same six rows the CLI's own header draws (MARK in
@@ -55,22 +55,23 @@ term_cols() {
 # The wordmark is built from solid blocks only. Box-drawing glyphs render hollow
 # in some terminal fonts, which is what broke the previous one. Vertical strokes
 # are two columns wide against one-row horizontals: a character cell is twice as
-# tall as it is wide, so that is what makes the weight even.
+# tall as it is wide, so that is what makes the weight even. The last row carries
+# Q's leg, without which Q and O are the same glyph at this size.
 banner() {
 	if ! supports_art; then
 		printf '\norqi · the orq.ai agent CLI\n\n'
 		return
 	fi
 	cols=$(term_cols)
-	if [ "$cols" -ge 78 ] 2>/dev/null; then
+	if [ "$cols" -ge 54 ] 2>/dev/null; then
 		printf '%s\n' \
 			'' \
-			"${ORANGE}      ██    ${RESET}" \
-			"${ORANGE}  ██    ██  ${RESET}  ${ORANGE}████████ ████████ ██    ██ ██    ██ ██████   ████████ ████████${RESET}" \
-			"${ORANGE}██   ▄▄     ${RESET}    ${ORANGE}████   ██    ██ ████  ██ ██    ██ ██    ██ ██    ██   ████${RESET}" \
-			"${ORANGE}     ▀▀   ██${RESET}    ${ORANGE}████   ██    ██ ██  ████   ████   ██████   ██    ██   ████${RESET}" \
-			"${ORANGE}  ██    ██  ${RESET}    ${ORANGE}████   ██    ██ ██    ██   ████   ██    ██ ██    ██   ████${RESET}" \
-			"${ORANGE}    ██      ${RESET}    ${ORANGE}████   ████████ ██    ██   ████   ██████   ████████   ████${RESET}" \
+			"${ORANGE}      ██    ${RESET}  ${ORANGE}████████  ██████    ████████  ████████${RESET}" \
+			"${ORANGE}  ██    ██  ${RESET}  ${ORANGE}██    ██  ██    ██  ██    ██    ████${RESET}" \
+			"${ORANGE}██   ▄▄     ${RESET}  ${ORANGE}██    ██  ██████    ██    ██    ████${RESET}" \
+			"${ORANGE}     ▀▀   ██${RESET}  ${ORANGE}██    ██  ██  ██    ██    ██    ████${RESET}" \
+			"${ORANGE}  ██    ██  ${RESET}  ${ORANGE}████████  ██    ██  ████████  ████████${RESET}" \
+			"${ORANGE}    ██      ${RESET}  ${ORANGE}                        ████${RESET}" \
 			'                orqi · the orq.ai agent CLI' \
 			''
 	elif [ "$cols" -ge 46 ] 2>/dev/null; then

@@ -12,7 +12,7 @@ orqi
 │   ├── orq_* tools              MCP client → pi tools           src/mcp.ts
 │   ├── subagent tool            recursive in-process sessions   src/subagent.ts
 │   ├── skills                   bundled skills/                 (additionalSkillPaths)
-│   ├── system prompt            tonybot-system-prompt.txt
+│   ├── system prompt            orqi-system-prompt.txt
 │   ├── slash commands           /tools reads the wrapped list,
 │   │                            the rest shell out to the orq CLI  src/commands.ts
 │   └── startup header           session entry, not stdout        src/commands.ts

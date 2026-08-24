@@ -7,7 +7,7 @@ description: >
   Use when comparing agents, benchmarking, or wanting side-by-side evaluation.
   Do NOT use when comparing only orq.ai configurations with no external agents
   (use orq-run-experiment instead).
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, orq*
+allowed-tools: Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__search_entities, mcp__orq-workspace__create_dataset, mcp__orq-workspace__create_datapoints, mcp__orq-workspace__create_llm_eval
 ---
 
 # Compare Agents
@@ -39,6 +39,7 @@ Supported comparison modes:
 - `orq-run-experiment` — run orq.ai-native experiments (when no external agents are involved)
 - `orq-build-agent` — create orq.ai agents to include in comparisons
 - `orq-analyze-trace-failures` — diagnose agent failures from trace data
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## Workflow Checklist
 

@@ -6,7 +6,7 @@ description: >
   agent in a conversation, or call a model directly through the AI Router.
   Do NOT use for creating or editing deployments/agents (use orq-optimize-prompt
   or orq-build-agent). Do NOT use for running evaluations (use orq-run-experiment).
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, orq*
+allowed-tools: Bash(curl:*), Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__search_entities, mcp__orq-workspace__list_models, mcp__orq-workspace__list_traces
 ---
 
 # Invoke Deployment
@@ -31,6 +31,7 @@ You are an **orq.ai integration engineer**. Your job is to help users invoke orq
 - `orq-run-experiment` — evaluate invocation quality across a dataset
 - `orq-analyze-trace-failures` — diagnose failures from invocation traces
 - `orq-setup-observability` — instrument the application that calls the deployment
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## When to use
 

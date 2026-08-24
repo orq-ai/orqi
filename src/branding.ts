@@ -77,22 +77,28 @@ const MARK = [
 ];
 
 /**
- * TONYBOT, the same letterforms install.sh prints.
+ * ORQI, the same letterforms install.sh prints.
  *
  * Solid blocks only: box-drawing glyphs render hollow in some terminal fonts.
  * Vertical strokes are two columns against one-row horizontals because a
  * character cell is twice as tall as it is wide, which is what evens the weight.
+ *
+ * The sixth row exists for one reason: Q's leg. With a closed bowl and no leg,
+ * Q and O are the same glyph at this resolution, which is exactly how the
+ * previous mark failed. The leg is two units wide so it reads as deliberate
+ * rather than as a stray block.
  */
 const WORDMARK = [
-	"████████ ████████ ██    ██ ██    ██ ██████   ████████ ████████",
-	"  ████   ██    ██ ████  ██ ██    ██ ██    ██ ██    ██   ████  ",
-	"  ████   ██    ██ ██  ████   ████   ██████   ██    ██   ████  ",
-	"  ████   ██    ██ ██    ██   ████   ██    ██ ██    ██   ████  ",
-	"  ████   ████████ ██    ██   ████   ██████   ████████   ████  ",
+	"████████  ██████    ████████  ████████",
+	"██    ██  ██    ██  ██    ██    ████  ",
+	"██    ██  ██████    ██    ██    ████  ",
+	"██    ██  ██  ██    ██    ██    ████  ",
+	"████████  ██    ██  ████████  ████████",
+	"                        ████          ",
 ];
 
 /** Mark, two spaces, wordmark. Below this the wordmark wraps, so it is dropped. */
-const WORDMARK_COLS = 12 + 2 + 62;
+const WORDMARK_COLS = 12 + 2 + 38;
 /** The wordmark header runs ~11 rows; a short window keeps the compact one. */
 const WORDMARK_ROWS = 30;
 
@@ -128,7 +134,7 @@ export function terminalSize(): { cols: number; rows: number } {
  * Startup header: the orq mark, the detail lines, and the wordmark when there is
  * room for it.
  *
- * Two shapes rather than one. A window with space gets mark plus TONYBOT, the
+ * Two shapes rather than one. A window with space gets mark plus ORQI, the
  * same lockup install.sh prints. Anything smaller keeps the compact form, where
  * the detail lines run beside the mark: the six-line logotype this replaced used
  * to push the first prompt off the top of the screen, and in a split pane it
@@ -154,9 +160,10 @@ export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
 	];
 
 	if (size.cols >= WORDMARK_COLS && size.rows >= WORDMARK_ROWS) {
-		// Wordmark rides beside the mark, detail lines underneath both.
+		// Wordmark rides beside the mark, detail lines underneath both. Both are
+		// six rows, so they sit row for row with no offset.
 		const lockup = MARK.map((row, i) => {
-			const word = WORDMARK[i - 1];
+			const word = WORDMARK[i];
 			return `${color(row, AMBER)}  ${word ? color(word, AMBER) : ""}`.trimEnd();
 		});
 		return [...lockup, "", ...detail.map((line) => (line ? `${indent}${line}` : "")), ...footer];

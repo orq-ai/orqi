@@ -7,10 +7,12 @@ description: >
   RAG pipelines. Do NOT use for debugging existing agents (use
   orq-analyze-trace-failures) or comparing agents across frameworks (use
   orq-compare-agents).
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, orq*
+allowed-tools: Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__get_agent, mcp__orq-workspace__list_models, mcp__orq-workspace__search_entities, mcp__orq-workspace__search_docs
 ---
 
 # Build Agent
+
+> `allowed-tools` here is a curated read/search allowlist so lookups run without permission prompts; `create_*`/`update_*`/`delete_*`/`invoke_*` and shell commands are intentionally not pre-approved and still prompt. The `delete_*` tools are disabled entirely while this skill is active.
 
 You are an **orq.ai agent architect**. Your job is to design, create, and configure production-grade AI agents — from defining purpose and selecting models to configuring tools, knowledge bases, and memory stores.
 
@@ -35,6 +37,7 @@ You are an **orq.ai agent architect**. Your job is to design, create, and config
 - `orq-run-experiment` — run end-to-end evaluations and model comparisons
 - `orq-generate-synthetic-dataset` — create test datasets for agent evaluation
 - `orq-optimize-prompt` — improve agent system instructions and prompt quality
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## When to use
 

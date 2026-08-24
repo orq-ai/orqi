@@ -1,8 +1,8 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceOfKey } from "./auth.ts";
 import { headerLines } from "./branding.ts";
@@ -10,6 +10,7 @@ import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
+import { liveSkillsDir, liveSkillsNote, SKILLS_LOCK, updateDue, vendoredNames } from "./skills.ts";
 
 // The tool catalogue is only cached once orqi has run against a real workspace,
 // so it is absent in CI and on a fresh clone. The tests that read it are skipped
@@ -160,6 +161,80 @@ test("every theme's text stays legible on a light-ish dark background", () => {
 	}
 });
 
+test("skills.lock matches what is actually vendored", () => {
+	// The lock is the only machine-readable provenance for the baked skills, and
+	// the runtime updater compares upstream against it. A hand-copied skill that
+	// skipped `bun run vendor`, or a half-applied vendor run, shows up here.
+	const dirs = readdirSync(join(import.meta.dir, "..", "skills"), { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && /^(orq-|evaluatorq)/.test(entry.name))
+		.map((entry) => entry.name)
+		.sort();
+	expect(/^[0-9a-f]{40}$/.test(SKILLS_LOCK.sha)).toBe(true);
+	expect(SKILLS_LOCK.vendored).toEqual(dirs);
+	// Our own skills are never vendored, so upstream can never delete them.
+	expect(SKILLS_LOCK.vendored.filter((name) => name.startsWith("orqi-"))).toEqual([]);
+});
+
+test("vendor.ts and src/skills.ts agree on what counts as an upstream skill", () => {
+	// The filter is duplicated because vendor.ts must run before skills.lock
+	// exists. If they drift, vendor writes a tree the runtime would reject.
+	const script = readFileSync(join(import.meta.dir, "..", "vendor.ts"), "utf8");
+	expect(script).toContain("/^(orq-[a-z0-9-]+|evaluatorq)$/");
+});
+
+test("vendoredNames keeps only real upstream skills", () => {
+	// This list decides what gets copied out of a downloaded tarball, so it is
+	// also the boundary that keeps odd entries from becoming directories.
+	expect(vendoredNames(["orq-cli", "evaluatorq", "orqi-platform-guide", ".github", "..", "README.md", "tests"])).toEqual([
+		"evaluatorq",
+		"orq-cli",
+	]);
+});
+
+test("the daily skills check is due only when it should be", () => {
+	// Wrong answers here mean either hammering GitHub every boot or never
+	// updating at all; both are silent.
+	const dir = mkdtempSync(join(tmpdir(), "orqi-skills-"));
+	try {
+		expect(updateDue(dir, {})).toBe(true); // never checked
+		expect(updateDue(dir, { ORQI_SKILLS_UPDATE: "0" })).toBe(false); // pinned
+
+		mkdirSync(join(dir, "skills-live"), { recursive: true });
+		writeFileSync(join(dir, "skills-live", "last-check"), "");
+		expect(updateDue(dir, {})).toBe(false); // just checked
+		expect(updateDue(dir, { ORQI_REFRESH_SKILLS: "1" })).toBe(true); // forced
+		expect(updateDue(dir, {}, Date.now() + 25 * 60 * 60 * 1000)).toBe(true); // a day later
+		// The pin beats the force flag: it is the escape hatch for a bad upstream.
+		expect(updateDue(dir, { ORQI_SKILLS_UPDATE: "0", ORQI_REFRESH_SKILLS: "1" })).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the header never claims baked skills while live ones are in use", () => {
+	// No note means "you are running exactly what this binary shipped with". An
+	// unreadable sha beside a live dir would make that claim without checking.
+	const dir = mkdtempSync(join(tmpdir(), "orqi-note-"));
+	try {
+		expect(liveSkillsNote(dir)).toBeUndefined(); // no live dir: nothing to report
+		expect(liveSkillsDir(dir)).toBeUndefined();
+
+		const live = join(dir, "skills-live");
+		mkdirSync(join(live, "current"), { recursive: true });
+		writeFileSync(join(live, "current.sha"), ""); // present but empty
+		expect(liveSkillsDir(dir)).toBe(join(live, "current"));
+		expect(liveSkillsNote(dir)).toBe("skills unknown");
+
+		writeFileSync(join(live, "current.sha"), `${SKILLS_LOCK.sha}\n`);
+		expect(liveSkillsNote(dir)).toBeUndefined(); // live equals baked: no drift
+
+		writeFileSync(join(live, "current.sha"), `${"a".repeat(40)}\n`);
+		expect(liveSkillsNote(dir)).toBe(`skills ${"a".repeat(8)}`);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("onlyOrq hides every provider except orq", async () => {
 	const foreign = { provider: "anthropic", id: "claude-sonnet-4-5" };
 	const mine = { provider: PROVIDER_ID, id: "openai/gpt-5.6-terra" };
@@ -192,23 +267,25 @@ test("the wordmark header only appears when the window can hold it", () => {
 	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 
 	const roomy = strip(headerLines(info, { cols: 100, rows: 40 }));
-	expect(roomy).toContain("████████ ████████ ██    ██"); // TONYBOT
+	expect(roomy).toContain("████████  ██████    ████████  ████████"); // ORQI
+	// Q's leg is the only thing distinguishing it from O at this size.
+	expect(roomy).toContain("                        ████");
 
 	// At the gate exactly, no row of block art may wrap. The prose lines can and
 	// do run longer, the same as in the compact header; art wrapping is what
 	// looks broken.
-	const art = strip(headerLines(info, { cols: 76, rows: 30 }))
+	const art = strip(headerLines(info, { cols: 52, rows: 30 }))
 		.split("\n")
 		.filter((line) => /[█▀▄]/.test(line));
 	expect(art.length).toBe(6);
-	for (const line of art) expect(line.length).toBeLessThanOrEqual(76);
+	for (const line of art) expect(line.length).toBeLessThanOrEqual(52);
 
 	for (const size of [
-		{ cols: 75, rows: 40 }, // too narrow
+		{ cols: 51, rows: 40 }, // too narrow
 		{ cols: 100, rows: 29 }, // too short
 	]) {
 		const compact = strip(headerLines(info, size));
-		expect(compact).not.toContain("████████ ████████");
+		expect(compact).not.toContain("████████  ██████");
 		expect(compact).toContain("██   ▄▄"); // the mark still renders
 	}
 });

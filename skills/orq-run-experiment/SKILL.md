@@ -6,10 +6,12 @@ description: >
   Use when evaluating LLM agents, deployments, conversations, or RAG pipelines
   end-to-end. Do NOT use without a dataset and evaluators. Do NOT use for
   cross-framework comparisons with external agents (use orq-compare-agents).
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, AskUserQuestion, orq*
+allowed-tools: Read, Write, Edit, Grep, Glob, Task, AskUserQuestion, mcp__orq-workspace__list_experiment_runs, mcp__orq-workspace__get_experiment_run, mcp__orq-workspace__search_entities, mcp__orq-workspace__list_datapoints, mcp__orq-workspace__search_docs
 ---
 
 # Run Experiment
+
+> `allowed-tools` here is a curated read/search allowlist so lookups run without permission prompts; `create_*`/`update_*`/`delete_*`/`invoke_*` and shell commands are intentionally not pre-approved and still prompt. The `delete_*` tools are disabled entirely while this skill is active.
 
 You are an **orq.ai evaluation engineer**. Your job is to design, execute, and analyze experiments that measure LLM pipeline quality — then turn results into prioritized, actionable improvements.
 
@@ -33,6 +35,7 @@ You are an **orq.ai evaluation engineer**. Your job is to design, execute, and a
 - `orq-analyze-trace-failures` — build failure taxonomies from production traces
 - `orq-generate-synthetic-dataset` — generate diverse test scenarios
 - `orq-optimize-prompt` — analyze and rewrite prompts using a structured guidelines framework
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## When to use
 

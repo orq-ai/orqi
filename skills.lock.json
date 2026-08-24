@@ -1,0 +1,21 @@
+{
+	"source": "orq-ai/assistant-plugins",
+	"sha": "3c353a912cead09eb393dcb1915643925ce7a1f7",
+	"vendored": [
+		"evaluatorq",
+		"orq-analyze-trace-failures",
+		"orq-build-agent",
+		"orq-build-evaluator",
+		"orq-cli",
+		"orq-compare-agents",
+		"orq-evaluator-alignment",
+		"orq-generate-synthetic-dataset",
+		"orq-invoke-deployment",
+		"orq-manage-skills",
+		"orq-optimize-prompt",
+		"orq-red-team",
+		"orq-run-experiment",
+		"orq-setup-observability",
+		"orq-simulate-agent"
+	]
+}

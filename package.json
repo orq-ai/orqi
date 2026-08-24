@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "TonyBot POC - orq.ai helper agent CLI, pi coding agent with orq MCP tools and skills built in",
+  "description": "orqi - the orq.ai helper agent CLI: pi coding agent with orq MCP tools and skills built in",
   "bin": {
     "orqi": "./src/main.ts"
   },
@@ -12,6 +12,7 @@
     "typecheck": "bun run assets && tsc --noEmit",
     "test": "bun test",
     "assets": "bun build.ts",
+    "vendor": "bun vendor.ts",
     "build": "bun run assets && bun build --compile --outfile orqi src/main.ts",
     "dist": "bun dist.ts"
   },

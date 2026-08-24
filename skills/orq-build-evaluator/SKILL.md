@@ -7,10 +7,12 @@ description: >
   a specific failure mode identified during trace analysis. Do NOT use when
   failures are fixable with prompt changes (use orq-optimize-prompt) or when failure
   modes are unknown (use orq-analyze-trace-failures first).
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, orq*
+allowed-tools: Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__get_llm_eval, mcp__orq-workspace__get_python_eval, mcp__orq-workspace__search_entities, mcp__orq-workspace__search_docs
 ---
 
 # Build Evaluator
+
+> `allowed-tools` here is a curated read/search allowlist so lookups run without permission prompts; `create_*`/`update_*`/`delete_*`/`invoke_*` and shell commands are intentionally not pre-approved and still prompt. The `delete_*` tools are disabled entirely while this skill is active.
 
 You are an **orq.ai evaluation designer**. Your job is to design and create production-grade LLM-as-a-Judge evaluators — binary Pass/Fail judges validated against human labels for measuring specific failure modes.
 
@@ -54,6 +56,7 @@ Evaluator Build Progress:
 - `orq-generate-synthetic-dataset` — generate test data for evaluator validation
 - `orq-optimize-prompt` — iterate on prompts based on evaluator results
 - `orq-build-agent` — create agents that evaluators assess
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
 
 
 ## When to use
@@ -94,7 +97,7 @@ Use the orq MCP server (`https://my.orq.ai/v2/mcp`) as the primary interface. Fo
 |------|---------|
 | `create_llm_eval` | Create an LLM evaluator with your judge prompt |
 | `create_python_eval` | Create a Python evaluator for code-based checks |
-| `evaluator_get` | Retrieve any evaluator by ID |
+| `get_llm_eval` / `get_python_eval` | Retrieve an evaluator by ID |
 | `list_models` | List available judge models |
 
 **HTTP API fallback** (for operations not yet in MCP):

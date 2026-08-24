@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 /**
- * orqi - the orq.ai helper agent (TonyBot) as a CLI.
+ * orqi - the orq.ai helper agent as a CLI.
  *
  * A pi coding agent session that boots with the orq MCP tools, the orq skills
- * and the TonyBot system prompt already wired in.
+ * and the orqi system prompt already wired in.
  *
  *   orqi                 interactive TUI
  *   orqi "<prompt>"      one-shot, prints the answer and exits
@@ -27,6 +27,7 @@ import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { orqCommands } from "./commands.ts";
 import { connectOrqTools } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
+import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
 
 const oneShot = process.argv[2];
@@ -40,7 +41,7 @@ if (oneShot === "--version" || oneShot === "-v") {
 	process.exit(0);
 }
 if (oneShot === "--help" || oneShot === "-h") {
-	console.log(`orqi ${VERSION} - the orq.ai helper agent (TonyBot)
+	console.log(`orqi ${VERSION} - the orq.ai helper agent
 
   orqi                 interactive TUI
   orqi "<prompt>"      one-shot, prints the answer and exits
@@ -61,7 +62,7 @@ const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"
  */
 async function assetDir(): Promise<string> {
 	const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "..");
-	if (existsSync(join(pkgDir, "tonybot-system-prompt.txt"))) return pkgDir;
+	if (existsSync(join(pkgDir, "orqi-system-prompt.txt"))) return pkgDir;
 
 	const { ASSETS, HASH } = await import("./assets.generated.ts");
 	const unpacked = join(AGENT_DIR, "assets", HASH);
@@ -112,12 +113,15 @@ const services = await createAgentSessionServices({
 	agentDir: AGENT_DIR,
 	modelRuntime,
 	resourceLoaderOptions: {
-		systemPrompt: readFileSync(join(pkgDir, "tonybot-system-prompt.txt"), "utf8"),
-		// Ship a predictable skill set: the bundled orq + TonyBot skills only.
+		systemPrompt: readFileSync(join(pkgDir, "orqi-system-prompt.txt"), "utf8"),
+		// Ship a predictable skill set: the bundled orq + orqi skills only.
 		// Ambient discovery finds every skill installed on the machine (100+ here),
 		// which both bloats the prompt and makes orqi behave differently per user.
 		noSkills: !process.env.ORQI_LOCAL_SKILLS,
-		additionalSkillPaths: [join(pkgDir, "skills")],
+		// Live (daily-updated) skills first: pi resolves duplicate skill names
+		// first-wins, so a fresher orq-* copy shadows the baked one while the
+		// baked orqi-* skills, which upstream does not carry, keep loading.
+		additionalSkillPaths: [liveSkillsDir(AGENT_DIR), join(pkgDir, "skills")].filter((p): p is string => Boolean(p)),
 		additionalThemePaths: [join(pkgDir, "themes")],
 		extensionFactories: [
 			orqCommands(
@@ -160,10 +164,17 @@ header.status = [
 	`${models.ids.length} models`,
 	orq.note,
 	models.note,
+	// Skills newer than the binary shipped with; silent drift would otherwise be
+	// invisible until someone diffed behaviour against a colleague's machine.
+	liveSkillsNote(AGENT_DIR),
 ]
 	.filter(Boolean)
 	.join(" · ");
 const startupLine = [header.name, header.workspace, header.status, credential.source].filter(Boolean).join(" · ");
+
+// Daily skills update, after the session is wired: boot must never wait on
+// GitHub, and a failure here costs nothing but freshness. Lands next run.
+void maybeUpdateSkills(AGENT_DIR);
 
 try {
 	if (oneShot) {

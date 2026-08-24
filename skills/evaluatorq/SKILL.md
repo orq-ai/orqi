@@ -8,7 +8,7 @@ description: >
   `eq sim` multi-turn user simulation. Do NOT use when comparing multiple
   agents head-to-head (use orq-compare-agents) or when running
   orq.ai-native experiments only (use orq-run-experiment).
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, orq*
+allowed-tools: Bash(eq:*), Bash(pip:*), Bash(python:*), Bash(npx:*), Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__search_entities
 ---
 
 # Evaluatorq
@@ -37,6 +37,7 @@ You are an **evaluatorq specialist**. You help users write evaluation scripts us
 - `orq-analyze-trace-failures` — diagnose agent failures from production traces
 - `orq-red-team` — full `eq redteam` walkthrough: modes, categories, output, dashboard
 - `orq-simulate-agent` — full `eq sim` walkthrough: personas, scenarios, goal scoring
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## When to use
 
@@ -79,6 +80,8 @@ Evaluatorq Progress:
 | **Library: TypeScript script** | Same as Python, TypeScript stack | `evaluatorq()` async function |
 | **CLI: `eq redteam`** | Adversarial safety testing against OWASP categories | → `orq-red-team` skill |
 | **CLI: `eq sim`** | Multi-turn conversation simulation, goal-achievement scoring | → `orq-simulate-agent` skill |
+
+Since v1.10 the library also exports **LLM-jury and pairwise judging**: `llm_jury()`, `llm_jury_pairwise()`, and `PairwiseComparator` (plurality/majority vote or numeric mean/median aggregation) — see the upstream `docs/llm-as-a-jury.md` and `docs/pairwise-judging.md` for usage.
 
 ---
 
@@ -186,8 +189,8 @@ eq redteam ui report.json   # open Streamlit dashboard
 Quick reference:
 
 ```bash
-eq sim generate --agent-description "..." --agent-key <AGENT_KEY>
-eq sim run --datapoints dp.jsonl --agent-key <AGENT_KEY>
+eq sim generate --agent-description "..." --datapoints dp.jsonl   # --datapoints is required
+eq sim simulate --input dp.jsonl --target agent:<AGENT_KEY>
 ```
 
 ---
@@ -261,13 +264,14 @@ For full CLI flags and output format, see the `orq-red-team` skill (`eq redteam`
 | Language | Command |
 |----------|---------|
 | Python + CLI (`eq`) | `pip install 'evaluatorq[redteam]'` — installs both the library and the `eq` CLI |
+| Python orq client (used by scorers that call orq evaluators) | `pip install orq-ai-sdk` — provides `from orq_ai_sdk import Orq` |
 | TypeScript | `npm install @orq-ai/evaluatorq` |
 
 Environment variables:
 
 | Variable | Required for | Purpose |
 |----------|-------------|---------|
-| `ORQ_API_KEY` | Platform reporting, `--agent-key` | orq.ai API key |
+| `ORQ_API_KEY` | Platform reporting, `--target agent:<key>` | orq.ai API key |
 | `OPENAI_API_KEY` | `--openai-model` target | OpenAI key |
 
 ---

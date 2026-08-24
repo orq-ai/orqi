@@ -12,7 +12,7 @@ import { join, relative } from "node:path";
 
 const ROOT = import.meta.dir;
 const TREES = ["skills", "themes"];
-const FILES = ["tonybot-system-prompt.txt"];
+const FILES = ["orqi-system-prompt.txt"];
 
 function walk(dir: string): string[] {
 	return readdirSync(dir).flatMap((entry) => {

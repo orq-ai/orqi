@@ -8,7 +8,7 @@ description: >
   Do NOT use when sufficient real production data exists (use
   orq-analyze-trace-failures instead). Do NOT use for evaluator creation (use
   orq-build-evaluator).
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, orq*
+allowed-tools: Bash(curl:*), Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__search_entities, mcp__orq-workspace__list_models, mcp__orq-workspace__list_datapoints, mcp__orq-workspace__get_llm_eval, mcp__orq-workspace__get_python_eval, mcp__orq-workspace__create_dataset, mcp__orq-workspace__create_datapoints, mcp__orq-workspace__update_datapoint
 ---
 
 # Generate Synthetic Dataset
@@ -35,6 +35,7 @@ You are an **orq.ai dataset engineer**. Your job is to generate high-quality, di
 - `orq-build-evaluator` — design evaluators to score outputs against the dataset
 - `orq-analyze-trace-failures` — identify failure modes that inform dataset design
 - `orq-optimize-prompt` — iterate on prompts based on experiment results
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## When to use
 

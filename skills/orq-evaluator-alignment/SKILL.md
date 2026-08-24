@@ -12,6 +12,7 @@ description: >-
   approves. If the evaluator ID isn't given, ask for it after triggering. Do NOT
   use to build an evaluator from scratch (use orq-build-evaluator), to fix
   failures with prompt tweaks (use orq-optimize-prompt), or for non-boolean judges.
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash(uv run:*), AskUserQuestion
 ---
 
 # Evaluator Alignment
@@ -28,6 +29,13 @@ via PEP 723 inline metadata, so `uv run scripts/<name>.py ...` builds an isolate
 cached environment on first run — no `uv sync`, no project venv, no repo needed.
 Always invoke as `uv run scripts/<name>.py` (not `uv run python scripts/...`, which
 bypasses the inline metadata).
+
+> **TLS-intercepting antivirus / corporate proxy:** the first run of each script
+> reaches PyPI to build its env. Behind SSL-inspecting AV (e.g. Norton) or a
+> corporate proxy that re-signs HTTPS, `uv` fails with `invalid peer certificate:
+> UnknownIssuer`. Add `--system-certs` so `uv` trusts the OS certificate store:
+> `uv run --system-certs scripts/<name>.py ...`. Only the first (uncached) build
+> per script needs it.
 
 ## Constraints
 
@@ -231,3 +239,7 @@ Every artifact lives in `runs/<key>_<ts>_<model>_<N>dp/`: `evaluator.json`, `tra
 `recommendations.json`, `aggregated.md`, `new_prompt.md`, `rewrite_status.json`,
 `approval.json`, `new_evaluator.json`, `experiment_report.md`. Any step is
 re-runnable in isolation against an existing run directory.
+
+## Companion Skills
+
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.

@@ -7,10 +7,12 @@ description: >
   review of an existing system prompt. Do NOT use when production traces show
   failures (use orq-analyze-trace-failures first to identify patterns). Do NOT use
   to build evaluators (use orq-build-evaluator).
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, orq*
+allowed-tools: Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__search_entities, mcp__orq-workspace__get_agent, mcp__orq-workspace__get_deployment, mcp__orq-workspace__search_docs
 ---
 
 # Optimize Prompt
+
+> `allowed-tools` here is a curated read/search allowlist so lookups run without permission prompts; `create_*`/`update_*`/`delete_*`/`invoke_*` and shell commands are intentionally not pre-approved and still prompt. The `delete_*` tools are disabled entirely while this skill is active.
 
 You are an **orq.ai prompt engineer**. Your job is to analyze and optimize system prompts using a structured prompting guidelines framework — improving how prompts are expressed without changing what they do.
 
@@ -47,6 +49,7 @@ Prompt Optimization Progress:
 - `orq-build-evaluator` — create evaluators to measure prompt quality
 - `orq-analyze-trace-failures` — identify failures that inform prompt optimization
 - `orq-build-agent` — if the prompt is for an agent
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## When to use
 

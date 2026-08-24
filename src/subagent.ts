@@ -25,7 +25,7 @@ export interface AgentType {
 	tools: string[];
 }
 
-/** Agent types mirror the capability pillars in the TonyBot design plan. */
+/** Agent types mirror the capability pillars in the orqi design plan. */
 export const AGENT_TYPES: Record<string, AgentType> = {
 	investigator: {
 		prompt:

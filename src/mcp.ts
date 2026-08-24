@@ -74,7 +74,7 @@ async function catalogue(
 export const TOOL_PREFIX = "orq_";
 
 /**
- * Invocation surfaces, not TonyBot's job. Dropping them takes ~6 KB of the 71 KB
+ * Invocation surfaces, not orqi's job. Dropping them takes ~6 KB of the 71 KB
  * of tool schema that ships with every request (the 96 KB they occupy in the
  * cached catalogue is mostly `outputSchema`, which is never forwarded).
  * `ORQI_ALL_TOOLS=1` restores them.
