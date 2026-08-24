@@ -1,0 +1,41 @@
+name: CI
+
+# release.yml runs the tests too, but only on a v* tag: by then the code is
+# already being cut into a release. This runs them on the commit that broke
+# them, which is the only time the answer is cheap to act on.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Same pin as release.yml: CI must exercise the compiler that builds
+          # the binary users download.
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun test
+
+      # bun build --compile does not type-check, so tsc is the only thing
+      # standing between a green test run and a binary that will not compile.
+      - run: bun run typecheck
+
+      # The installer is POSIX sh fetched straight from main by `curl | sh`.
+      # A syntax error here reaches users without ever passing through a build.
+      - name: Check install.sh parses
+        run: sh -n install.sh
+
+      # Proves the binary builds and starts. --version needs no credentials and
+      # no network, so it runs anywhere.
+      - name: Build and smoke test
+        run: |
+          bun run build
+          [ "$(./orqi --version)" = "$(bun -e 'console.log(require("./package.json").version)')" ]

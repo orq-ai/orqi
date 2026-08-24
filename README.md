@@ -2,12 +2,12 @@
 
 > **Alpha.** Under active development. Expect rough edges and breaking changes.
 
-**TonyBot as a CLI.** The orq.ai helper agent in your terminal. Ask it to investigate a failing
+**orqi** (aka TonyBot) is the orq.ai helper agent in your terminal. Ask it to investigate a failing
 agent, check workspace health, cut cost, build evaluators, or explain the platform, and it answers
 with your workspace's own tools, models and skills already wired in. No setup, no glue code.
 
 It embeds the [pi coding agent](https://github.com/earendil-works/pi) in-process and boots with the
-orq MCP tools, the orq skills and the TonyBot system prompt already wired in.
+orq MCP tools, the orq skills and the orqi system prompt already wired in.
 
 ![orqi in the terminal](docs/screenshot-tools.png)
 
@@ -35,7 +35,7 @@ Then authenticate once with either the [orq CLI](https://github.com/orq-ai/orq-c
 | **orq AI Router** | The only model provider, so `/model` offers exactly the models the workspace has enabled |
 | **5 workspace commands** | `/tools`, `/whoami`, `/workspace [key]`, `/doctor`, `/whatsnew` (the orq.ai changelog) |
 | **43 orq MCP tools** | Every tool the workspace's MCP server exposes today, minus three invocation surfaces ([why](ARCHITECTURE.md#tools)). Wrapped as native pi tools with an `orq_` prefix. Results render as a one-line summary (`23 items · 6.0 KB`); `ctrl+o` expands to pretty-printed JSON. The model always receives the full payload |
-| **21 skills** | 14 from [orq-ai/assistant-plugins](https://github.com/orq-ai/assistant-plugins) plus the 7 TonyBot skills, vendored in `skills/` |
+| **22 skills** | 15 from [orq-ai/assistant-plugins](https://github.com/orq-ai/assistant-plugins) plus the 7 orqi skills, vendored in `skills/`. The upstream 15 refresh themselves: orqi checks once a day and picks up new ones without waiting for a release |
 | **3 subagents** | `investigator`, `analyst`, `docs`, in-process, each with a narrow orq tool subset |
 
 
@@ -54,7 +54,8 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_THEME` | `dark` selects the theme that keeps turquoise for success and red for errors; the default is one-hue amber. `/theme` switches mid-session |
 | `ORQI_LOCAL_SKILLS` | Also discover skills installed on the machine (off by default; 100+ ambient skills would swamp the prompt) |
 | `ORQI_ALL_TOOLS` | Set to `1` to also expose the invocation tools that are filtered out by default ([why](ARCHITECTURE.md#tools)) |
-| `ORQI_REFRESH_TOOLS`, `ORQI_REFRESH_MODELS` | Refresh the cached tool / model catalogues |
+| `ORQI_SKILLS_UPDATE` | Set to `0` to pin skills to whatever the binary shipped with, disabling the daily check |
+| `ORQI_REFRESH_TOOLS`, `ORQI_REFRESH_MODELS`, `ORQI_REFRESH_SKILLS` | Refresh the cached tool / model catalogues, or force a skills check now |
 | `ORQI_AGENT_DIR`, `ORQ_API_BASE_URL`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | Override the agent dir / endpoints (on-prem) |
 | `ORQI_VERSION`, `ORQI_INSTALL_DIR` | Read by `install.sh` only: release tag to install (default latest) and where the binary lands (default `~/.local/bin`) |
 
@@ -75,7 +76,9 @@ Requires [Bun](https://bun.sh) and the [orq CLI](https://github.com/orq-ai/orq-c
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit, how tools and models are wired, known
   rough edges.
 - [AGENTS.md](AGENTS.md): working notes for changing the code, plus the release process.
+- [SECURITY.md](SECURITY.md): what orqi downloads and executes, including the daily unsigned
+  skills update and how to pin it.
 
 ---
 
-Built by [orq.ai research labs](https://orq.ai).
+MIT licensed. Built by [orq.ai research labs](https://orq.ai).

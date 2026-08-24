@@ -64,7 +64,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `project_id`, so the model composes calls the server rejects. The matrix in the hint was
   measured against a live workspace. Drop an entry once the server documents it; a test fails if a
   hinted tool disappears.
-- **The header has two shapes, chosen at render time.** Mark plus TONYBOT needs 76 columns and 30
+- **The header has two shapes, chosen at render time.** Mark plus ORQI needs 52 columns and 30
   rows; anything smaller falls back to the compact form with the detail lines beside the mark.
   `headerLines` takes the size as an argument so the gate is testable. Prose lines may still wrap
   in a narrow window, as they always did; wrapped block art is what looks broken.
@@ -133,9 +133,31 @@ Developer ID signature plus notarization.
 
 ## Conventions
 
-- **Skills are vendored, not submoduled.** `skills/orq-*` and `skills/evaluatorq` come from
-  `orq-ai/assistant-plugins` at the SHA the orq CLI pins (`415edd51…`); `skills/tonybot-*` are the
-  TonyBot skills. Re-vendor by re-copying.
+- **Skills are vendored, and the vendoring is scripted.** `skills/orq-*` and `skills/evaluatorq`
+  come from `orq-ai/assistant-plugins`; `skills/orqi-*` are ours and upstream never sees them.
+  Run `bun run vendor` (optionally with a SHA) rather than copying by hand: it replaces the
+  upstream tree wholesale so deletions propagate, and records the commit in `skills.lock.json`.
+  A test fails when the lock and the tree disagree. Prose used to be the only record of the pin,
+  and it went a month stale without anyone noticing.
+- **`tar` in the skills updater must stay portable.** `--wildcards` is GNU-only and bsdtar on
+  macOS rejects it outright. Because the whole updater is wrapped in a silent catch, that
+  failure does not surface: skills simply never update, on every Mac, with no error. Both tars
+  treat a bare pattern as a wildcard when extracting, so pass the pattern alone.
+- **The staging sweep goes by age, not by name.** Deleting every `staging-*` would delete the
+  directory a second orqi process is extracting into right now, failing that process silently.
+- **`last-check` marks a check that completed, not one that started.** A one-shot run exits the
+  moment it prints and can kill the update mid-flight; marking earlier pins skills for 24 h on a
+  check that never happened, which is how a one-shot-only user never updates.
+- **The baked skills are a floor, not a ceiling.** Once a day `maybeUpdateSkills` asks GitHub
+  whether upstream has moved and, if so, downloads into `~/.orqi/agent/skills-live/current`,
+  which is listed *before* the baked dir in `additionalSkillPaths`. pi resolves duplicate skill
+  names first-wins, so a fresher `orq-*` shadows its baked copy while the baked `orqi-*` still
+  load. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
+  once at boot (`/reload` picks it up early); the check is fire-and-forget after the session is
+  up, so a slow or dead GitHub costs nothing; and every failure path is a silent return, because
+  the worst acceptable outcome is stale skills, never a broken boot. The header shows
+  `skills <sha8>` when live differs from the lock. `ORQI_SKILLS_UPDATE=0` pins and beats
+  `ORQI_REFRESH_SKILLS=1`.
 - **`src/assets.generated.ts` is generated and gitignored.** `build.ts` writes it; never edit or
   commit it.
 - **Handoff notes go in `.context/`, not in this file.** Branch state, machine quirks and next steps
