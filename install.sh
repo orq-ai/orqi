@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install orqi, the orq.ai helper agent CLI.
 #
-#   curl -fsSL https://raw.githubusercontent.com/orq-ai/tonybot/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh
 #
 # Alpha software. Downloads a release tarball and extracts the binary into
 # ~/.local/bin. tar preserves the exec bit and sheds macOS quarantine, which is
@@ -12,7 +12,7 @@
 #   ORQI_INSTALL_DIR   where the binary lands (default: ~/.local/bin)
 set -eu
 
-REPO=orq-ai/tonybot
+REPO=orq-ai/orqi
 INSTALL_DIR=${ORQI_INSTALL_DIR:-$HOME/.local/bin}
 
 # --- Presentation ----------------------------------------------------------

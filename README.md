@@ -19,7 +19,7 @@ orqi "why did my agent fail today?"    # one-shot, prints and exits
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/orq-ai/tonybot/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh
 ```
 
 Pulls the latest release binary, no clone, no Bun.
