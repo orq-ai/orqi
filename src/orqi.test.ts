@@ -10,7 +10,15 @@ import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
-import { liveSkillsDir, liveSkillsNote, SKILLS_LOCK, updateDue, vendoredNames } from "./skills.ts";
+import {
+	liveSkillsDir,
+	liveSkillsNote,
+	skillResourcePaths,
+	suppressLiveSkillCollisions,
+	SKILLS_LOCK,
+	updateDue,
+	vendoredNames,
+} from "./skills.ts";
 
 // The tool catalogue is only cached once orqi has run against a real workspace,
 // so it is absent in CI and on a fresh clone. The tests that read it are skipped
@@ -233,6 +241,49 @@ test("the header never claims baked skills while live ones are in use", () => {
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("skill resource paths keep bundled skills ahead of live skills", () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-paths-"));
+	try {
+		const pkgDir = join(dir, "package");
+		mkdirSync(join(pkgDir, "skills"), { recursive: true });
+		expect(skillResourcePaths(pkgDir, undefined)).toEqual([join(pkgDir, "skills")]);
+
+		const live = join(dir, "skills-live");
+		mkdirSync(join(live, "current"), { recursive: true });
+		writeFileSync(join(live, "current.sha"), `${"a".repeat(40)}\n`);
+		expect(skillResourcePaths(pkgDir, join(live, "current"))).toEqual([join(pkgDir, "skills"), join(live, "current")]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("suppresses only expected live skill collisions", () => {
+	const live = "/tmp/orqi-skills/skills-live/current";
+	const liveLoser = join(live, "orq-build-agent", "SKILL.md");
+	const localLoser = "/workspace/skills/orq-build-agent/SKILL.md";
+	const diagnostics = [
+		{
+			type: "collision",
+			path: liveLoser,
+			collision: { resourceType: "skill", name: "orq-build-agent", loserPath: liveLoser },
+		},
+		{
+			type: "collision",
+			path: localLoser,
+			collision: { resourceType: "skill", name: "orq-build-agent", loserPath: localLoser },
+		},
+		{
+			type: "collision",
+			path: "/tmp/orqi-skills/skills-live/currently/orq-build-agent/SKILL.md",
+			collision: { resourceType: "prompt", name: "orq-build-agent", loserPath: "/tmp/orqi-skills/skills-live/currently/orq-build-agent/SKILL.md" },
+		},
+		{ type: "warning", path: liveLoser, message: "skill path does not exist" },
+	] as any[];
+
+	const filtered = suppressLiveSkillCollisions(diagnostics, live);
+	expect(filtered).toEqual([diagnostics[1], diagnostics[2], diagnostics[3]]);
 });
 
 test("onlyOrq hides every provider except orq", async () => {
