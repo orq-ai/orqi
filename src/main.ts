@@ -22,7 +22,7 @@ import {
 	SessionManager,
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
-import { credentialCandidates, LOGIN_HINT } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT, projectForCredential } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { orqCommands } from "./commands.ts";
 import { connectOrqTools } from "./mcp.ts";
@@ -101,9 +101,10 @@ const customTools = [
 // Filled in below, once the services exist: the renderer only reads it at draw
 // time, and the skills count is not known until the resource loader has run.
 const header: HeaderInfo = {
-	name: "orqi (aka TonyBot)",
+	name: "ORQI",
 	version: `v${VERSION}`,
 	workspace: undefined,
+	project: undefined,
 	status: "",
 	cwd: process.cwd().replace(homedir(), "~"),
 };
@@ -130,7 +131,8 @@ const services = await createAgentSessionServices({
 					if (!next) return LOGIN_HINT;
 					process.env.ORQ_API_KEY = next.token;
 					const count = await orq.reconnect(next);
-					header.workspace = next.workspace;
+						header.workspace = next.workspace;
+						header.project = await projectForCredential(next.token);
 					return `Reconnected to orq: ${count} tools in ${next.workspace ?? "workspace"} (${next.source}).`;
 				},
 				orq.tools.map((tool) => tool.name),
@@ -157,6 +159,7 @@ services.settingsManager.setLastChangelogVersion("999.0.0");
 
 const skills = services.resourceLoader.getSkills().skills.length;
 header.workspace = credential.workspace;
+header.project = await projectForCredential(credential.token);
 header.status = [
 	model?.id ?? "no model",
 	`${orq.tools.length} tools`,

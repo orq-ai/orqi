@@ -27,7 +27,7 @@ supports_art() {
 	esac
 }
 
-# Pulse Orange from the orq.ai brand guidelines, truecolor terminals only.
+# The orq CLI palette: truecolor, xterm-256, then basic ANSI.
 ORANGE=''
 RESET=''
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -36,6 +36,12 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
 			ORANGE=$(printf '\033[38;2;223;83;37m')
 			RESET=$(printf '\033[0m')
 			;;
+		*)
+			case "${TERM:-}" in
+				*256color*) ORANGE=$(printf '\033[38;5;166m'); RESET=$(printf '\033[0m') ;;
+				 dumb|'') ORANGE='' ;;
+				 *) ORANGE=$(printf '\033[33m'); RESET=$(printf '\033[0m') ;;
+			esac
 	esac
 fi
 
@@ -43,20 +49,8 @@ term_cols() {
 	tput cols 2>/dev/null || echo 80
 }
 
-# The banner drops a tier at a time rather than wrapping, because a wrapped logo
-# reads as damage: mark and wordmark at 54 columns, mark and caption at 46, then
-# a plain line.
-#
-# The mark is the same six rows the CLI's own header draws (MARK in
-# src/branding.ts): four rounded blocks rotating around a centre, the centre
-# written `▄▄` over `▀▀` because those halves meet across the row boundary and
-# read as one square. Keep the two copies in step.
-#
-# The wordmark is built from solid blocks only. Box-drawing glyphs render hollow
-# in some terminal fonts, which is what broke the previous one. Vertical strokes
-# are two columns wide against one-row horizontals: a character cell is twice as
-# tall as it is wide, so that is what makes the weight even. The last row carries
-# Q's leg, without which Q and O are the same glyph at this size.
+# The banner keeps the six-row CLI logo intact rather than wrapping it. Keep
+# this copy in step with ORQI_LOGO in src/branding.ts.
 banner() {
 	if ! supports_art; then
 		printf '\norqi · the orq.ai agent CLI\n\n'
@@ -66,23 +60,24 @@ banner() {
 	if [ "$cols" -ge 54 ] 2>/dev/null; then
 		printf '%s\n' \
 			'' \
-			"${ORANGE}      ██    ${RESET}  ${ORANGE}████████  ██████    ████████  ████████${RESET}" \
-			"${ORANGE}  ██    ██  ${RESET}  ${ORANGE}██    ██  ██    ██  ██    ██    ████${RESET}" \
-			"${ORANGE}██   ▄▄     ${RESET}  ${ORANGE}██    ██  ██████    ██    ██    ████${RESET}" \
-			"${ORANGE}     ▀▀   ██${RESET}  ${ORANGE}██    ██  ██  ██    ██    ██    ████${RESET}" \
-			"${ORANGE}  ██    ██  ${RESET}  ${ORANGE}████████  ██    ██  ████████  ████████${RESET}" \
-			"${ORANGE}    ██      ${RESET}  ${ORANGE}                        ████${RESET}" \
-			'                orqi · the orq.ai agent CLI' \
+			"${ORANGE}  ██████╗ ██████╗  ██████╗  ████${RESET}" \
+			"${ORANGE} ██╔═══██╗██╔══██╗██╔═══██╗  ██${RESET}" \
+			"${ORANGE} ██║   ██║██████╔╝██║   ██║  ██${RESET}" \
+			"${ORANGE} ██║   ██║██╔══██╗██║▄▄ ██║  ██${RESET}" \
+			"${ORANGE} ╚██████╔╝██║  ██║╚██████╔╝  ██${RESET}" \
+			"${ORANGE}  ╚═════╝ ╚═╝  ╚═╝  ╚══▀▀═╝  ████${RESET}" \
+			"                ORQI ${ORQI_VERSION:-latest}" \
 			''
 	elif [ "$cols" -ge 46 ] 2>/dev/null; then
 		printf '%s\n' \
 			'' \
-			"${ORANGE}      ██    ${RESET}" \
-			"${ORANGE}  ██    ██  ${RESET}" \
-			"${ORANGE}██   ▄▄     ${RESET}  orqi · the orq.ai agent CLI" \
-			"${ORANGE}     ▀▀   ██${RESET}" \
-			"${ORANGE}  ██    ██  ${RESET}" \
-			"${ORANGE}    ██      ${RESET}" \
+			"${ORANGE}  ██████╗ ██████╗  ██████╗  ████${RESET}" \
+			"${ORANGE} ██╔═══██╗██╔══██╗██╔═══██╗  ██${RESET}" \
+			"${ORANGE} ██║   ██║██████╔╝██║   ██║  ██${RESET}" \
+			"${ORANGE} ██║   ██║██╔══██╗██║▄▄ ██║  ██${RESET}" \
+			"${ORANGE} ╚██████╔╝██║  ██║╚██████╔╝  ██${RESET}" \
+			"${ORANGE}  ╚═════╝ ╚═╝  ╚═╝  ╚══▀▀═╝  ████${RESET}" \
+			"                ORQI ${ORQI_VERSION:-latest}" \
 			''
 	else
 		printf '\norqi · the orq.ai agent CLI\n\n'

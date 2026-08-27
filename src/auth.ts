@@ -36,6 +36,32 @@ export interface Credential {
 	workspace?: string;
 }
 
+interface Project { id?: string; name?: string; key?: string; default?: boolean; is_default?: boolean }
+
+/** Resolve the project label from the authenticated Projects REST API. */
+export async function projectForCredential(token: string): Promise<string | undefined> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/v2/projects?limit=200`, {
+			headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
+		});
+		if (!response.ok) return undefined;
+		const body = await response.json() as unknown;
+		const projects = Array.isArray(body) ? body : (body as { data?: unknown })?.data;
+		if (!Array.isArray(projects)) return undefined;
+		const valid = projects.filter((project): project is Project => Boolean(project && typeof project === "object"));
+		const claims = token.replace(/^sk-orq-/, "").split(".")[1];
+		let projectId: string | undefined;
+		if (claims) {
+			try { projectId = JSON.parse(Buffer.from(claims, "base64url").toString("utf8"))?.project_id; } catch { /* opaque token */ }
+		}
+		const project = valid.find((item) => projectId && (item.id === projectId || item.key === projectId))
+			?? (valid.length === 1 ? valid[0] : valid.find((item) => item.default || item.is_default));
+		return project?.name ?? project?.key ?? project?.id;
+	} catch {
+		return undefined;
+	}
+}
+
 function readSession(): { activeWorkspaceKey?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] } | undefined {
 	try {
 		return JSON.parse(readFileSync(SESSION_FILE, "utf8"));
