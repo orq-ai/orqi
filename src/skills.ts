@@ -1,10 +1,11 @@
 /**
  * Runtime skill updates: the binary's baked skills are a floor, not a ceiling.
  *
- * Once a day the CLI asks GitHub whether orq-ai/assistant-plugins has moved
- * past what this binary shipped with, and if so downloads the new skills into
- * ~/.orqi/agent/skills-live/. Existing skills take precedence over this live
- * directory, which therefore supplies only names that are otherwise missing.
+ * The bundled directory is listed before the live directory in
+ * additionalSkillPaths. pi resolves duplicate skill names first-wins, so a
+ * workspace/project/user/bundled skill remains authoritative; the live tree
+ * fills only names that are not already present. Expected live-vs-existing
+ * collisions are removed from diagnostics by the resource-loader override.
  *
  * The check never blocks startup: it fires after the session is up, with a
  * short timeout, and any failure is silence plus a retry after the TTL. An

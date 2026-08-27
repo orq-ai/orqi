@@ -150,14 +150,14 @@ Developer ID signature plus notarization.
   check that never happened, which is how a one-shot-only user never updates.
 - **The baked skills are a floor, not a ceiling.** Once a day `maybeUpdateSkills` asks GitHub
   whether upstream has moved and, if so, downloads into `~/.orqi/agent/skills-live/current`,
-  which is listed *before* the baked dir in `additionalSkillPaths`. pi resolves duplicate skill
-  names first-wins, so a fresher `orq-*` shadows its baked copy while the baked `orqi-*` still
-  load. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
-  once at boot (`/reload` picks it up early); the check is fire-and-forget after the session is
-  up, so a slow or dead GitHub costs nothing; and every failure path is a silent return, because
-  the worst acceptable outcome is stale skills, never a broken boot. The header shows
-  `skills <sha8>` when live differs from the lock. `ORQI_SKILLS_UPDATE=0` pins and beats
-  `ORQI_REFRESH_SKILLS=1`.
+  which is supplied after the existing project/user/package resources and the bundled `skills/`
+  directory. pi resolves duplicate skill names first-wins, so an existing skill remains the
+  authoritative definition and the live tree fills only names that are not already present.
+  Expected live-vs-existing collisions are removed from diagnostics. The update lands on the next
+  run, because pi scans skills once at boot (`/reload` picks it up early); the check is
+  fire-and-forget after the session is up, so a slow or dead GitHub costs nothing; and every
+  failure path is a silent return. `ORQI_SKILLS_UPDATE=0` pins and beats `ORQI_REFRESH_SKILLS=1`.
+  The header shows `skills <sha8>` when live differs from the lock.
 - **`src/assets.generated.ts` is generated and gitignored.** `build.ts` writes it; never edit or
   commit it.
 - **Handoff notes go in `.context/`, not in this file.** Branch state, machine quirks and next steps

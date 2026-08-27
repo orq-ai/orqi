@@ -31,6 +31,12 @@ orqi
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
 
+`src/main.ts` passes the bundled `skills/` directory before the daily-updated
+`~/.orqi/agent/skills-live/current` directory. pi's project/user/package resources and the
+bundled directory therefore win same-name collisions; `skillsOverride` removes only the expected
+diagnostic for a live directory that loses to an existing skill. A live skill with no existing
+counterpart remains available. The updater is fire-and-forget and updates land on the next run.
+
 ## Tools
 
 The orq MCP server's catalogue is fetched once and wrapped as native pi tools with an `orq_`
