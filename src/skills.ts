@@ -3,10 +3,8 @@
  *
  * Once a day the CLI asks GitHub whether orq-ai/assistant-plugins has moved
  * past what this binary shipped with, and if so downloads the new skills into
- * ~/.orqi/agent/skills-live/. The live dir is listed BEFORE the baked dir in
- * additionalSkillPaths, and pi resolves duplicate skill names first-wins, so
- * updated orq-* skills shadow their baked copies while the baked orqi-* skills
- * (ours, not upstream's) keep loading.
+ * ~/.orqi/agent/skills-live/. Existing skills take precedence over this live
+ * directory, which therefore supplies only names that are otherwise missing.
  *
  * The check never blocks startup: it fires after the session is up, with a
  * short timeout, and any failure is silence plus a retry after the TTL. An
@@ -16,7 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { $ } from "bun";
 import lock from "../skills.lock.json" with { type: "json" };
 
@@ -36,6 +34,32 @@ const liveRoot = (agentDir: string) => join(agentDir, "skills-live");
 export function liveSkillsDir(agentDir: string): string | undefined {
 	const current = join(liveRoot(agentDir), "current");
 	return existsSync(current) && existsSync(join(liveRoot(agentDir), "current.sha")) ? current : undefined;
+}
+
+export function skillResourcePaths(pkgDir: string, liveDir: string | undefined): string[] {
+	return [join(pkgDir, "skills"), liveDir].filter((path): path is string => Boolean(path));
+}
+
+export interface SkillDiagnostic {
+	type?: string;
+	path?: string;
+	collision?: {
+		resourceType?: string;
+		loserPath?: string;
+	};
+}
+
+function isInside(root: string, candidate: string): boolean {
+	const child = relative(resolve(root), resolve(candidate));
+	return child !== "" && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
+}
+
+export function suppressLiveSkillCollisions<T extends SkillDiagnostic>(diagnostics: T[], liveDir: string): T[] {
+	return diagnostics.filter((diagnostic) => {
+		if (diagnostic.type !== "collision" || diagnostic.collision?.resourceType !== "skill") return true;
+		const loserPath = diagnostic.collision.loserPath ?? diagnostic.path;
+		return !loserPath || !isInside(liveDir, loserPath);
+	});
 }
 
 /**

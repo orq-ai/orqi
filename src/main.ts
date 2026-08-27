@@ -27,7 +27,13 @@ import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { orqCommands } from "./commands.ts";
 import { connectOrqTools } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
-import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills } from "./skills.ts";
+import {
+	liveSkillsDir,
+	liveSkillsNote,
+	maybeUpdateSkills,
+	skillResourcePaths,
+	suppressLiveSkillCollisions,
+} from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
 
 const oneShot = process.argv[2];
@@ -108,6 +114,8 @@ const header: HeaderInfo = {
 	cwd: process.cwd().replace(homedir(), "~"),
 };
 
+const liveSkills = liveSkillsDir(AGENT_DIR);
+
 const services = await createAgentSessionServices({
 	cwd: process.cwd(),
 	agentDir: AGENT_DIR,
@@ -118,10 +126,16 @@ const services = await createAgentSessionServices({
 		// Ambient discovery finds every skill installed on the machine (100+ here),
 		// which both bloats the prompt and makes orqi behave differently per user.
 		noSkills: !process.env.ORQI_LOCAL_SKILLS,
-		// Live (daily-updated) skills first: pi resolves duplicate skill names
-		// first-wins, so a fresher orq-* copy shadows the baked one while the
-		// baked orqi-* skills, which upstream does not carry, keep loading.
-		additionalSkillPaths: [liveSkillsDir(AGENT_DIR), join(pkgDir, "skills")].filter((p): p is string => Boolean(p)),
+		// Existing project/user/package skills are authoritative when their name
+		// is already present. The live directory supplies only missing skills;
+		// pi's loader resolves earlier paths first.
+		additionalSkillPaths: skillResourcePaths(pkgDir, liveSkills),
+		skillsOverride: liveSkills
+			? ({ skills, diagnostics }) => ({
+					skills,
+					diagnostics: suppressLiveSkillCollisions(diagnostics, liveSkills),
+				})
+			: undefined,
 		additionalThemePaths: [join(pkgDir, "themes")],
 		extensionFactories: [
 			orqCommands(
