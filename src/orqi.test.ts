@@ -10,7 +10,17 @@ import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
-import { liveSkillsDir, liveSkillsNote, SKILLS_LOCK, updateDue, vendoredNames } from "./skills.ts";
+import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
+import { loadSkills } from "@earendil-works/pi-coding-agent";
+import {
+	foldLiveSkillCollisions,
+	liveSkillsDir,
+	liveSkillsNote,
+	skillResources,
+	SKILLS_LOCK,
+	updateDue,
+	vendoredNames,
+} from "./skills.ts";
 
 // The tool catalogue is only cached once orqi has run against a real workspace,
 // so it is absent in CI and on a fresh clone. The tests that read it are skipped
@@ -233,6 +243,89 @@ test("the header never claims baked skills while live ones are in use", () => {
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+function writeSkill(dir: string, name: string, description: string): string {
+	mkdirSync(join(dir, name), { recursive: true });
+	const path = join(dir, name, "SKILL.md");
+	writeFileSync(path, `---\nname: ${name}\ndescription: ${description}\n---\n\nbody\n`);
+	return path;
+}
+
+// The precedence this whole feature turns on belongs to pi's loader, not to us,
+// so it is asserted through pi rather than against a hand-written fixture: a pi
+// upgrade that flipped to last-wins would silently reinstate the bug otherwise.
+test("a live skill supersedes its bundled copy, and the collision folds into one warning", () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-skills-"));
+	try {
+		const pkgDir = join(dir, "package");
+		const bundled = join(pkgDir, "skills");
+		const live = join(dir, "skills-live", "current");
+		writeSkill(bundled, "orq-cli", "bundled copy");
+		writeSkill(bundled, "orqi-only", "ours, never upstream");
+		const liveWinner = writeSkill(live, "orq-cli", "live copy");
+
+		const resources = skillResources(pkgDir, live);
+		expect(resources.additionalSkillPaths).toEqual([live, bundled]);
+
+		const loaded = loadSkills({ cwd: dir, agentDir: dir, skillPaths: resources.additionalSkillPaths, includeDefaults: false });
+		expect(loaded.skills.find((skill) => skill.name === "orq-cli")?.filePath).toBe(liveWinner);
+		expect(loaded.skills.map((skill) => skill.name).sort()).toEqual(["orq-cli", "orqi-only"]);
+		expect(loaded.diagnostics.some((d) => d.type === "collision")).toBe(true);
+
+		const folded = resources.skillsOverride?.(loaded).diagnostics ?? [];
+		expect(folded.some((d) => d.type === "collision")).toBe(false);
+		expect(folded.filter((d) => d.type === "warning").map((d) => d.message)).toEqual([
+			"Using the live copy of 1 skill instead of the bundled one: orq-cli.",
+		]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("no live dir means no override and the bundled path alone", () => {
+	const resources = skillResources("/pkg", undefined);
+	expect(resources.additionalSkillPaths).toEqual([join("/pkg", "skills")]);
+	expect(resources.skillsOverride).toBeUndefined();
+});
+
+test("only the bundled-loses-to-live collision folds; the rest survive", () => {
+	const live = "/tmp/orqi-skills/skills-live/current";
+	const bundled = "/pkg/skills";
+	const collision = (
+		name: string,
+		winnerPath: string,
+		loserPath: string,
+		resourceType: "skill" | "prompt" = "skill",
+	): ResourceDiagnostic => ({
+		type: "collision",
+		message: `${name} collides`,
+		path: loserPath,
+		collision: { resourceType, name, winnerPath, loserPath },
+	});
+	const expected = collision("orq-cli", join(live, "orq-cli/SKILL.md"), join(bundled, "orq-cli/SKILL.md"));
+	// Two upstream dirs declaring the same frontmatter name: a real defect, never folded.
+	const liveVsLive = collision("orq-cli", join(live, "orq-cli/SKILL.md"), join(live, "orq-cli-v2/SKILL.md"));
+	// A project skill beating the bundled copy: nothing to do with the live tree.
+	const projectWins = collision("orq-cli", "/workspace/.pi/skills/orq-cli/SKILL.md", join(bundled, "orq-cli/SKILL.md"));
+	// Sibling directory whose name merely starts with the live dir's.
+	const sibling = collision("orq-cli", "/tmp/orqi-skills/skills-live/currently/orq-cli/SKILL.md", join(bundled, "orq-cli/SKILL.md"));
+	const notASkill = collision("orq-cli", join(live, "orq-cli/SKILL.md"), join(bundled, "orq-cli/SKILL.md"), "prompt");
+	const warning: ResourceDiagnostic = { type: "warning", message: "skill path does not exist", path: bundled };
+
+	const folded = foldLiveSkillCollisions([expected, liveVsLive, projectWins, sibling, notASkill, warning], live, bundled);
+	expect(folded).toEqual([
+		liveVsLive,
+		projectWins,
+		sibling,
+		notASkill,
+		warning,
+		{
+			type: "warning",
+			message: "Using the live copy of 1 skill instead of the bundled one: orq-cli.",
+			path: live,
+		},
+	]);
 });
 
 test("onlyOrq hides every provider except orq", async () => {

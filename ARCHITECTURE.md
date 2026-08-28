@@ -31,6 +31,14 @@ orqi
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
 
+`skillResources` in `src/skills.ts` owns both halves of the live-skills wiring, so the path order
+and the diagnostic fold cannot name different directories. It passes the daily-updated
+`~/.orqi/agent/skills-live/current` directory ahead of the bundled `skills/` directory, so a live
+`orq-*` skill supersedes its bundled copy; project/user/package skills sit ahead of both, but only
+load under `ORQI_LOCAL_SKILLS`. Its `skillsOverride` folds the resulting bundled-loses-to-live
+collisions into a single warning naming what was superseded, and leaves any other collision
+visible. The updater is fire-and-forget and updates land on the next run.
+
 ## Tools
 
 The orq MCP server's catalogue is fetched once and wrapped as native pi tools with an `orq_`

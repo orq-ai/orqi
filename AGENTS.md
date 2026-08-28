@@ -150,9 +150,16 @@ Developer ID signature plus notarization.
   check that never happened, which is how a one-shot-only user never updates.
 - **The baked skills are a floor, not a ceiling.** Once a day `maybeUpdateSkills` asks GitHub
   whether upstream has moved and, if so, downloads into `~/.orqi/agent/skills-live/current`,
-  which is listed *before* the baked dir in `additionalSkillPaths`. pi resolves duplicate skill
-  names first-wins, so a fresher `orq-*` shadows its baked copy while the baked `orqi-*` still
-  load. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
+  which is listed *before* the bundled dir in `additionalSkillPaths`. pi resolves duplicate skill
+  names first-wins, so a fresher `orq-*` supersedes its bundled copy while the bundled `orqi-*`
+  still load. A skill the user installed themselves still wins over both, because pi puts
+  project/user/package skills ahead of `additionalSkillPaths` — but only under
+  `ORQI_LOCAL_SKILLS`, which is what loads them at all; by default the contest is bundled versus
+  live and nothing else. Bundled-loses-to-live is the normal state, not a fault, and pi renders
+  one amber block per collision with `quietStartup` on, so 15 vendored names would mean ~30 lines
+  at every boot: `skillResources` folds exactly those collisions into one warning naming what was
+  superseded, and leaves every other collision — live versus live, or a loser outside `skills/` —
+  alone. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
   once at boot (`/reload` picks it up early); the check is fire-and-forget after the session is
   up, so a slow or dead GitHub costs nothing; and every failure path is a silent return, because
   the worst acceptable outcome is stale skills, never a broken boot. The header shows
