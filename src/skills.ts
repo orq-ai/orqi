@@ -1,11 +1,19 @@
 /**
  * Runtime skill updates: the binary's baked skills are a floor, not a ceiling.
  *
- * The bundled directory is listed before the live directory in
- * additionalSkillPaths. pi resolves duplicate skill names first-wins, so a
- * workspace/project/user/bundled skill remains authoritative; the live tree
- * fills only names that are not already present. Expected live-vs-existing
- * collisions are removed from diagnostics by the resource-loader override.
+ * Once a day the CLI asks GitHub whether orq-ai/assistant-plugins has moved
+ * past what this binary shipped with, and if so downloads the new skills into
+ * ~/.orqi/agent/skills-live/. The live dir is listed BEFORE the bundled dir in
+ * additionalSkillPaths, so a fresher orq-* skill supersedes its bundled copy
+ * while the bundled orqi-* skills (ours, not upstream's) keep loading. pi puts
+ * project/user/package skills ahead of both, so a skill the user installed
+ * still wins - but only under ORQI_LOCAL_SKILLS, which is what enables them.
+ *
+ * Bundled-loses-to-live is the normal state, not a fault, and pi renders one
+ * amber block per collision: 15 vendored names means ~30 lines at every boot.
+ * skillResources folds those into a single warning naming what was superseded,
+ * so the fact stays visible without the wall. Any other collision - live vs
+ * live, or a loser outside the bundled dir - is left alone.
  *
  * The check never blocks startup: it fires after the session is up, with a
  * short timeout, and any failure is silence plus a retry after the TTL. An
@@ -16,6 +24,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent";
 import { $ } from "bun";
 import lock from "../skills.lock.json" with { type: "json" };
 
@@ -37,30 +46,63 @@ export function liveSkillsDir(agentDir: string): string | undefined {
 	return existsSync(current) && existsSync(join(liveRoot(agentDir), "current.sha")) ? current : undefined;
 }
 
-export function skillResourcePaths(pkgDir: string, liveDir: string | undefined): string[] {
-	return [join(pkgDir, "skills"), liveDir].filter((path): path is string => Boolean(path));
-}
-
-export interface SkillDiagnostic {
-	type?: string;
-	path?: string;
-	collision?: {
-		resourceType?: string;
-		loserPath?: string;
-	};
-}
-
 function isInside(root: string, candidate: string): boolean {
 	const child = relative(resolve(root), resolve(candidate));
 	return child !== "" && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
-export function suppressLiveSkillCollisions<T extends SkillDiagnostic>(diagnostics: T[], liveDir: string): T[] {
-	return diagnostics.filter((diagnostic) => {
-		if (diagnostic.type !== "collision" || diagnostic.collision?.resourceType !== "skill") return true;
-		const loserPath = diagnostic.collision.loserPath ?? diagnostic.path;
-		return !loserPath || !isInside(liveDir, loserPath);
+type LoadedSkills = { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
+
+/** The pair of resource-loader options the live tree needs; structurally pi's own. */
+export interface SkillResources {
+	additionalSkillPaths: string[];
+	skillsOverride?: (base: LoadedSkills) => LoadedSkills;
+}
+
+/** A bundled skill losing its name to the live copy: expected, and the point of the live tree. */
+function supersededByLive(diagnostic: ResourceDiagnostic, liveDir: string, bundledDir: string): boolean {
+	const collision = diagnostic.collision;
+	if (diagnostic.type !== "collision" || collision?.resourceType !== "skill") return false;
+	return isInside(liveDir, collision.winnerPath) && isInside(bundledDir, collision.loserPath);
+}
+
+export function foldLiveSkillCollisions(
+	diagnostics: ResourceDiagnostic[],
+	liveDir: string,
+	bundledDir: string,
+): ResourceDiagnostic[] {
+	const names: string[] = [];
+	const rest = diagnostics.filter((diagnostic) => {
+		if (!supersededByLive(diagnostic, liveDir, bundledDir)) return true;
+		if (diagnostic.collision) names.push(diagnostic.collision.name);
+		return false;
 	});
+	if (names.length === 0) return rest;
+	const one = names.length === 1;
+	return [
+		...rest,
+		{
+			type: "warning",
+			message: `Using the live copy of ${names.length} skill${one ? "" : "s"} instead of the bundled ${one ? "one" : "ones"}: ${names.join(", ")}.`,
+			path: liveDir,
+		},
+	];
+}
+
+/**
+ * Both halves of the live-skills wiring, so the path order and the diagnostic
+ * fold can never name different directories.
+ */
+export function skillResources(pkgDir: string, liveDir: string | undefined): SkillResources {
+	const bundledDir = join(pkgDir, "skills");
+	if (!liveDir) return { additionalSkillPaths: [bundledDir] };
+	return {
+		additionalSkillPaths: [liveDir, bundledDir],
+		skillsOverride: ({ skills, diagnostics }) => ({
+			skills,
+			diagnostics: foldLiveSkillCollisions(diagnostics, liveDir, bundledDir),
+		}),
+	};
 }
 
 /**

@@ -31,11 +31,13 @@ orqi
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
 
-`src/main.ts` passes the bundled `skills/` directory before the daily-updated
-`~/.orqi/agent/skills-live/current` directory. pi's project/user/package resources and the
-bundled directory therefore win same-name collisions; `skillsOverride` removes only the expected
-diagnostic for a live directory that loses to an existing skill. A live skill with no existing
-counterpart remains available. The updater is fire-and-forget and updates land on the next run.
+`skillResources` in `src/skills.ts` owns both halves of the live-skills wiring, so the path order
+and the diagnostic fold cannot name different directories. It passes the daily-updated
+`~/.orqi/agent/skills-live/current` directory ahead of the bundled `skills/` directory, so a live
+`orq-*` skill supersedes its bundled copy; project/user/package skills sit ahead of both, but only
+load under `ORQI_LOCAL_SKILLS`. Its `skillsOverride` folds the resulting bundled-loses-to-live
+collisions into a single warning naming what was superseded, and leaves any other collision
+visible. The updater is fire-and-forget and updates land on the next run.
 
 ## Tools
 

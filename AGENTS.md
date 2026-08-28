@@ -150,14 +150,21 @@ Developer ID signature plus notarization.
   check that never happened, which is how a one-shot-only user never updates.
 - **The baked skills are a floor, not a ceiling.** Once a day `maybeUpdateSkills` asks GitHub
   whether upstream has moved and, if so, downloads into `~/.orqi/agent/skills-live/current`,
-  which is supplied after the existing project/user/package resources and the bundled `skills/`
-  directory. pi resolves duplicate skill names first-wins, so an existing skill remains the
-  authoritative definition and the live tree fills only names that are not already present.
-  Expected live-vs-existing collisions are removed from diagnostics. The update lands on the next
-  run, because pi scans skills once at boot (`/reload` picks it up early); the check is
-  fire-and-forget after the session is up, so a slow or dead GitHub costs nothing; and every
-  failure path is a silent return. `ORQI_SKILLS_UPDATE=0` pins and beats `ORQI_REFRESH_SKILLS=1`.
-  The header shows `skills <sha8>` when live differs from the lock.
+  which is listed *before* the bundled dir in `additionalSkillPaths`. pi resolves duplicate skill
+  names first-wins, so a fresher `orq-*` supersedes its bundled copy while the bundled `orqi-*`
+  still load. A skill the user installed themselves still wins over both, because pi puts
+  project/user/package skills ahead of `additionalSkillPaths` — but only under
+  `ORQI_LOCAL_SKILLS`, which is what loads them at all; by default the contest is bundled versus
+  live and nothing else. Bundled-loses-to-live is the normal state, not a fault, and pi renders
+  one amber block per collision with `quietStartup` on, so 15 vendored names would mean ~30 lines
+  at every boot: `skillResources` folds exactly those collisions into one warning naming what was
+  superseded, and leaves every other collision — live versus live, or a loser outside `skills/` —
+  alone. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
+  once at boot (`/reload` picks it up early); the check is fire-and-forget after the session is
+  up, so a slow or dead GitHub costs nothing; and every failure path is a silent return, because
+  the worst acceptable outcome is stale skills, never a broken boot. The header shows
+  `skills <sha8>` when live differs from the lock. `ORQI_SKILLS_UPDATE=0` pins and beats
+  `ORQI_REFRESH_SKILLS=1`.
 - **`src/assets.generated.ts` is generated and gitignored.** `build.ts` writes it; never edit or
   commit it.
 - **Handoff notes go in `.context/`, not in this file.** Branch state, machine quirks and next steps
