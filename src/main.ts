@@ -101,7 +101,7 @@ const customTools = [
 // Filled in below, once the services exist: the renderer only reads it at draw
 // time, and the skills count is not known until the resource loader has run.
 const header: HeaderInfo = {
-	name: "ORQI",
+	name: "Orqi",
 	version: `v${VERSION}`,
 	workspace: undefined,
 	project: undefined,
