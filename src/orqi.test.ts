@@ -353,34 +353,21 @@ test("onlyOrq hides every provider except orq", async () => {
 	expect(await (filtered as any).refresh()).toBe("untouched");
 });
 
-test("the wordmark header only appears when the window can hold it", () => {
-	// A wrapped wordmark reads as damage, and in a split pane the tall header
-	// would push the first prompt off screen, which is what the compact one is for.
+test("the header uses the ORQI splash", () => {
 	const info = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
 	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 
-	const roomy = strip(headerLines(info, { cols: 100, rows: 40 }));
-	expect(roomy).toContain("████████  ██████    ████████  ████████"); // ORQI
-	// Q's leg is the only thing distinguishing it from O at this size.
-	expect(roomy).toContain("                        ████");
+	const output = strip(headerLines(info, { cols: 100, rows: 40 }));
+	expect(output).toContain("██████╗ ██████╗  ██████╗  ████");
+	expect(output).toContain("ORQI v0");
+	expect(output).not.toContain("CLI");
 
-	// At the gate exactly, no row of block art may wrap. The prose lines can and
-	// do run longer, the same as in the compact header; art wrapping is what
-	// looks broken.
-	const art = strip(headerLines(info, { cols: 52, rows: 30 }))
+	// The logo is six rows and never gets split into a side-by-side layout.
+	const art = output
 		.split("\n")
 		.filter((line) => /[█▀▄]/.test(line));
 	expect(art.length).toBe(6);
-	for (const line of art) expect(line.length).toBeLessThanOrEqual(52);
-
-	for (const size of [
-		{ cols: 51, rows: 40 }, // too narrow
-		{ cols: 100, rows: 29 }, // too short
-	]) {
-		const compact = strip(headerLines(info, size));
-		expect(compact).not.toContain("████████  ██████");
-		expect(compact).toContain("██   ▄▄"); // the mark still renders
-	}
+	for (const line of art) expect(line.length).toBeLessThanOrEqual(100);
 });
 
 test("the header entry is appended on fresh sessions only", () => {
