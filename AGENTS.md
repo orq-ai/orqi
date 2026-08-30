@@ -194,8 +194,13 @@ Developer ID signature plus notarization.
   live and nothing else. Bundled-loses-to-live is the normal state, not a fault, and pi renders
   one amber block per collision with `quietStartup` on, so 15 vendored names would mean ~30 lines
   at every boot: `skillResources` folds exactly those collisions into one warning naming what was
-  superseded, and leaves every other collision — live versus live, or a loser outside `skills/` —
-  alone. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
+  superseded. A second fold covers `orq connect skills`, which symlinks the CLI's own (older,
+  pinned) copy of the shared skills into `~/.agents/skills`: pi reads that as a user source ahead
+  of ours, so under `ORQI_LOCAL_SKILLS` every vendored name collides and loses. The shadowing is
+  pi's precedence working as designed and cannot be fixed here; the fold names the skills and the
+  remedy (`orq disconnect pi skills`). A CLI copy is recognised by the winner's realpath landing
+  under `~/.orq/snapshot`. Every other collision — live versus live, or a loser outside
+  `skills/` — stays visible. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
   once at boot (`/reload` picks it up early); the check is fire-and-forget after the session is
   up, so a slow or dead GitHub costs nothing; and every failure path is a silent return, because
   the worst acceptable outcome is stale skills, never a broken boot. The header shows

@@ -22,7 +22,8 @@
  * forces a check now.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent";
 import { $ } from "bun";
@@ -69,27 +70,71 @@ function supersededByLive(diagnostic: ResourceDiagnostic, liveDir: string, bundl
 	return isInside(liveDir, collision.winnerPath) && isInside(bundledDir, collision.loserPath);
 }
 
+/** Where `orq connect skills` keeps the tree its projected links point into. */
+const CLI_SNAPSHOT_ROOT = join(homedir(), ".orq", "snapshot");
+
+/**
+ * One of our skills losing its name to a copy the orq CLI projected.
+ *
+ * `orq connect skills` symlinks the CLI's embedded skill set into agent dirs
+ * (~/.agents/skills for pi), which pi discovers as a user source ahead of
+ * additionalSkillPaths — but only under ORQI_LOCAL_SKILLS. The CLI's set is
+ * pinned older than ours and pi's precedence is by design, so the shadowing
+ * cannot be fixed here; what can be fixed is fifteen raw amber blocks at every
+ * boot. The winner is identified by realpath (the projection is a symlink into
+ * the snapshot), in a try/catch because projected links can dangle.
+ */
+function shadowedByCliCopy(diagnostic: ResourceDiagnostic, liveDir: string, bundledDir: string, snapshotRoot: string): boolean {
+	const collision = diagnostic.collision;
+	if (diagnostic.type !== "collision" || collision?.resourceType !== "skill") return false;
+	if (!isInside(liveDir, collision.loserPath) && !isInside(bundledDir, collision.loserPath)) return false;
+	try {
+		// Realpath both sides: on macOS /var is itself a symlink to /private/var,
+		// so a resolved winner would never sit inside an unresolved root. A root
+		// that does not exist throws, and nothing can point into it anyway.
+		return isInside(realpathSync(snapshotRoot), realpathSync(collision.winnerPath));
+	} catch {
+		return false;
+	}
+}
+
 export function foldLiveSkillCollisions(
 	diagnostics: ResourceDiagnostic[],
 	liveDir: string,
 	bundledDir: string,
+	snapshotRoot: string = CLI_SNAPSHOT_ROOT,
 ): ResourceDiagnostic[] {
 	const names: string[] = [];
+	const shadowed: string[] = [];
 	const rest = diagnostics.filter((diagnostic) => {
-		if (!supersededByLive(diagnostic, liveDir, bundledDir)) return true;
-		if (diagnostic.collision) names.push(diagnostic.collision.name);
-		return false;
+		if (supersededByLive(diagnostic, liveDir, bundledDir)) {
+			if (diagnostic.collision) names.push(diagnostic.collision.name);
+			return false;
+		}
+		if (shadowedByCliCopy(diagnostic, liveDir, bundledDir, snapshotRoot)) {
+			if (diagnostic.collision) shadowed.push(diagnostic.collision.name);
+			return false;
+		}
+		return true;
 	});
-	if (names.length === 0) return rest;
-	const one = names.length === 1;
-	return [
-		...rest,
-		{
+	const folded: ResourceDiagnostic[] = [...rest];
+	if (names.length > 0) {
+		const one = names.length === 1;
+		folded.push({
 			type: "warning",
 			message: `Using the live copy of ${names.length} skill${one ? "" : "s"} instead of the bundled ${one ? "one" : "ones"}: ${names.join(", ")}.`,
 			path: liveDir,
-		},
-	];
+		});
+	}
+	if (shadowed.length > 0) {
+		const one = shadowed.length === 1;
+		folded.push({
+			type: "warning",
+			message: `${shadowed.length} skill${one ? "" : "s"} shadowed by older copies from \`orq connect skills\`: ${shadowed.join(", ")}. Run \`orq disconnect pi skills\`, or unset ORQI_LOCAL_SKILLS.`,
+			path: snapshotRoot,
+		});
+	}
+	return folded;
 }
 
 /**

@@ -1,7 +1,7 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { sessionFileOf, workspaceOfKey } from "./auth.ts";
@@ -381,6 +381,54 @@ test("only the bundled-loses-to-live collision folds; the rest survive", () => {
 			path: live,
 		},
 	]);
+});
+
+test("a collision against an orq-connect projected copy folds into one actionable warning", () => {
+	// `orq connect skills` symlinks the CLI's embedded (older) skill set into
+	// ~/.agents/skills, which pi reads as a user source ahead of ours under
+	// ORQI_LOCAL_SKILLS. Identified by the winner's realpath landing in the
+	// CLI's snapshot tree.
+	const dir = mkdtempSync(join(tmpdir(), "orqi-cli-skills-"));
+	try {
+		const snapshot = join(dir, ".orq", "snapshot");
+		const agents = join(dir, ".agents", "skills");
+		const real = join(snapshot, "gen-abc123", "orq-cli");
+		mkdirSync(real, { recursive: true });
+		writeFileSync(join(real, "SKILL.md"), "---\nname: orq-cli\n---\n");
+		mkdirSync(agents, { recursive: true });
+		symlinkSync(join(snapshot, "gen-abc123", "orq-cli"), join(agents, "orq-cli"));
+
+		const live = join(dir, "skills-live", "current");
+		const bundled = join(dir, "pkg", "skills");
+		const collision = (winnerPath: string, loserPath: string): ResourceDiagnostic => ({
+			type: "collision",
+			message: "orq-cli collides",
+			path: loserPath,
+			collision: { resourceType: "skill", name: "orq-cli", winnerPath, loserPath },
+		});
+		const projected = collision(join(agents, "orq-cli", "SKILL.md"), join(bundled, "orq-cli/SKILL.md"));
+		// Same shape, but the winner really lives outside the snapshot: a genuine
+		// user skill, never folded.
+		const userDir = join(dir, "user-skills", "orq-cli");
+		mkdirSync(userDir, { recursive: true });
+		writeFileSync(join(userDir, "SKILL.md"), "---\nname: orq-cli\n---\n");
+		const userWins = collision(join(userDir, "SKILL.md"), join(bundled, "orq-cli/SKILL.md"));
+		// A dangling projection cannot be attributed, so it stays visible too.
+		const dangling = collision(join(agents, "gone", "SKILL.md"), join(live, "orq-cli/SKILL.md"));
+
+		const folded = foldLiveSkillCollisions([projected, userWins, dangling], live, bundled, snapshot);
+		expect(folded).toEqual([
+			userWins,
+			dangling,
+			{
+				type: "warning",
+				message: "1 skill shadowed by older copies from `orq connect skills`: orq-cli. Run `orq disconnect pi skills`, or unset ORQI_LOCAL_SKILLS.",
+				path: snapshot,
+			},
+		]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("onlyOrq hides every provider except orq", async () => {
