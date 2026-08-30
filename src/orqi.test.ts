@@ -9,7 +9,7 @@ import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
-import { onlyOrq, PROVIDER_ID } from "./model.ts";
+import { capsNote, onlyOrq, PROVIDER_ID, routerModelEntry } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
@@ -549,6 +549,29 @@ test("sessionFileOf takes the session path from whoami, whatever the CLI names i
 	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe("/home/u/.orq/sessions/my.orq.ai.json");
 	expect(sessionFileOf('{"authenticated":true,"session_file":""}')).toBeUndefined();
 	expect(sessionFileOf("you are not logged in")).toBeUndefined();
+});
+
+test("routerModelEntry guesses caps low and flips the Responses API per model", () => {
+	// Null metadata gets the CLI's deliberately low fallbacks (over-claiming
+	// makes the upstream reject the request; low only idles capacity).
+	const guessed = routerModelEntry({ id: "x/y" });
+	expect(guessed.contextWindow).toBe(128000);
+	expect(guessed.maxTokens).toBe(8192);
+	expect("api" in guessed).toBe(false);
+
+	// Real caps pass through, and supports_responses_api moves the model off
+	// the chat-completions default.
+	const known = routerModelEntry({ id: "openai/gpt", contextWindow: 400000, maxTokens: 32000, responses: true });
+	expect(known.contextWindow).toBe(400000);
+	expect(known.maxTokens).toBe(32000);
+	expect(known.api).toBe("openai-responses");
+});
+
+test("capsNote counts only the models whose caps were guessed", () => {
+	const full = { id: "a", contextWindow: 1000, maxTokens: 100 };
+	expect(capsNote([full])).toBeUndefined();
+	expect(capsNote([full, { id: "b" }, { id: "c", contextWindow: 1000 }])).toBe("caps guessed for 2 models");
+	expect(capsNote([{ id: "b" }])).toBe("caps guessed for 1 model");
 });
 
 test("workspaceOfKey reads the workspace out of an orq API key", () => {

@@ -19,7 +19,7 @@ export const DEFAULT_MODEL = process.env.ORQI_MODEL ?? "openai/gpt-5.6-terra";
 const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
 
-interface ModelInfo {
+export interface ModelInfo {
 	id: string;
 	contextWindow?: number;
 	maxTokens?: number;
@@ -106,6 +106,32 @@ export function onlyOrq(runtime: ModelRuntime): ModelRuntime {
 	});
 }
 
+/**
+ * One models.json entry. The cap fallbacks match the orq CLI's (ENG-2743) and
+ * deliberately err low: over-claiming makes the upstream reject the request
+ * outright, under-claiming only leaves capacity unused.
+ */
+export function routerModelEntry(model: ModelInfo) {
+	return {
+		id: model.id,
+		name: model.id,
+		reasoning: true,
+		input: ["text"],
+		contextWindow: model.contextWindow || 128000,
+		maxTokens: model.maxTokens || 8192,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		// Per-model override; the provider default stays chat completions.
+		...(model.responses ? { api: "openai-responses" } : {}),
+	};
+}
+
+/** Header note when caps were guessed, or undefined when every model carried its own. */
+export function capsNote(models: ModelInfo[]): string | undefined {
+	const guessed = models.filter((model) => !model.contextWindow || !model.maxTokens).length;
+	if (guessed === 0) return undefined;
+	return `caps guessed for ${guessed} model${guessed === 1 ? "" : "s"}`;
+}
+
 export interface OrqModels {
 	runtime: ModelRuntime;
 	/** Model ids offered by the router, best-effort. */
@@ -120,6 +146,9 @@ export interface OrqModels {
 export async function createOrqModelRuntime(agentDir: string, token: string): Promise<OrqModels> {
 	mkdirSync(agentDir, { recursive: true });
 	const { models, note } = await catalogue(token, join(agentDir, "model-catalogue.json"));
+	// When the catalogue fetch failed, the unavailable-note already explains the
+	// state; a caps note on the single fallback entry would be noise on top.
+	const notes = [note, note ? undefined : capsNote(models)].filter(Boolean).join(" · ") || undefined;
 
 	writeFileSync(
 		join(agentDir, "models.json"),
@@ -130,17 +159,7 @@ export async function createOrqModelRuntime(agentDir: string, token: string): Pr
 						baseUrl: ROUTER_URL,
 						apiKey: "$ORQ_API_KEY",
 						api: "openai-completions",
-						models: models.map((model) => ({
-							id: model.id,
-							name: model.id,
-							reasoning: true,
-							input: ["text"],
-							contextWindow: model.contextWindow || 200000,
-							maxTokens: model.maxTokens || 16384,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-							// Per-model override; the provider default stays chat completions.
-							...(model.responses ? { api: "openai-responses" } : {}),
-						})),
+						models: models.map(routerModelEntry),
 					},
 				},
 			},
@@ -157,7 +176,7 @@ export async function createOrqModelRuntime(agentDir: string, token: string): Pr
 		modelsPath: join(agentDir, "models.json"),
 		authPath: join(agentDir, "auth.json"),
 	});
-	return { runtime: onlyOrq(runtime), ids: models.map((model) => model.id), note };
+	return { runtime: onlyOrq(runtime), ids: models.map((model) => model.id), note: notes };
 }
 
 /** The configured default if the workspace has it, else the first enabled model. */
