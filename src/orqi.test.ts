@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { sessionFileOf, workspaceOfKey } from "./auth.ts";
+import { cliVersionNote, sessionFileOf, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -620,6 +620,17 @@ test("capsNote counts only the models whose caps were guessed", () => {
 	expect(capsNote([full])).toBeUndefined();
 	expect(capsNote([full, { id: "b" }, { id: "c", contextWindow: 1000 }])).toBe("caps guessed for 2 models");
 	expect(capsNote([{ id: "b" }])).toBe("caps guessed for 1 model");
+});
+
+test("cliVersionNote warns only for a provably old orq CLI", () => {
+	// Real 5.x output, including the API-version second line.
+	expect(cliVersionNote("orq version 5.1.1\nbuilt against orq API 4.14.3\n")).toBeUndefined();
+	// A pre-5 CLI predates `orq workspace` and the modern doctor.
+	expect(cliVersionNote("orq version 4.9.0\n")).toContain("< 5");
+	// No CLI, or output we do not recognize, is not a warning: the failure
+	// already surfaces per command, with its own message.
+	expect(cliVersionNote("")).toBeUndefined();
+	expect(cliVersionNote("zsh: command not found: orq")).toBeUndefined();
 });
 
 test("workspaceOfKey reads the workspace out of an orq API key", () => {

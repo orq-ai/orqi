@@ -22,7 +22,7 @@ import {
 	SessionManager,
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
-import { credentialCandidates, LOGIN_HINT, projectForCredential } from "./auth.ts";
+import { cliVersionNote, credentialCandidates, LOGIN_HINT, projectForCredential, runOrq } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { orqCommands } from "./commands.ts";
 import { connectOrqTools } from "./mcp.ts";
@@ -182,6 +182,7 @@ header.status = [
 	// Skills newer than the binary shipped with; silent drift would otherwise be
 	// invisible until someone diffed behaviour against a colleague's machine.
 	liveSkillsNote(AGENT_DIR),
+	cliVersionNote(runOrq(["--version"]).stdout),
 ]
 	.filter(Boolean)
 	.join(" · ");

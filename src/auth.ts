@@ -18,9 +18,16 @@ export interface OrqResult {
 	stderr: string;
 }
 
-/** Run the orq CLI. Never throws: a missing binary is just a failed result. */
+/**
+ * Run the orq CLI. Never throws: a missing binary is just a failed result.
+ *
+ * ORQ_NO_INPUT as an env var, not the --no-input flag: a pre-5 CLI rejects an
+ * unknown flag (which would break the session credential outright) but ignores
+ * unknown env, and any prompt under spawnSync would hang the TUI forever with
+ * nothing on screen to say why.
+ */
 export function runOrq(args: string[]): OrqResult {
-	const res = spawnSync("orq", args, { encoding: "utf8" });
+	const res = spawnSync("orq", args, { encoding: "utf8", env: { ...process.env, ORQ_NO_INPUT: "1" } });
 	if (res.error) return { ok: false, stdout: "", stderr: `orq CLI not found on PATH (${res.error.message})` };
 	return { ok: res.status === 0, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
@@ -131,6 +138,17 @@ export function credentialCandidates(): Credential[] {
 	const token = workspace ? session?.workspaceTokens?.[workspace]?.token : undefined;
 	if (typeof token === "string" && token) candidates.push({ token, source: "orq login session", workspace });
 	return candidates;
+}
+
+/**
+ * Header note when the orq CLI on PATH predates the commands orqi shells out
+ * to (`workspace`, the modern `doctor` — both 5.x). Missing or unparseable
+ * output is not a warning: no CLI at all already surfaces per command.
+ */
+export function cliVersionNote(stdout: string): string | undefined {
+	const major = stdout.match(/^orq version (\d+)/m)?.[1];
+	if (!major || Number(major) >= 5) return undefined;
+	return `orq CLI ${major}.x (< 5): /workspace and /doctor may misbehave`;
 }
 
 export const LOGIN_HINT = "No orq credential accepted. Run `orq auth login` (or /login here), or export a valid ORQ_API_KEY.";
