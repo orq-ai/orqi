@@ -89,13 +89,26 @@ const pkgDir = await assetDir();
 // neither of which applies to this binary. The header links orq's changelog.
 process.env.PI_SKIP_VERSION_CHECK ??= "1";
 
-const candidates = credentialCandidates();
+const { candidates, warning, sessionProblem } = credentialCandidates();
 if (candidates.length === 0) {
-	console.error(LOGIN_HINT);
+	// The warning is the specific reason; LOGIN_HINT the generic fallback.
+	console.error(warning ?? LOGIN_HINT);
 	process.exit(1);
 }
+// A survivable warning goes to whatever the run shows: stderr for a one-shot,
+// the header entry (set below) otherwise, since fullscreen wipes stdout.
+if (warning && oneShot) console.error(warning);
 
-const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json"));
+// The header only ever renders if the session opens. When every credential is
+// rejected this throws first, leaving stderr as the only channel for the reason,
+// and the session fallback's own fault is finally worth hearing.
+let orq: Awaited<ReturnType<typeof connectOrqTools>>;
+try {
+	orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json"));
+} catch (error) {
+	for (const line of new Set([warning, sessionProblem])) if (line) console.error(line);
+	throw error;
+}
 const credential = orq.credential;
 const models = await createOrqModelRuntime(AGENT_DIR, credential.token);
 const modelRuntime = models.runtime;
@@ -137,7 +150,7 @@ const services = await createAgentSessionServices({
 		extensionFactories: [
 			orqCommands(
 				async () => {
-					const next = credentialCandidates().at(-1); // the login session, freshly read
+					const next = credentialCandidates().candidates.at(-1); // the login session, freshly read
 					if (!next) return LOGIN_HINT;
 					process.env.ORQ_API_KEY = next.token;
 					const count = await orq.reconnect(next);
@@ -172,6 +185,7 @@ const skills = services.resourceLoader.getSkills().skills.length;
 const update = pendingUpdate(readCache(AGENT_DIR));
 header.workspace = credential.workspace;
 header.project = await projectForCredential(credential.token);
+header.notice = warning;
 header.status = [
 	model?.id ?? "no model",
 	`${orq.tools.length} tools`,

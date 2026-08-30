@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { cliVersionNote, sessionFileOf, workspaceOfKey } from "./auth.ts";
-import { headerLines, VERSION } from "./branding.ts";
+import { headerLines, PULSE_ORANGE, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
@@ -454,6 +454,45 @@ test("onlyOrq hides every provider except orq", async () => {
 	expect(filtered.getModel(PROVIDER_ID, "openai/gpt-5.6-terra")).toBeDefined();
 	// Non-model methods must pass through untouched.
 	expect(await (filtered as any).refresh()).toBe("untouched");
+});
+
+test("a credential warning rides the header, where fullscreen cannot wipe it", () => {
+	// main.ts learns this before the TUI exists, and fullscreen runs on the
+	// alternate screen: printing it there paints it and then throws it away.
+	const base = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
+	const render = (info: Parameters<typeof headerLines>[0]) => headerLines(info, { cols: 100, rows: 40 }).join("\n");
+	const strip = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
+
+	const warned = render({ ...base, notice: "ORQ_WORKSPACE has no effect on ORQ_API_KEY." });
+	expect(strip(warned)).toContain("ORQ_WORKSPACE has no effect on ORQ_API_KEY.");
+
+	// No notice is the ordinary boot: one line fewer, and no blank gap left behind.
+	const quiet = render(base);
+	expect(strip(quiet)).not.toContain("ORQ_WORKSPACE");
+	expect(quiet.split("\n").length).toBe(warned.split("\n").length - 1);
+	expect(quiet).not.toMatch(/\n[ \t]*\n[ \t]*\n/);
+
+	// The whole point is that it does not read as one more routine count, so it
+	// must not come out in the status line's colour. Pin the palette: with
+	// NO_COLOR or a dumb TERM every line strips to bare text and a comparison of
+	// two colours would pass on having found neither.
+	const prior = { noColor: process.env.NO_COLOR, term: process.env.TERM, colorterm: process.env.COLORTERM };
+	try {
+		delete process.env.NO_COLOR;
+		process.env.TERM = "xterm-256color";
+		process.env.COLORTERM = "truecolor";
+		const orange = `38;2;${PULSE_ORANGE[0]};${PULSE_ORANGE[1]};${PULSE_ORANGE[2]}`;
+		const lines = render({ ...base, notice: "session is broken" }).split("\n");
+		expect(lines.find((line) => line.includes("session is broken"))).toContain(orange);
+		expect(lines.find((line) => strip(line).endsWith("s"))).not.toContain(orange);
+	} finally {
+		if (prior.noColor === undefined) delete process.env.NO_COLOR;
+		else process.env.NO_COLOR = prior.noColor;
+		if (prior.term === undefined) delete process.env.TERM;
+		else process.env.TERM = prior.term;
+		if (prior.colorterm === undefined) delete process.env.COLORTERM;
+		else process.env.COLORTERM = prior.colorterm;
+	}
 });
 
 test("the header uses the ORQI splash", () => {

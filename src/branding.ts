@@ -82,6 +82,10 @@ export interface HeaderInfo {
 	project?: string;
 	/** model · counts */
 	status: string;
+	/** Something wrong with the credential the session is about to use. It rides
+	 * the header rather than stdout because fullscreen wipes anything printed
+	 * before the TUI starts, which is where this is known. */
+	notice?: string;
 	cwd: string;
 	/** Whether the update cache reports a newer version; adds a footer line. */
 	updateAvailable?: boolean;
@@ -107,6 +111,9 @@ export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
 	const detail = [
 		`${workspace}${color(info.status, MUTED)}`,
 		color(info.cwd, MUTED),
+		// Not MUTED: a credential fault painted the same grey as the routine
+		// counts reads as one more count.
+		...(info.notice ? [color(info.notice, PULSE_ORANGE)] : []),
 		"",
 		...PITCH.map((line) => color(line, MUTED)),
 	];
