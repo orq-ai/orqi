@@ -256,7 +256,13 @@ ORQI_VERSION pins the release tag to install.`;
 /** Orphaned staging dirs are swept, in-flight ones are not: a swap takes seconds, not an hour. */
 const STAGING_ORPHAN_MS = 60 * 60 * 1000;
 
-/** `orqi update`'s entry point; returns a process exit code. */
+/**
+ * `orqi update`'s entry point; returns a process exit code.
+ *
+ * Deliberately never auto-updates: this is the only path that writes to
+ * `target`, and it runs exclusively from this explicit command, never from
+ * `maybeCheckUpdate` or startup.
+ */
 export async function runUpdate(args: string[], agentDir: string): Promise<number> {
 	const known = new Set(["--check", "--json"]);
 	for (const arg of args) {
@@ -268,19 +274,33 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 	const check = args.includes("--check");
 	const json = args.includes("--json");
 
-	const target = realpathSync(process.execPath);
-	const method = installMethod(target);
+	// This is a foreground command: a throw here (a vanished /proc/self/exe, an
+	// unreadable symlink) should read as a one-line reason like every other
+	// failure in this function, not escape as a raw stack trace.
+	let target: string;
+	let method: InstallMethod;
+	try {
+		target = realpathSync(process.execPath);
+		method = installMethod(target);
+	} catch (error) {
+		console.error(`cannot update: ${error instanceof Error ? error.message : String(error)}`);
+		return 1;
+	}
 
 	if (check) {
 		const latest = await latestVersion();
 		if (latest) writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
-		const status = {
+		const status: UpdateStatus = {
 			current: VERSION,
 			install_method: method,
 			latest,
 			update_available: latest !== undefined && isNewer(latest, VERSION),
 		};
-		console.log(formatStatus(status, json));
+		// The plain form names a failed fetch outright ("latest: unknown"); the
+		// JSON form keeps omitting the key, since a sentinel string is worse
+		// than absence for a machine reader. formatStatus's contract does not
+		// change - the asymmetry is only in what status object each form sees.
+		console.log(json ? formatStatus(status, true) : formatStatus({ ...status, latest: latest ?? "unknown" }, false));
 		return latest ? 0 : 1;
 	}
 
@@ -328,6 +348,10 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 		rmSync(staging, { recursive: true, force: true }); // ours from a previous run in this same pid slot
 		mkdirSync(staging, { recursive: true });
 
+		// Deliberately no xattr step: curl and tar never set
+		// com.apple.quarantine themselves - only LaunchServices-aware
+		// downloaders (Safari, Finder, Mail) do that - so there is nothing
+		// here for `xattr -d` to clear.
 		const tarball = join(staging, asset);
 		const url = pinned ? releaseUrl(asset, tag) : releaseUrl(asset);
 		try {
@@ -364,13 +388,21 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 		// succeeds - exactly why this does not shell out to install.sh. A
 		// rename is legal over a busy text file on both: the running process
 		// keeps its own inode and finishes normally.
+		//
+		// Deliberately no backup copy and no rollback: it is one file, and
+		// everything above this line only ever touches `staging`, so a failed
+		// download or a failed verification never lays a finger on `target`.
 		renameSync(extracted, target);
 
 		console.log(`Updated orqi ${VERSION} -> ${version}`);
 		console.log(`  Release notes: https://github.com/${REPO}/releases/tag/v${version}`);
 		return 0;
-	} catch {
-		console.error("cannot update: unexpected failure during update");
+	} catch (error) {
+		// Foreground command: surface the real reason (e.g. an unwritable
+		// install dir failing the staging mkdir) rather than a generic line -
+		// that failure is exactly what the sibling-staging-dir design exists
+		// to catch early and loudly, so swallowing it here would defeat that.
+		console.error(`cannot update: ${error instanceof Error ? error.message : String(error)}`);
 		return 1;
 	} finally {
 		rmSync(staging, { recursive: true, force: true });
