@@ -33,6 +33,7 @@ import {
 	releaseUrl,
 	REPO,
 	runUpdate,
+	checkNow,
 	type UpdateCache,
 	pendingUpdate,
 	writeCache,
@@ -612,10 +613,12 @@ test("pendingUpdate only fires when a real newer version is cached", () => {
 	// positive here nags every session to install what it already runs.
 	const newer: UpdateCache = { checked_at: Date.now(), latest: "999.0.0", current_at_check: VERSION };
 	const stale: UpdateCache = { checked_at: Date.now(), latest: VERSION, current_at_check: VERSION };
+	const failed: UpdateCache = { checked_at: Date.now(), latest: null, current_at_check: VERSION };
 
 	expect(pendingUpdate(newer, {})).toBe("999.0.0");
 	expect(pendingUpdate(stale, {})).toBeUndefined(); // not newer: nothing to say
 	expect(pendingUpdate(undefined, {})).toBeUndefined(); // no cache: nothing to say
+	expect(pendingUpdate(failed, {})).toBeUndefined();
 	expect(pendingUpdate(newer, { ORQI_UPDATE_CHECK: "0" })).toBeUndefined(); // pinned: stay silent
 });
 
@@ -650,6 +653,38 @@ test("writeCache creates a fresh ~/.orqi/agent on the first-ever run", () => {
 		expect(readCache(agentDir)).toEqual(cache);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a successful update check survives a cache write failure", async () => {
+	// The check result is useful even when the agent dir is read-only or is not
+	// a directory. Explicit `--check` and `/update` calls must report that
+	// result instead of turning a cache-only failure into an uncaught error.
+	expect(await checkNow("/dev/null/orqi-agent", async () => "0.2.0")).toBe("0.2.0");
+});
+
+test("a completed failed update check is cached for the normal TTL", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-failed-"));
+	try {
+		expect(await checkNow(dir, async () => undefined)).toBeUndefined();
+		const cache = readCache(dir);
+		expect(cache?.latest).toBeNull();
+		expect(checkDue(cache, {}, cache?.checked_at)).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a failed update check preserves the last known release", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-preserve-"));
+	try {
+		writeCache(dir, { checked_at: 1, latest: "9.9.9", current_at_check: VERSION });
+		expect(await checkNow(dir, async () => undefined)).toBeUndefined();
+		const cache = readCache(dir);
+		expect(cache?.latest).toBe("9.9.9");
+		expect(cache?.checked_at).toBeGreaterThan(1);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
@@ -738,6 +773,9 @@ test("releaseUrl builds the same two forms install.sh does, pinned or latest", (
 		`https://github.com/${REPO}/releases/latest/download/orqi-macos-arm64.tar.gz`,
 	);
 	expect(releaseUrl("orqi-linux-x64.tar.gz", "v0.2.0")).toBe(
+		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
+	);
+	expect(releaseUrl("orqi-linux-x64.tar.gz", "0.2.0")).toBe(
 		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
 	);
 });

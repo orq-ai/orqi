@@ -110,14 +110,15 @@ esac
 
 asset="orqi-$PLATFORM.tar.gz"
 if [ -n "${ORQI_VERSION:-}" ]; then
-	# Interpolated straight into the release URL below, same as src/update.ts
-	# does for the equivalent env var: an unchecked "../../other-repo/v1"
-	# would resolve to a different repo's release asset on github.com.
+	# Normalized and interpolated into the release URL below, same as
+	# src/update.ts does for the equivalent env var: an unchecked
+	# "../../other-repo/v1" could resolve to a different release path.
 	if ! echo "$ORQI_VERSION" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
 		err "ORQI_VERSION \"$ORQI_VERSION\" is not a valid release tag (expected e.g. \"0.2.0\" or \"v0.2.0\")"
 		exit 1
 	fi
-	url="https://github.com/$REPO/releases/download/$ORQI_VERSION/$asset"
+	version=${ORQI_VERSION#v}
+	url="https://github.com/$REPO/releases/download/v$version/$asset"
 else
 	url="https://github.com/$REPO/releases/latest/download/$asset"
 fi
@@ -167,14 +168,37 @@ tar -xzf "$tmp/$asset" -C "$tmp"
 # missing exec bit or a Gatekeeper kill all fail loudly instead of printing a
 # tick, and all of that happens in $tmp, before anything touches the
 # installed file.
-if [ ! -f "$tmp/orqi" ]; then
+if [ -L "$tmp/orqi" ] || [ ! -f "$tmp/orqi" ]; then
 	err "the archive did not contain an orqi binary: $asset"
 	exit 1
 fi
 chmod +x "$tmp/orqi"
-if ! installed=$("$tmp/orqi" --version 2>&1); then
+
+# POSIX sh has no portable timeout command. Run verification in the
+# background with a watchdog so a corrupt binary cannot keep an installer's
+# staging directory live indefinitely (the self-updater sweeps hour-old
+# staging dirs). Killing the watchdog also kills its shell before it can act
+# on a subsequently reused pid.
+verify_output="$tmp/version-output"
+"$tmp/orqi" --version >"$verify_output" 2>&1 &
+verify_pid=$!
+(sleep 10; kill -KILL "$verify_pid" 2>/dev/null || true) &
+watchdog_pid=$!
+if wait "$verify_pid"; then
+	verify_status=0
+else
+	verify_status=$?
+fi
+kill "$watchdog_pid" 2>/dev/null || true
+wait "$watchdog_pid" 2>/dev/null || true
+installed=$(cat "$verify_output")
+if [ "$verify_status" -ne 0 ]; then
 	err "downloaded $asset but it will not run:"
 	err "$installed"
+	exit 1
+fi
+if [ -n "${version:-}" ] && [ "$installed" != "$version" ]; then
+	err "downloaded $asset but it reported version $installed (expected $version)"
 	exit 1
 fi
 

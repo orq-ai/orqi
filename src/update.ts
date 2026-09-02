@@ -99,7 +99,7 @@ export function isNewer(latest: string, current: string): boolean {
 
 export interface UpdateCache {
 	checked_at: number;
-	latest: string;
+	latest: string | null;
 	current_at_check: string;
 }
 
@@ -110,7 +110,11 @@ function cachePath(agentDir: string): string {
 function isUpdateCache(value: unknown): value is UpdateCache {
 	if (typeof value !== "object" || value === null) return false;
 	const cache = value as Record<string, unknown>;
-	return typeof cache.checked_at === "number" && typeof cache.latest === "string" && typeof cache.current_at_check === "string";
+	return (
+		typeof cache.checked_at === "number" &&
+		(typeof cache.latest === "string" || cache.latest === null) &&
+		typeof cache.current_at_check === "string"
+	);
 }
 
 /** Missing, unreadable, unparseable or wrong-shaped all read as "no cache" - never throws. */
@@ -172,7 +176,7 @@ export function pendingUpdate(
 ): string | undefined {
 	if (env.ORQI_UPDATE_CHECK === "0") return undefined;
 	if (!cache) return undefined;
-	if (!isNewer(cache.latest, VERSION)) return undefined;
+	if (!cache.latest || !isNewer(cache.latest, VERSION)) return undefined;
 	return cache.latest;
 }
 
@@ -217,9 +221,11 @@ export function refusal(method: Exclude<InstallMethod, "binary">, execPath: stri
 
 const FETCH_TIMEOUT_MS = 10_000;
 
-/** Exactly the two forms `install.sh` builds: pinned by tag, or GitHub's "latest" redirect. */
+/** Exactly the two forms `install.sh` builds: pinned by tag, or GitHub's "latest" redirect.
+ * Release tags are canonicalized to `v<version>` so the documented bare
+ * `ORQI_VERSION=0.2.0` form reaches the same release as `v0.2.0`. */
 export function releaseUrl(asset: string, tag?: string): string {
-	if (tag) return `https://github.com/${REPO}/releases/download/${tag}/${asset}`;
+	if (tag) return `https://github.com/${REPO}/releases/download/v${normalizeTag(tag)}/${asset}`;
 	return `https://github.com/${REPO}/releases/latest/download/${asset}`;
 }
 
@@ -249,9 +255,23 @@ export async function latestVersion(timeoutMs = FETCH_TIMEOUT_MS): Promise<strin
  * branch, and `/update` in src/commands.ts); each caller keeps its own gating
  * (or none) and its own presentation on top of this one fact-gathering step.
  */
-export async function checkNow(agentDir: string): Promise<string | undefined> {
-	const latest = await latestVersion();
-	if (latest) writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+export async function checkNow(
+	agentDir: string,
+	fetchLatest: () => Promise<string | undefined> = latestVersion,
+): Promise<string | undefined> {
+	const latest = await fetchLatest();
+	const cached = readCache(agentDir);
+	try {
+		writeCache(agentDir, {
+			checked_at: Date.now(),
+			latest: latest ?? cached?.latest ?? null,
+			current_at_check: VERSION,
+		});
+	} catch {
+		// A direct check still has a useful answer when only persistence fails.
+		// Leaving the old/missing cache untouched also makes background checks
+		// retry next run instead of claiming the failed write completed.
+	}
 	return latest;
 }
 
@@ -307,9 +327,9 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 	}
 
 	// Validated first, ahead of realpathSync/installMethod and any network or
-	// filesystem work: ORQI_VERSION is interpolated straight into the release
-	// URL later (see releaseUrl), so an unchecked "../../other-repo/v1" would
-	// resolve to a different repo's release asset on github.com. Setting a
+	// filesystem work: ORQI_VERSION is normalized and interpolated into the
+	// release URL later (see releaseUrl), so an unchecked "../../other-repo/v1"
+	// could resolve to a different release path. Setting a
 	// victim's environment already implies code execution, so this is cheap
 	// insurance rather than closing a real hole.
 	const pinned = process.env.ORQI_VERSION;
@@ -403,7 +423,10 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 		// downloaders (Safari, Finder, Mail) do that - so there is nothing
 		// here for `xattr -d` to clear.
 		const tarball = join(staging, asset);
-		const url = pinned ? releaseUrl(asset, tag) : releaseUrl(asset);
+		// Pin the download to the version already resolved above. Following the
+		// `latest` redirect a second time can select a newer release published
+		// between the check and download, which would then fail verification.
+		const url = releaseUrl(asset, version);
 		try {
 			await $`curl -fsSL --max-time 120 ${url} -o ${tarball}`.quiet();
 		} catch {
