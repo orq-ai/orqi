@@ -1,11 +1,11 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceOfKey } from "./auth.ts";
-import { headerLines } from "./branding.ts";
+import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
@@ -21,6 +21,19 @@ import {
 	updateDue,
 	vendoredNames,
 } from "./skills.ts";
+import {
+	assetName,
+	checkDue,
+	formatStatus,
+	installMethod,
+	isNewer,
+	normalizeTag,
+	readCache,
+	refusal,
+	type UpdateCache,
+	updateNote,
+	writeCache,
+} from "./update.ts";
 
 // The tool catalogue is only cached once orqi has run against a real workspace,
 // so it is absent in CI and on a fresh clone. The tests that read it are skipped
@@ -487,4 +500,112 @@ test("workspaceOfKey reads the workspace out of an orq API key", () => {
 
 	expect(workspaceOfKey("not-a-key", undefined)).toBeUndefined();
 	expect(workspaceOfKey("sk-orq-a.notbase64!!.c", undefined)).toBeUndefined();
+});
+
+test("installMethod tells a brew-managed binary from a plain one", () => {
+	// What breaks: a Homebrew user gets their brew-managed file renamed out
+	// from under brew if this ever says "binary" for a Cellar path.
+	expect(installMethod("/Users/x/.local/bin/orqi")).toBe("binary");
+	expect(installMethod("/opt/homebrew/Cellar/orqi/0.1.0/bin/orqi")).toBe("homebrew");
+	expect(installMethod("/Users/x/proj/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi")).toBe("npm");
+	expect(installMethod("/Users/x/.bun/bin/bun")).toBe("source"); // basename isn't "orqi"
+});
+
+test("assetName covers exactly what install.sh builds tarballs for", () => {
+	// Asserted against a literal list, not derived, so this file and
+	// install.sh cannot silently drift apart.
+	expect(assetName("darwin", "arm64")).toBe("orqi-macos-arm64.tar.gz");
+	expect(assetName("darwin", "x64")).toBe("orqi-macos-x64.tar.gz");
+	expect(assetName("linux", "x64")).toBe("orqi-linux-x64.tar.gz");
+	expect(assetName("linux", "arm64")).toBeUndefined();
+	expect(assetName("win32", "x64")).toBeUndefined();
+});
+
+test("isNewer compares versions numerically, not lexically", () => {
+	// A string compare puts "0.9.0" ahead of "0.10.0"; that would tell a user
+	// on 0.10.0 there is nothing new when 0.9.0 is the "latest" seen.
+	expect(normalizeTag("v0.10.0")).toBe("0.10.0");
+	expect(normalizeTag("0.10.0")).toBe("0.10.0");
+	expect(normalizeTag("  v1.2.3  ")).toBe("1.2.3");
+
+	expect(isNewer("0.10.0", "0.9.0")).toBe(true);
+	expect(isNewer("0.9.0", "0.9.0")).toBe(false); // equal is not newer
+	expect(isNewer("garbage", "0.9.0")).toBe(false);
+	expect(isNewer("0.9.0", "garbage")).toBe(false);
+});
+
+test("the daily update check is due only when it should be", () => {
+	// Direct analogue of the skills updateDue test: wrong answers here mean
+	// either hammering GitHub every boot or never telling anyone about a release.
+	const now = Date.now();
+	const cache: UpdateCache = { checked_at: now, latest: "0.2.0", current_at_check: "0.1.0" };
+	expect(checkDue(undefined, {})).toBe(true); // never checked
+	expect(checkDue(cache, {})).toBe(false); // just checked
+	expect(checkDue(cache, {}, now + 25 * 60 * 60 * 1000)).toBe(true); // a day later
+	expect(checkDue(cache, { ORQI_REFRESH_UPDATE: "1" })).toBe(true); // forced
+	expect(checkDue(cache, { CI: "true" })).toBe(false); // nobody there to see it
+	// The pin beats the force flag: it is the escape hatch for a bad upstream.
+	expect(checkDue(cache, { ORQI_UPDATE_CHECK: "0", ORQI_REFRESH_UPDATE: "1" })).toBe(false);
+});
+
+test("update cache round-trips through disk and never throws on garbage", () => {
+	// A half-written or corrupt cache must read as "no cache", never crash boot.
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-"));
+	try {
+		expect(readCache(dir)).toBeUndefined(); // nothing written yet
+
+		const cache: UpdateCache = { checked_at: Date.now(), latest: "0.2.0", current_at_check: "0.1.0" };
+		writeCache(dir, cache);
+		expect(readCache(dir)).toEqual(cache);
+		expect(statSync(join(dir, "update-check.json")).mode & 0o777).toBe(0o600);
+
+		writeFileSync(join(dir, "update-check.json"), "not json");
+		expect(readCache(dir)).toBeUndefined();
+
+		writeFileSync(join(dir, "update-check.json"), JSON.stringify({ latest: "0.2.0" })); // wrong shape
+		expect(readCache(dir)).toBeUndefined();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("updateNote is short and only fires when a real newer version is cached", () => {
+	// It rides into the header's " · "-joined status list, so it must stay terse.
+	const newer: UpdateCache = { checked_at: Date.now(), latest: "999.0.0", current_at_check: VERSION };
+	const stale: UpdateCache = { checked_at: Date.now(), latest: VERSION, current_at_check: VERSION };
+
+	expect(updateNote(newer, {})).toBe("update v999.0.0");
+	expect(updateNote(stale, {})).toBeUndefined(); // not newer: nothing to say
+	expect(updateNote(undefined, {})).toBeUndefined(); // no cache: nothing to say
+	expect(updateNote(newer, { ORQI_UPDATE_CHECK: "0" })).toBeUndefined(); // pinned: stay silent
+});
+
+test("formatStatus matches orq update --check's field order in both forms", () => {
+	const withLatest = { current: "0.1.0", install_method: "binary" as const, latest: "0.2.0", update_available: true };
+	expect(formatStatus(withLatest, false)).toBe(
+		["current: 0.1.0", "install_method: binary", "latest: 0.2.0", "update_available: true"].join("\n"),
+	);
+	expect(JSON.parse(formatStatus(withLatest, true))).toEqual(withLatest);
+
+	const noLatest = { current: "0.1.0", install_method: "binary" as const, update_available: false };
+	// latest is omitted from the plain form entirely when unknown, not printed empty.
+	expect(formatStatus(noLatest, false)).toBe(["current: 0.1.0", "install_method: binary", "update_available: false"].join("\n"));
+	expect(JSON.parse(formatStatus(noLatest, true))).toEqual(noLatest);
+});
+
+test("refusal names both the method and the found path for every channel orqi does not own", () => {
+	const path = "/opt/homebrew/Cellar/orqi/0.1.0/bin/orqi";
+	expect(refusal("homebrew", path)).toContain(path);
+	expect(refusal("homebrew", path)).toContain("brew upgrade orq-ai/tap/orqi");
+
+	const npmPath = "/proj/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi";
+	expect(refusal("npm", npmPath)).toContain(npmPath);
+	expect(refusal("npm", npmPath)).toContain("npm install -g @orq-ai/orqi@latest");
+
+	const srcPath = "/Users/x/.bun/bin/bun";
+	expect(refusal("source", srcPath)).toContain(srcPath);
+	expect(refusal("source", srcPath)).toContain("git pull");
+
+	// Calling it with "binary" is a programming error, not a user-facing state.
+	expect(() => refusal("binary", "/x/orqi")).toThrow();
 });
