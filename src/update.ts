@@ -27,7 +27,8 @@
  * call - which of the two URL forms install.sh uses - can still be checked.
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { $ } from "bun";
 import { VERSION } from "./branding.ts";
@@ -152,39 +153,87 @@ export function writeCache(agentDir: string, cache: UpdateCache): void {
 const CACHE_LOCK_NAME = ".update-check.lock";
 const CACHE_LOCK_WAIT_MS = 250;
 const CACHE_LOCK_RETRY_MS = 10;
-const CACHE_LOCK_STALE_MS = 10_000;
+
+interface CacheLockOwner {
+	pid: number;
+	token: string;
+}
+
+interface CacheLock {
+	owned(): boolean;
+	release(): void;
+}
+
+function readCacheLock(path: string): CacheLockOwner | undefined {
+	try {
+		const owner = JSON.parse(readFileSync(path, "utf8")) as Partial<CacheLockOwner>;
+		if (!Number.isSafeInteger(owner.pid) || (owner.pid ?? 0) <= 0 || typeof owner.token !== "string") return undefined;
+		return owner as CacheLockOwner;
+	} catch {
+		return undefined;
+	}
+}
+
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ESRCH";
+	}
+}
+
+/** Remove a lock only if the path still names the exact ownership token read. */
+function removeOwnedCacheLock(path: string, token: string): boolean {
+	if (readCacheLock(path)?.token !== token) return false;
+	try {
+		unlinkSync(path);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
 
 /**
  * Serialize the cache's read-modify-write transition across orqi processes.
- * Directory creation is atomic across processes. Contention is bounded so a
- * foreground check keeps its fetched answer, and a crash cannot block future
- * persistence forever because an old lock directory is reclaimed by age.
+ * The owner record is written before an atomic hard-link claims the stable lock
+ * path, so contenders never see a half-written owner. A live PID is never
+ * evicted based on elapsed wall time; a dead owner is reclaimed by token.
  */
-async function acquireCacheLock(agentDir: string): Promise<(() => void) | undefined> {
+async function acquireCacheLock(agentDir: string): Promise<CacheLock | undefined> {
 	mkdirSync(agentDir, { recursive: true });
 	const lock = join(agentDir, CACHE_LOCK_NAME);
+	const owner: CacheLockOwner = { pid: process.pid, token: randomUUID() };
+	const candidate = join(agentDir, `.update-check-lock-${owner.pid}-${owner.token}`);
+	writeFileSync(candidate, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
 	const deadline = Date.now() + CACHE_LOCK_WAIT_MS;
-	for (;;) {
-		try {
-			mkdirSync(lock);
-			return () => rmSync(lock, { recursive: true, force: true });
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-		}
+	try {
+		for (;;) {
+			try {
+				linkSync(candidate, lock);
+				return {
+					owned: () => readCacheLock(lock)?.token === owner.token,
+					release: () => {
+						removeOwnedCacheLock(lock, owner.token);
+					},
+				};
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			}
 
-		try {
-			if (Date.now() - statSync(lock).mtimeMs >= CACHE_LOCK_STALE_MS) {
-				rmSync(lock, { recursive: true, force: true });
+			const existing = readCacheLock(lock);
+			if (existing && !processIsAlive(existing.pid)) {
+				removeOwnedCacheLock(lock, existing.token);
 				continue;
 			}
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-			throw error;
-		}
 
-		const remaining = deadline - Date.now();
-		if (remaining <= 0) return undefined;
-		await Bun.sleep(Math.min(CACHE_LOCK_RETRY_MS, remaining));
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) return undefined;
+			await Bun.sleep(Math.min(CACHE_LOCK_RETRY_MS, remaining));
+		}
+	} finally {
+		rmSync(candidate, { force: true });
 	}
 }
 
@@ -299,17 +348,20 @@ export async function checkNow(
 ): Promise<string | undefined> {
 	const latest = await fetchLatest();
 	try {
-		const release = await acquireCacheLock(agentDir);
-		if (release) {
+		const lock = await acquireCacheLock(agentDir);
+		if (lock) {
 			try {
 				const cached = readCache(agentDir);
-				writeCache(agentDir, {
+				const next = {
 					checked_at: Date.now(),
 					latest: latest ?? cached?.latest ?? null,
 					current_at_check: VERSION,
-				});
+				};
+				// Ownership may be lost only through external interference; verify at
+				// the commit boundary so this process never writes after displacement.
+				if (lock.owned()) writeCache(agentDir, next);
 			} finally {
-				release();
+				lock.release();
 			}
 		}
 	} catch {

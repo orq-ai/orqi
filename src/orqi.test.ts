@@ -721,11 +721,24 @@ test("a completed check recovers a stale cache lock left by a crashed process", 
 	const dir = mkdtempSync(join(tmpdir(), "orqi-update-stale-lock-"));
 	const lock = join(dir, ".update-check.lock");
 	try {
-		mkdirSync(lock);
-		utimesSync(lock, new Date(0), new Date(0));
+		writeFileSync(lock, JSON.stringify({ pid: 2_147_483_647, token: "dead-owner" }));
 		expect(await checkNow(dir, async () => "9.9.9")).toBe("9.9.9");
 		expect(readCache(dir)?.latest).toBe("9.9.9");
 		expect(existsSync(lock)).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an aged cache lock owned by a live process is never reclaimed", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-live-lock-"));
+	const lock = join(dir, ".update-check.lock");
+	try {
+		writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "live-owner" }));
+		utimesSync(lock, new Date(0), new Date(0));
+		expect(await checkNow(dir, async () => "9.9.9")).toBe("9.9.9");
+		expect(readCache(dir)).toBeUndefined();
+		expect(JSON.parse(readFileSync(lock, "utf8"))).toEqual({ pid: process.pid, token: "live-owner" });
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
