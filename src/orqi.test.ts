@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { workspaceOfKey } from "./auth.ts";
+import { sessionFileOf, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -542,6 +542,13 @@ test("summarize collapses orq payloads to one line", () => {
 
 	expect(summarize("not json at all")).toMatch(/^\d+ B$/);
 	expect(summarize("two\nlines")).toMatch(/^2 lines · \d+ B$/);
+});
+
+test("sessionFileOf takes the session path from whoami, whatever the CLI names it", () => {
+	// 5.2 keyed the file by profile, 5.3 by host; orqi never guesses either.
+	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe("/home/u/.orq/sessions/my.orq.ai.json");
+	expect(sessionFileOf('{"authenticated":true,"session_file":""}')).toBeUndefined();
+	expect(sessionFileOf("you are not logged in")).toBeUndefined();
 });
 
 test("workspaceOfKey reads the workspace out of an orq API key", () => {
