@@ -97,6 +97,17 @@ for cmd in curl tar; do
 	fi
 done
 
+# Linux ships `timeout`; macOS ships Perl. Both run the verifier as the timed
+# process itself, so no delayed watchdog ever signals a pid after it is reused.
+if command -v timeout >/dev/null 2>&1; then
+	VERIFY_WITH=timeout
+elif command -v perl >/dev/null 2>&1; then
+	VERIFY_WITH=perl
+else
+	err "required command not found: timeout or perl (needed to verify the download safely)"
+	exit 1
+fi
+
 case "$(uname -s)-$(uname -m)" in
 	Darwin-arm64) PLATFORM=macos-arm64 ;;
 	Darwin-x86_64) PLATFORM=macos-x64 ;;
@@ -174,23 +185,19 @@ if [ -L "$tmp/orqi" ] || [ ! -f "$tmp/orqi" ]; then
 fi
 chmod +x "$tmp/orqi"
 
-# POSIX sh has no portable timeout command. Run verification in the
-# background with a watchdog so a corrupt binary cannot keep an installer's
-# staging directory live indefinitely (the self-updater sweeps hour-old
-# staging dirs). Killing the watchdog also kills its shell before it can act
-# on a subsequently reused pid.
+# POSIX sh has no timeout command. Use the platform utility when present;
+# otherwise Perl arms SIGALRM and then replaces itself with the verifier, so
+# the deadline belongs to that same process and no reusable pid is signalled.
 verify_output="$tmp/version-output"
-"$tmp/orqi" --version >"$verify_output" 2>&1 &
-verify_pid=$!
-(sleep 10; kill -KILL "$verify_pid" 2>/dev/null || true) &
-watchdog_pid=$!
-if wait "$verify_pid"; then
-	verify_status=0
+VERIFY_TIMEOUT_SECONDS=10
+if [ "$VERIFY_WITH" = timeout ]; then
+	verify_command_status=0
+	timeout -s KILL "$VERIFY_TIMEOUT_SECONDS" "$tmp/orqi" --version >"$verify_output" 2>&1 || verify_command_status=$?
 else
-	verify_status=$?
+	verify_command_status=0
+	perl -e 'alarm shift; exec @ARGV' "$VERIFY_TIMEOUT_SECONDS" "$tmp/orqi" --version >"$verify_output" 2>&1 || verify_command_status=$?
 fi
-kill "$watchdog_pid" 2>/dev/null || true
-wait "$watchdog_pid" 2>/dev/null || true
+verify_status=$verify_command_status
 installed=$(cat "$verify_output")
 if [ "$verify_status" -ne 0 ]; then
 	err "downloaded $asset but it will not run:"

@@ -1,7 +1,7 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceOfKey } from "./auth.ts";
@@ -45,6 +45,43 @@ import {
 // out loud there: a check that quietly passes on no data is worse than no check.
 const CATALOGUE_PATH = join(process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"), "tool-catalogue.json");
 const noCatalogue = !existsSync(CATALOGUE_PATH);
+
+function writeVersionBinary(path: string, version: string): void {
+	writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' '${version}'\n`);
+	chmodSync(path, 0o755);
+}
+
+function releaseFixture(root: string, version: string): string {
+	const payload = join(root, "payload");
+	mkdirSync(payload, { recursive: true });
+	writeVersionBinary(join(payload, "orqi"), version);
+	const tarball = join(root, "release.tar.gz");
+	const packed = Bun.spawnSync(["tar", "-czf", tarball, "-C", payload, "orqi"]);
+	if (!packed.success) throw new Error(packed.stderr.toString());
+	return tarball;
+}
+
+function installerEnv(root: string, tarball: string): Record<string, string | undefined> {
+	const fakeBin = join(root, "fake-bin");
+	mkdirSync(fakeBin, { recursive: true });
+	const curl = join(fakeBin, "curl");
+	writeFileSync(curl, `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-o" ]; then cp "$ORQI_TEST_TARBALL" "$2"; exit; fi
+	shift
+done
+exit 1
+`);
+	chmodSync(curl, 0o755);
+	return {
+		...process.env,
+		PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+		NO_COLOR: "1",
+		ORQI_INSTALL_DIR: join(root, "install"),
+		ORQI_VERSION: "999.0.0",
+		ORQI_TEST_TARBALL: tarball,
+	};
+}
 
 /** Names in the cached catalogue. A cache that exists but will not parse fails the test. */
 function catalogueNames(): Set<string> {
@@ -781,6 +818,125 @@ test("runUpdate treats an empty ORQI_VERSION as unpinned, matching install.sh", 
 		console.error = priorError;
 		if (prior === undefined) delete process.env.ORQI_VERSION;
 		else process.env.ORQI_VERSION = prior;
+	}
+});
+
+test("runUpdate verifies and atomically replaces a binary from a release tarball", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-integration-"));
+	const target = join(root, "orqi");
+	const tarball = releaseFixture(root, "999.0.0");
+	const prior = process.env.ORQI_VERSION;
+	process.env.ORQI_VERSION = "999.0.0";
+	writeVersionBinary(target, VERSION);
+	try {
+		const code = await runUpdate([], join(root, "agent"), {
+			execPath: target,
+			releaseUrl: () => `file://${tarball}`,
+		});
+		expect(code).toBe(0);
+		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("999.0.0");
+	} finally {
+		if (prior === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runUpdate preserves the installed binary across download, extraction, and verification failures", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-failures-"));
+	const target = join(root, "orqi");
+	const corrupt = join(root, "corrupt.tar.gz");
+	const wrongVersion = releaseFixture(root, "998.0.0");
+	const original = `#!/bin/sh\nprintf '%s\\n' '${VERSION}'\n`;
+	const prior = process.env.ORQI_VERSION;
+	process.env.ORQI_VERSION = "999.0.0";
+	writeVersionBinary(target, VERSION);
+	writeFileSync(corrupt, "not a tarball");
+	try {
+		for (const url of [
+			`file://${join(root, "missing.tar.gz")}`,
+			`file://${corrupt}`,
+			`file://${wrongVersion}`,
+		]) {
+			expect(await runUpdate([], join(root, "agent"), { execPath: target, releaseUrl: () => url })).toBe(1);
+			expect(readFileSync(target, "utf8")).toBe(original);
+		}
+	} finally {
+		if (prior === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("install.sh verifies before replacing its target and preserves the old binary on failure", () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-installer-integration-"));
+	const installDir = join(root, "install");
+	const target = join(installDir, "orqi");
+	const script = join(import.meta.dir, "..", "install.sh");
+	mkdirSync(installDir);
+	writeVersionBinary(target, VERSION);
+	const original = readFileSync(target, "utf8");
+	try {
+		const good = releaseFixture(join(root, "good"), "999.0.0");
+		const installed = Bun.spawnSync(["sh", script], { env: installerEnv(root, good) });
+		expect(installed.success, installed.stderr.toString()).toBe(true);
+		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("999.0.0");
+
+		writeFileSync(target, original);
+		chmodSync(target, 0o755);
+		const badRoot = join(root, "bad");
+		mkdirSync(badRoot);
+		const wrong = releaseFixture(badRoot, "998.0.0");
+		const rejected = Bun.spawnSync(["sh", script], { env: installerEnv(root, wrong) });
+		expect(rejected.success).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe(original);
+
+		const missing = Bun.spawnSync(["sh", script], {
+			env: installerEnv(root, join(root, "missing.tar.gz")),
+		});
+		expect(missing.success).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe(original);
+
+		const corrupt = join(root, "corrupt.tar.gz");
+		writeFileSync(corrupt, "not a tarball");
+		const unextractable = Bun.spawnSync(["sh", script], { env: installerEnv(root, corrupt) });
+		expect(unextractable.success).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe(original);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("install.sh times out verification without a delayed signal to a reaped PID", () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-installer-timeout-"));
+	const installDir = join(root, "install");
+	const target = join(installDir, "orqi");
+	const sourceScript = join(import.meta.dir, "..", "install.sh");
+	const script = join(root, "install.sh");
+	const payload = join(root, "hung", "payload");
+	const tarball = join(root, "hung.tar.gz");
+	mkdirSync(installDir);
+	mkdirSync(payload, { recursive: true });
+	writeVersionBinary(target, VERSION);
+	const original = readFileSync(target, "utf8");
+	const hung = join(payload, "orqi");
+	writeFileSync(hung, "#!/bin/sh\nwhile :; do :; done\n");
+	chmodSync(hung, 0o755);
+	expect(Bun.spawnSync(["tar", "-czf", tarball, "-C", payload, "orqi"]).success).toBe(true);
+	try {
+		const source = readFileSync(sourceScript, "utf8");
+		writeFileSync(script, source.replace("VERIFY_TIMEOUT_SECONDS=10", "VERIFY_TIMEOUT_SECONDS=1"));
+		const env = installerEnv(root, tarball);
+		const result = Bun.spawnSync(["sh", script], { env, timeout: 5_000 });
+		expect(result.success).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe(original);
+
+		// The old background watchdog waits, then signals a PID after the parent
+		// may already have reaped it. Keep timeout ownership in the parent instead.
+		expect(source).not.toContain('(sleep 10; kill -KILL "$verify_pid"');
+		expect(source).toContain("alarm shift; exec @ARGV");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
 	}
 });
 

@@ -21,10 +21,9 @@
  * is a silent return on failure, the same contract as src/skills.ts: the
  * worst acceptable outcome is a stale notice, never a slow or broken boot.
  *
- * The network and filesystem-mutating pieces (the fetch, the download, the
- * swap) are not unit-tested: no network in tests, per AGENTS.md. `releaseUrl`
- * is pulled out precisely so the one genuinely pure fact about the network
- * call - which of the two URL forms install.sh uses - can still be checked.
+ * Tests stay off the network. The fetch and URL construction are tested as
+ * pure boundaries, while hermetic local-tarball fixtures exercise the real
+ * curl, extraction, verification and same-filesystem rename path.
  */
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -335,6 +334,13 @@ ORQI_VERSION pins the release tag to install.`;
 /** Orphaned staging dirs are swept, in-flight ones are not: a swap takes seconds, not an hour. */
 const STAGING_ORPHAN_MS = 60 * 60 * 1000;
 
+export interface RunUpdateOptions {
+	/** Test seam for a disposable installed binary. Production uses process.execPath. */
+	execPath?: string;
+	/** Test seam for a local release tarball. Production uses GitHub. */
+	releaseUrl?: (asset: string, tag?: string) => string;
+}
+
 /**
  * `orqi update`'s entry point; returns a process exit code.
  *
@@ -342,7 +348,7 @@ const STAGING_ORPHAN_MS = 60 * 60 * 1000;
  * `target`, and it runs exclusively from this explicit command, never from
  * `maybeCheckUpdate` or startup.
  */
-export async function runUpdate(args: string[], agentDir: string): Promise<number> {
+export async function runUpdate(args: string[], agentDir: string, options: RunUpdateOptions = {}): Promise<number> {
 	const known = new Set(["--check", "--json"]);
 	for (const arg of args) {
 		if (!known.has(arg)) {
@@ -380,7 +386,7 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 	let target: string;
 	let method: InstallMethod;
 	try {
-		target = realpathSync(process.execPath);
+		target = realpathSync(options.execPath ?? process.execPath);
 		method = installMethod(target);
 	} catch (error) {
 		console.error(`cannot update: ${error instanceof Error ? error.message : String(error)}`);
@@ -462,7 +468,7 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 		// Pin the download to the version already resolved above. Following the
 		// `latest` redirect a second time can select a newer release published
 		// between the check and download, which would then fail verification.
-		const url = releaseUrl(asset, version);
+		const url = (options.releaseUrl ?? releaseUrl)(asset, version);
 		try {
 			await $`curl -fsSL --max-time 120 ${url} -o ${tarball}`.quiet();
 		} catch {

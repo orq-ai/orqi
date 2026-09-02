@@ -50,4 +50,5 @@ to the single-binary update path, so it is outside this change.
 - A successful-cache write failure still returns the direct result and creates
   no completed-failure state.
 
-No download/extract/rename integration fixtures are added in this change.
+Hermetic local-tarball fixtures cover download, extraction, verification and
+rename without reaching the network.
