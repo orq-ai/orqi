@@ -94,7 +94,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **The update's staging dir is a sibling of the binary, not `$TMPDIR`.** `rename(2)` does not
   cross filesystems, and `~/.local/bin` and `/tmp` are routinely different mounts. Creating the
   staging dir there also proves the install directory is writable before anything downloads,
-  instead of after.
+  instead of after. `install.sh` follows the same rule for the same reason: a bare `mktemp -d`
+  would land under `$TMPDIR`, and `mv` across filesystems does not unlink the destination first -
+  it opens it `O_TRUNC` and copies into it, which is `ETXTBSY` on Linux over a running orqi. Its
+  staging dir is a sibling of `$INSTALL_DIR/orqi` for exactly the same reason `src/update.ts`'s is,
+  and `orqi --version` there verifies the staged copy, before the `mv`, not the installed one.
 - **`install_method: "binary"` merges `install.sh` and a hand-extracted tarball on purpose.** Both
   land as a plain file named `orqi` on `PATH`, both get replaced the same way - a rename onto the
   same kind of file - and `ORQI_INSTALL_DIR` means the containing directory proves nothing about

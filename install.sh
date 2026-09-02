@@ -123,7 +123,18 @@ printf '\n'
 
 # --- Download and install --------------------------------------------------
 
-tmp=$(mktemp -d)
+# $tmp is a sibling of the install target, not a bare `mktemp -d`: that is
+# what makes the `mv` below a same-filesystem rename rather than a
+# cross-filesystem copy. A bare mktemp -d lands under $TMPDIR (often /tmp,
+# often tmpfs), which is routinely a different filesystem than
+# $INSTALL_DIR - and `mv` across filesystems does not unlink the destination
+# first, it opens it O_TRUNC and copies into it, which is ETXTBSY on Linux
+# when the destination is the running orqi. Same directory guarantees same
+# filesystem, which guarantees a real rename(2), which is legal over a busy
+# text file on both Linux and macOS. This mirrors the sibling staging dir
+# `runUpdate` uses in src/update.ts (see AGENTS.md).
+mkdir -p "$INSTALL_DIR"
+tmp=$(mktemp -d "$INSTALL_DIR/.orqi-install-XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
 if ! curl -fSL --progress-bar -o "$tmp/$asset" "$url"; then
@@ -132,14 +143,17 @@ if ! curl -fSL --progress-bar -o "$tmp/$asset" "$url"; then
 	exit 1
 fi
 
-mkdir -p "$INSTALL_DIR"
 tar -xzf "$tmp/$asset" -C "$tmp"
 
-# tar exits 0 for any well-formed archive, whatever is inside it, so the binary
-# is confirmed rather than assumed. `orqi --version` needs no credentials and no
-# network, which makes it a real check that the file downloaded for this
-# platform can execute here: wrong architecture, a missing exec bit or a
-# Gatekeeper kill all fail loudly instead of printing a tick.
+# Verify the staged copy, not the installed one - install.sh confirms before
+# it commits, the same order src/update.ts's runUpdate follows for `orqi
+# update`. tar exits 0 for any well-formed archive, whatever is inside it, so
+# the binary is confirmed rather than assumed. `orqi --version` needs no
+# credentials and no network, which makes it a real check that the file
+# downloaded for this platform can execute here: wrong architecture, a
+# missing exec bit or a Gatekeeper kill all fail loudly instead of printing a
+# tick, and all of that happens in $tmp, before anything touches the
+# installed file.
 if [ ! -f "$tmp/orqi" ]; then
 	err "the archive did not contain an orqi binary: $asset"
 	exit 1
@@ -151,16 +165,9 @@ if ! installed=$("$tmp/orqi" --version 2>&1); then
 	exit 1
 fi
 
-# Extract into $tmp and mv into place rather than extracting straight into
-# $INSTALL_DIR: this is not tidiness, it makes install atomic and lets it
-# install over a running orqi. `mv` within one directory tree is a rename,
-# which GNU tar's in-place extraction is not - tar truncates a file it is
-# overwriting rather than unlinking it first, so extracting onto a busy
-# executable is ETXTBSY on Linux (bsdtar on macOS unlinks first and would
-# succeed, so this failure mode is invisible until someone runs the installer
-# on Linux over a live orqi). $tmp is already a mktemp -d cleaned by the trap
-# set above, and mv(1) falls back to copy+unlink across filesystems, so this is
-# safe even when $INSTALL_DIR is not on the same mount as $tmp.
+# Only now, having verified the staged copy, commit it: a same-filesystem
+# rename, atomic and legal over a busy text file, so this also works when
+# $INSTALL_DIR/orqi is the currently-running orqi (see the comment above).
 mv "$tmp/orqi" "$INSTALL_DIR/orqi"
 
 printf '\n%s✓%s installed  %s %s\n' "$ORANGE" "$RESET" "$INSTALL_DIR/orqi" "$installed"
