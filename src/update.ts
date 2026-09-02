@@ -37,8 +37,6 @@ export const REPO = "orq-ai/orqi";
 
 export type InstallMethod = "binary" | "homebrew" | "npm" | "source";
 
-const HOMEBREW_PREFIXES = ["/opt/homebrew", "/usr/local/Cellar", "/home/linuxbrew/.linuxbrew"];
-
 /**
  * `execPath` is the caller's realpath'd `process.execPath`.
  *
@@ -54,7 +52,10 @@ const HOMEBREW_PREFIXES = ["/opt/homebrew", "/usr/local/Cellar", "/home/linuxbre
 export function installMethod(execPath: string): InstallMethod {
 	const parts = execPath.split(sep);
 	if (parts[parts.length - 1] !== "orqi") return "source";
-	if (parts.includes("Cellar") || HOMEBREW_PREFIXES.some((prefix) => execPath.startsWith(prefix))) return "homebrew";
+	// The caller realpaths first, so a Homebrew `bin/orqi` symlink resolves into
+	// its Cellar. The prefix alone proves nothing: ORQI_INSTALL_DIR can put a
+	// plain binary anywhere, including /opt/homebrew/bin.
+	if (parts.includes("Cellar")) return "homebrew";
 	if (parts.includes("node_modules")) return "npm";
 	return "binary";
 }
@@ -100,7 +101,6 @@ export function isNewer(latest: string, current: string): boolean {
 export interface UpdateCache {
 	checked_at: number;
 	latest: string | null;
-	current_at_check: string;
 }
 
 /** Persisted release data exists only after a successful GitHub response. */
@@ -121,8 +121,7 @@ function isSuccessfulUpdateCache(value: unknown): value is SuccessfulUpdateCache
 	const cache = value as Record<string, unknown>;
 	return (
 		typeof cache.checked_at === "number" &&
-		typeof cache.latest === "string" &&
-		typeof cache.current_at_check === "string"
+		typeof cache.latest === "string"
 	);
 }
 
@@ -153,7 +152,6 @@ export function readCache(agentDir: string): UpdateCache | undefined {
 	return {
 		checked_at: failedAt,
 		latest: successful?.latest ?? null,
-		current_at_check: successful?.current_at_check ?? VERSION,
 	};
 }
 
@@ -188,10 +186,10 @@ export function writeCache(agentDir: string, cache: SuccessfulUpdateCache): void
 }
 
 /**
- * Due precedence mirrors `updateDue` in src/skills.ts exactly, so the two
- * checks reason about pinning and CI the same way: the pin beats everything
- * (including the force flag) because it is the escape hatch for a bad
- * upstream; CI suppresses network calls nobody is there to see.
+ * Pinning and force-refresh follow the same precedence as the skills check:
+ * the pin beats everything (including the force flag) because it is the
+ * escape hatch for a bad upstream. Update checks additionally stay quiet in
+ * CI unless explicitly forced, where there is normally nobody to see them.
  */
 export function checkDue(cache: UpdateCache | undefined, env: NodeJS.ProcessEnv = process.env, now: number = Date.now()): boolean {
 	if (env.ORQI_UPDATE_CHECK === "0") return false;
@@ -300,7 +298,7 @@ export async function checkNow(
 	const latest = await fetchLatest();
 	try {
 		if (latest) {
-			writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+			writeCache(agentDir, { checked_at: Date.now(), latest });
 		} else {
 			writeFailureMarker(agentDir, Date.now());
 		}
@@ -368,7 +366,9 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 	// could resolve to a different release path. Setting a
 	// victim's environment already implies code execution, so this is cheap
 	// insurance rather than closing a real hole.
-	const pinned = process.env.ORQI_VERSION;
+	// Match install.sh: deployment tooling often exports optional variables as
+	// empty strings, and an empty pin means "latest", not an invalid release.
+	const pinned = process.env.ORQI_VERSION || undefined;
 	if (pinned !== undefined && !/^v?\d+\.\d+\.\d+$/.test(pinned)) {
 		console.error(`cannot update: ORQI_VERSION "${pinned}" is not a valid release tag (expected e.g. "0.2.0" or "v0.2.0")`);
 		return 1;

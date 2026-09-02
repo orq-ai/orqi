@@ -189,7 +189,7 @@ const startupLine = [header.name, header.workspace, header.status, credential.so
 // The header's "update available" line is the only place a pending update is
 // announced: it used to also ride in the status list above, saying the same
 // thing twice in one screenful.
-header.update = update;
+header.updateAvailable = update !== undefined;
 
 // Daily skills update and update-availability check, after the session is
 // wired: boot must never wait on GitHub, and a failure in either costs

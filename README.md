@@ -67,7 +67,7 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_AGENT_DIR`, `ORQ_API_BASE_URL`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | Override the agent dir / endpoints (on-prem) |
 | `ORQI_VERSION` | Pins the release tag: which one `install.sh` installs, and which one `orqi update` installs |
 | `ORQI_INSTALL_DIR` | Read by `install.sh` only: where the binary lands (default `~/.local/bin`) |
-| `CI` | A non-empty value suppresses the daily update check, same as `ORQI_UPDATE_CHECK=0` |
+| `CI` | A non-empty value suppresses the daily update check unless `ORQI_REFRESH_UPDATE=1` forces one |
 
 The CLI keeps its own agent dir (`~/.orqi/agent`) and never touches `~/.pi`.
 

@@ -12,14 +12,14 @@ The persisted state is split across two atomic files so successful and failed
 processes never write the same data:
 
 - `update-check.json` is the last-successful-release record. Its persisted type
-  requires `latest: string` alongside `checked_at` and `current_at_check`.
+  requires `latest: string` alongside `checked_at`.
 - `update-check-failed.json` contains only the timestamp of a completed failed
   attempt.
 
 `readCache` merges them into the logical `UpdateCache`, whose `latest` remains
 `string | null`. The newer file supplies `checked_at`; release data always comes
 from `update-check.json`. When only a failure marker exists, `readCache`
-synthesizes `latest: null` and `current_at_check: VERSION`. A failed check after
+synthesizes `latest: null`. A failed check after
 a successful one therefore advances the TTL without rewriting or erasing the
 last known release, including when separate processes finish concurrently.
 

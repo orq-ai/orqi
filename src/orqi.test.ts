@@ -398,7 +398,7 @@ test("the header shows an update line only when a newer release is cached", () =
 	const withoutUpdate = strip(headerLines(base, { cols: 100, rows: 40 }));
 	expect(withoutUpdate).not.toContain("update available");
 
-	const withUpdate = strip(headerLines({ ...base, update: "9.9.9" }, { cols: 100, rows: 40 }));
+	const withUpdate = strip(headerLines({ ...base, updateAvailable: true }, { cols: 100, rows: 40 }));
 	expect(withUpdate).toContain("update available · run: orqi update");
 
 	const art = withUpdate.split("\n").filter((line) => /[█▀▄]/.test(line));
@@ -529,6 +529,8 @@ test("installMethod tells a brew-managed binary from a plain one", () => {
 	// from under brew if this ever says "binary" for a Cellar path.
 	expect(installMethod("/Users/x/.local/bin/orqi")).toBe("binary");
 	expect(installMethod("/opt/homebrew/Cellar/orqi/0.1.0/bin/orqi")).toBe("homebrew");
+	expect(installMethod("/opt/homebrew/bin/orqi")).toBe("binary");
+	expect(installMethod("/opt/homebrew-backup/bin/orqi")).toBe("binary");
 	expect(installMethod("/Users/x/proj/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi")).toBe("npm");
 	expect(installMethod("/Users/x/.bun/bin/bun")).toBe("source"); // basename isn't "orqi"
 });
@@ -578,12 +580,13 @@ test("the daily update check is due only when it should be", () => {
 	// Direct analogue of the skills updateDue test: wrong answers here mean
 	// either hammering GitHub every boot or never telling anyone about a release.
 	const now = Date.now();
-	const cache: UpdateCache = { checked_at: now, latest: "0.2.0", current_at_check: "0.1.0" };
+	const cache: UpdateCache = { checked_at: now, latest: "0.2.0" };
 	expect(checkDue(undefined, {})).toBe(true); // never checked
 	expect(checkDue(cache, {})).toBe(false); // just checked
 	expect(checkDue(cache, {}, now + 25 * 60 * 60 * 1000)).toBe(true); // a day later
 	expect(checkDue(cache, { ORQI_REFRESH_UPDATE: "1" })).toBe(true); // forced
 	expect(checkDue(cache, { CI: "true" })).toBe(false); // nobody there to see it
+	expect(checkDue(cache, { CI: "true", ORQI_REFRESH_UPDATE: "1" })).toBe(true); // an explicit force wins
 	// The pin beats the force flag: it is the escape hatch for a bad upstream.
 	expect(checkDue(cache, { ORQI_UPDATE_CHECK: "0", ORQI_REFRESH_UPDATE: "1" })).toBe(false);
 });
@@ -594,7 +597,7 @@ test("update cache round-trips through disk and never throws on garbage", () => 
 	try {
 		expect(readCache(dir)).toBeUndefined(); // nothing written yet
 
-		const cache: SuccessfulUpdateCache = { checked_at: Date.now(), latest: "0.2.0", current_at_check: "0.1.0" };
+		const cache: SuccessfulUpdateCache = { checked_at: Date.now(), latest: "0.2.0" };
 		writeCache(dir, cache);
 		expect(readCache(dir)).toEqual(cache);
 		expect(statSync(join(dir, "update-check.json")).mode & 0o777).toBe(0o600);
@@ -612,9 +615,9 @@ test("update cache round-trips through disk and never throws on garbage", () => 
 test("pendingUpdate only fires when a real newer version is cached", () => {
 	// The one gate behind the header's "update available" line: a false
 	// positive here nags every session to install what it already runs.
-	const newer: UpdateCache = { checked_at: Date.now(), latest: "999.0.0", current_at_check: VERSION };
-	const stale: UpdateCache = { checked_at: Date.now(), latest: VERSION, current_at_check: VERSION };
-	const failed: UpdateCache = { checked_at: Date.now(), latest: null, current_at_check: VERSION };
+	const newer: UpdateCache = { checked_at: Date.now(), latest: "999.0.0" };
+	const stale: UpdateCache = { checked_at: Date.now(), latest: VERSION };
+	const failed: UpdateCache = { checked_at: Date.now(), latest: null };
 
 	expect(pendingUpdate(newer, {})).toBe("999.0.0");
 	expect(pendingUpdate(stale, {})).toBeUndefined(); // not newer: nothing to say
@@ -649,7 +652,7 @@ test("writeCache creates a fresh ~/.orqi/agent on the first-ever run", () => {
 	const agentDir = join(root, "agent");
 	try {
 		expect(existsSync(agentDir)).toBe(false);
-		const cache: SuccessfulUpdateCache = { checked_at: Date.now(), latest: "0.2.0", current_at_check: "0.1.0" };
+		const cache: SuccessfulUpdateCache = { checked_at: Date.now(), latest: "0.2.0" };
 		expect(() => writeCache(agentDir, cache)).not.toThrow();
 		expect(readCache(agentDir)).toEqual(cache);
 	} finally {
@@ -686,7 +689,7 @@ test("a completed failed update check is cached for the normal TTL", async () =>
 test("a failed update check preserves the last known release", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-update-preserve-"));
 	try {
-		writeCache(dir, { checked_at: 1, latest: "9.9.9", current_at_check: VERSION });
+		writeCache(dir, { checked_at: 1, latest: "9.9.9" });
 		const successfulRecord = readFileSync(join(dir, "update-check.json"), "utf8");
 		expect(await checkNow(dir, async () => undefined)).toBeUndefined();
 		const cache = readCache(dir);
@@ -761,6 +764,24 @@ test("runUpdate rejects a traversal-shaped ORQI_VERSION before touching disk or 
 			if (prior === undefined) delete process.env.ORQI_VERSION;
 			else process.env.ORQI_VERSION = prior;
 		});
+});
+
+test("runUpdate treats an empty ORQI_VERSION as unpinned, matching install.sh", async () => {
+	const prior = process.env.ORQI_VERSION;
+	const priorError = console.error;
+	const errors: string[] = [];
+	process.env.ORQI_VERSION = "";
+	console.error = (...args) => errors.push(args.join(" "));
+	try {
+		// Running under Bun is classified as a source checkout, so this reaches a
+		// deterministic refusal without touching the network.
+		expect(await runUpdate([], tmpdir())).toBe(1);
+		expect(errors.join("\n")).not.toContain("is not a valid release tag");
+	} finally {
+		console.error = priorError;
+		if (prior === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior;
+	}
 });
 
 test("the `update` argv string and the /update command registration stay in sync", () => {
