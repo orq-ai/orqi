@@ -149,6 +149,45 @@ export function writeCache(agentDir: string, cache: UpdateCache): void {
 	}
 }
 
+const CACHE_LOCK_NAME = ".update-check.lock";
+const CACHE_LOCK_WAIT_MS = 250;
+const CACHE_LOCK_RETRY_MS = 10;
+const CACHE_LOCK_STALE_MS = 10_000;
+
+/**
+ * Serialize the cache's read-modify-write transition across orqi processes.
+ * Directory creation is atomic across processes. Contention is bounded so a
+ * foreground check keeps its fetched answer, and a crash cannot block future
+ * persistence forever because an old lock directory is reclaimed by age.
+ */
+async function acquireCacheLock(agentDir: string): Promise<(() => void) | undefined> {
+	mkdirSync(agentDir, { recursive: true });
+	const lock = join(agentDir, CACHE_LOCK_NAME);
+	const deadline = Date.now() + CACHE_LOCK_WAIT_MS;
+	for (;;) {
+		try {
+			mkdirSync(lock);
+			return () => rmSync(lock, { recursive: true, force: true });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+
+		try {
+			if (Date.now() - statSync(lock).mtimeMs >= CACHE_LOCK_STALE_MS) {
+				rmSync(lock, { recursive: true, force: true });
+				continue;
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw error;
+		}
+
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) return undefined;
+		await Bun.sleep(Math.min(CACHE_LOCK_RETRY_MS, remaining));
+	}
+}
+
 /**
  * Due precedence mirrors `updateDue` in src/skills.ts exactly, so the two
  * checks reason about pinning and CI the same way: the pin beats everything
@@ -250,23 +289,29 @@ export async function latestVersion(timeoutMs = FETCH_TIMEOUT_MS): Promise<strin
 }
 
 /**
- * Fetch latest → write the cache only on a successful parse → return it. Used
- * to be written out three times (`maybeCheckUpdate`, `runUpdate`'s `--check`
- * branch, and `/update` in src/commands.ts); each caller keeps its own gating
- * (or none) and its own presentation on top of this one fact-gathering step.
+ * Fetch latest → persist the completed attempt → return the fetched answer.
+ * A completed failed check advances the TTL while preserving a previously
+ * known release; an interrupted or unresolved fetch never reaches this write.
  */
 export async function checkNow(
 	agentDir: string,
 	fetchLatest: () => Promise<string | undefined> = latestVersion,
 ): Promise<string | undefined> {
 	const latest = await fetchLatest();
-	const cached = readCache(agentDir);
 	try {
-		writeCache(agentDir, {
-			checked_at: Date.now(),
-			latest: latest ?? cached?.latest ?? null,
-			current_at_check: VERSION,
-		});
+		const release = await acquireCacheLock(agentDir);
+		if (release) {
+			try {
+				const cached = readCache(agentDir);
+				writeCache(agentDir, {
+					checked_at: Date.now(),
+					latest: latest ?? cached?.latest ?? null,
+					current_at_check: VERSION,
+				});
+			} finally {
+				release();
+			}
+		}
 	} catch {
 		// A direct check still has a useful answer when only persistence fails.
 		// Leaving the old/missing cache untouched also makes background checks
@@ -276,10 +321,10 @@ export async function checkNow(
 }
 
 /**
- * Fire-and-forget daily check, mirroring `maybeUpdateSkills` exactly: gated by
- * `checkDue`, silent on every failure. Marking a failed attempt would pin the
- * check for 24h on a check that never actually happened, the same reasoning
- * as the skills `last-check` marker (src/skills.ts).
+ * Fire-and-forget daily check, mirroring `maybeUpdateSkills`: gated by
+ * `checkDue` and silent on every failure. A completed failed response is
+ * timestamped; an interrupted or unresolved request never reaches persistence
+ * and is therefore retried on the next run.
  */
 export async function maybeCheckUpdate(agentDir: string): Promise<void> {
 	try {

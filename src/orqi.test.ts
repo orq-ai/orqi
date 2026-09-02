@@ -1,7 +1,7 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceOfKey } from "./auth.ts";
@@ -657,10 +657,17 @@ test("writeCache creates a fresh ~/.orqi/agent on the first-ever run", () => {
 });
 
 test("a successful update check survives a cache write failure", async () => {
-	// The check result is useful even when the agent dir is read-only or is not
-	// a directory. Explicit `--check` and `/update` calls must report that
-	// result instead of turning a cache-only failure into an uncaught error.
-	expect(await checkNow("/dev/null/orqi-agent", async () => "0.2.0")).toBe("0.2.0");
+	// Explicit `--check` and `/update` calls must report a fetched result instead
+	// of turning a cache-only failure into an uncaught error.
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-write-failure-"));
+	const notDirectory = join(root, "not-a-directory");
+	try {
+		writeFileSync(notDirectory, "occupied");
+		expect(await checkNow(notDirectory, async () => "0.2.0")).toBe("0.2.0");
+		expect(readCache(notDirectory)).toBeUndefined();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("a completed failed update check is cached for the normal TTL", async () => {
@@ -683,6 +690,42 @@ test("a failed update check preserves the last known release", async () => {
 		const cache = readCache(dir);
 		expect(cache?.latest).toBe("9.9.9");
 		expect(cache?.checked_at).toBeGreaterThan(1);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a failed update check cannot overwrite a concurrent successful check", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-concurrent-"));
+	const lock = join(dir, ".update-check.lock");
+	try {
+		mkdirSync(lock);
+		let settled = false;
+		const failed = checkNow(dir, async () => undefined).finally(() => {
+			settled = true;
+		});
+
+		await Bun.sleep(25);
+		expect(settled).toBe(false);
+		writeCache(dir, { checked_at: Date.now(), latest: "9.9.9", current_at_check: VERSION });
+		rmSync(lock, { recursive: true });
+
+		await failed;
+		expect(readCache(dir)?.latest).toBe("9.9.9");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a completed check recovers a stale cache lock left by a crashed process", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-stale-lock-"));
+	const lock = join(dir, ".update-check.lock");
+	try {
+		mkdirSync(lock);
+		utimesSync(lock, new Date(0), new Date(0));
+		expect(await checkNow(dir, async () => "9.9.9")).toBe("9.9.9");
+		expect(readCache(dir)?.latest).toBe("9.9.9");
+		expect(existsSync(lock)).toBe(false);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
