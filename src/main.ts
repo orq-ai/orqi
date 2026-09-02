@@ -29,7 +29,7 @@ import { connectOrqTools } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
-import { maybeCheckUpdate, readCache, runUpdate, updateNote } from "./update.ts";
+import { maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
 
 const oneShot = process.argv[2];
 const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent");
@@ -169,7 +169,7 @@ services.settingsManager.setTuiMode(process.env.ORQI_TUI === "regular" ? "regula
 services.settingsManager.setLastChangelogVersion("999.0.0");
 
 const skills = services.resourceLoader.getSkills().skills.length;
-const update = updateNote(readCache(AGENT_DIR));
+const update = pendingUpdate(readCache(AGENT_DIR));
 header.workspace = credential.workspace;
 header.project = await projectForCredential(credential.token);
 header.status = [
@@ -182,17 +182,14 @@ header.status = [
 	// Skills newer than the binary shipped with; silent drift would otherwise be
 	// invisible until someone diffed behaviour against a colleague's machine.
 	liveSkillsNote(AGENT_DIR),
-	// A newer orqi release than this binary; the footer line below spells out
-	// the command, this only needs to be terse enough for the joined list.
-	update?.note,
 ]
 	.filter(Boolean)
 	.join(" · ");
 const startupLine = [header.name, header.workspace, header.status, credential.source].filter(Boolean).join(" · ");
-// Drives the footer's "update available" line - the unprefixed twin of
-// `update.note` above, read off the same `updateNote` call so the two
-// surfaces cannot gate on different conditions.
-if (update) header.update = update.latest;
+// The header's "update available" line is the only place a pending update is
+// announced: it used to also ride in the status list above, saying the same
+// thing twice in one screenful.
+header.update = update;
 
 // Daily skills update and update-availability check, after the session is
 // wired: boot must never wait on GitHub, and a failure in either costs

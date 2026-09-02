@@ -31,10 +31,9 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { dirname, join, sep } from "node:path";
 import { $ } from "bun";
 import { VERSION } from "./branding.ts";
+import { CHECK_TTL_MS } from "./skills.ts";
 
 export const REPO = "orq-ai/orqi";
-
-const CHECK_TTL_MS = 24 * 60 * 60 * 1000; // matches src/skills.ts's CHECK_TTL_MS
 
 export type InstallMethod = "binary" | "homebrew" | "npm" | "source";
 
@@ -161,35 +160,40 @@ export function checkDue(cache: UpdateCache | undefined, env: NodeJS.ProcessEnv 
 }
 
 /**
- * `note` rides in the `" · "`-joined status list beside things like the
- * skills note, so it stays terse rather than descriptive. `latest` is the
- * same underlying fact, unprefixed, for the footer's own "update available"
- * line - one derivation instead of two so their gating cannot diverge.
+ * The newer version the header should announce, or undefined for silence.
+ *
+ * One surface owns this: the header's own "update available" line. It used to
+ * also ride in the `" · "` status list, which said the same thing twice in one
+ * screenful.
  */
-export function updateNote(
+export function pendingUpdate(
 	cache: UpdateCache | undefined,
 	env: NodeJS.ProcessEnv = process.env,
-): { note: string; latest: string } | undefined {
+): string | undefined {
 	if (env.ORQI_UPDATE_CHECK === "0") return undefined;
 	if (!cache) return undefined;
 	if (!isNewer(cache.latest, VERSION)) return undefined;
-	return { note: `update v${cache.latest}`, latest: cache.latest };
+	return cache.latest;
 }
 
 export interface UpdateStatus {
 	current: string;
 	install_method: InstallMethod;
-	latest?: string;
+	/** null when the check could not reach GitHub; never absent, so the JSON
+	 * form has one key set a consumer can rely on regardless of outcome. */
+	latest: string | null;
 	update_available: boolean;
 }
 
 /** Matches `orq update --check`'s output shape exactly, key order included. */
 export function formatStatus(status: UpdateStatus, json: boolean): string {
 	if (json) return JSON.stringify(status, null, 2);
-	const lines = [`current: ${status.current}`, `install_method: ${status.install_method}`];
-	if (status.latest !== undefined) lines.push(`latest: ${status.latest}`);
-	lines.push(`update_available: ${status.update_available}`);
-	return lines.join("\n");
+	return [
+		`current: ${status.current}`,
+		`install_method: ${status.install_method}`,
+		`latest: ${status.latest ?? "unknown"}`,
+		`update_available: ${status.update_available}`,
+	].join("\n");
 }
 
 /**
@@ -329,17 +333,17 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 
 	if (check) {
 		const latest = await checkNow(agentDir);
-		const status: UpdateStatus = {
-			current: VERSION,
-			install_method: method,
-			latest,
-			update_available: latest !== undefined && isNewer(latest, VERSION),
-		};
-		// The plain form names a failed fetch outright ("latest: unknown"); the
-		// JSON form keeps omitting the key, since a sentinel string is worse
-		// than absence for a machine reader. formatStatus's contract does not
-		// change - the asymmetry is only in what status object each form sees.
-		console.log(json ? formatStatus(status, true) : formatStatus({ ...status, latest: latest ?? "unknown" }, false));
+		console.log(
+			formatStatus(
+				{
+					current: VERSION,
+					install_method: method,
+					latest: latest ?? null,
+					update_available: latest !== undefined && isNewer(latest, VERSION),
+				},
+				json,
+			),
+		);
 		return latest ? 0 : 1;
 	}
 

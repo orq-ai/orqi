@@ -34,7 +34,7 @@ import {
 	REPO,
 	runUpdate,
 	type UpdateCache,
-	updateNote,
+	pendingUpdate,
 	writeCache,
 } from "./update.ts";
 
@@ -607,18 +607,16 @@ test("update cache round-trips through disk and never throws on garbage", () => 
 	}
 });
 
-test("updateNote is short and only fires when a real newer version is cached", () => {
-	// It rides into the header's " · "-joined status list, so it must stay terse.
+test("pendingUpdate only fires when a real newer version is cached", () => {
+	// The one gate behind the header's "update available" line: a false
+	// positive here nags every session to install what it already runs.
 	const newer: UpdateCache = { checked_at: Date.now(), latest: "999.0.0", current_at_check: VERSION };
 	const stale: UpdateCache = { checked_at: Date.now(), latest: VERSION, current_at_check: VERSION };
 
-	// One return value drives both the header status line ("note") and the
-	// footer's "update available" line ("latest"), so the two surfaces read
-	// the same fact instead of two separately-gated derivations of it.
-	expect(updateNote(newer, {})).toEqual({ note: "update v999.0.0", latest: "999.0.0" });
-	expect(updateNote(stale, {})).toBeUndefined(); // not newer: nothing to say
-	expect(updateNote(undefined, {})).toBeUndefined(); // no cache: nothing to say
-	expect(updateNote(newer, { ORQI_UPDATE_CHECK: "0" })).toBeUndefined(); // pinned: stay silent
+	expect(pendingUpdate(newer, {})).toBe("999.0.0");
+	expect(pendingUpdate(stale, {})).toBeUndefined(); // not newer: nothing to say
+	expect(pendingUpdate(undefined, {})).toBeUndefined(); // no cache: nothing to say
+	expect(pendingUpdate(newer, { ORQI_UPDATE_CHECK: "0" })).toBeUndefined(); // pinned: stay silent
 });
 
 test("formatStatus matches orq update --check's field order in both forms", () => {
@@ -628,15 +626,14 @@ test("formatStatus matches orq update --check's field order in both forms", () =
 	);
 	expect(JSON.parse(formatStatus(withLatest, true))).toEqual(withLatest);
 
-	const noLatest = { current: "0.1.0", install_method: "binary" as const, update_available: false };
-	// latest is omitted from the plain form entirely when unknown, not printed empty.
-	expect(formatStatus(noLatest, false)).toBe(["current: 0.1.0", "install_method: binary", "update_available: false"].join("\n"));
+	// A failed fetch keeps the same four keys in both forms: a consumer that
+	// reads `latest` must not have to tell "absent" from "unknown" apart from
+	// the outcome that produced it.
+	const noLatest = { current: "0.1.0", install_method: "binary" as const, latest: null, update_available: false };
+	expect(formatStatus(noLatest, false)).toBe(
+		["current: 0.1.0", "install_method: binary", "latest: unknown", "update_available: false"].join("\n"),
+	);
 	expect(JSON.parse(formatStatus(noLatest, true))).toEqual(noLatest);
-	// This no-`latest` plain form is documentation only: runUpdate always
-	// substitutes "unknown" for a failed fetch before calling formatStatus, so
-	// the branch above is never reached from the real code path. Left in place
-	// because formatStatus's own contract - omit an absent field, don't print
-	// it empty - is still worth pinning independent of who calls it.
 });
 
 test("writeCache creates a fresh ~/.orqi/agent on the first-ever run", () => {
