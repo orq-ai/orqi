@@ -133,23 +133,35 @@ if ! curl -fSL --progress-bar -o "$tmp/$asset" "$url"; then
 fi
 
 mkdir -p "$INSTALL_DIR"
-tar -xzf "$tmp/$asset" -C "$INSTALL_DIR"
+tar -xzf "$tmp/$asset" -C "$tmp"
 
 # tar exits 0 for any well-formed archive, whatever is inside it, so the binary
 # is confirmed rather than assumed. `orqi --version` needs no credentials and no
 # network, which makes it a real check that the file downloaded for this
 # platform can execute here: wrong architecture, a missing exec bit or a
 # Gatekeeper kill all fail loudly instead of printing a tick.
-if [ ! -f "$INSTALL_DIR/orqi" ]; then
+if [ ! -f "$tmp/orqi" ]; then
 	err "the archive did not contain an orqi binary: $asset"
 	exit 1
 fi
-chmod +x "$INSTALL_DIR/orqi"
-if ! installed=$("$INSTALL_DIR/orqi" --version 2>&1); then
-	err "installed to $INSTALL_DIR/orqi but it will not run:"
+chmod +x "$tmp/orqi"
+if ! installed=$("$tmp/orqi" --version 2>&1); then
+	err "downloaded $asset but it will not run:"
 	err "$installed"
 	exit 1
 fi
+
+# Extract into $tmp and mv into place rather than extracting straight into
+# $INSTALL_DIR: this is not tidiness, it makes install atomic and lets it
+# install over a running orqi. `mv` within one directory tree is a rename,
+# which GNU tar's in-place extraction is not - tar truncates a file it is
+# overwriting rather than unlinking it first, so extracting onto a busy
+# executable is ETXTBSY on Linux (bsdtar on macOS unlinks first and would
+# succeed, so this failure mode is invisible until someone runs the installer
+# on Linux over a live orqi). $tmp is already a mktemp -d cleaned by the trap
+# set above, and mv(1) falls back to copy+unlink across filesystems, so this is
+# safe even when $INSTALL_DIR is not on the same mount as $tmp.
+mv "$tmp/orqi" "$INSTALL_DIR/orqi"
 
 printf '\n%s✓%s installed  %s %s\n' "$ORANGE" "$RESET" "$INSTALL_DIR/orqi" "$installed"
 
