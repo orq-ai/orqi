@@ -95,10 +95,18 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   cross filesystems, and `~/.local/bin` and `/tmp` are routinely different mounts. Creating the
   staging dir there also proves the install directory is writable before anything downloads,
   instead of after. `install.sh` follows the same rule for the same reason: a bare `mktemp -d`
-  would land under `$TMPDIR`, and `mv` across filesystems does not unlink the destination first -
-  it opens it `O_TRUNC` and copies into it, which is `ETXTBSY` on Linux over a running orqi. Its
-  staging dir is a sibling of `$INSTALL_DIR/orqi` for exactly the same reason `src/update.ts`'s is,
-  and `orqi --version` there verifies the staged copy, before the `mv`, not the installed one.
+  would land under `$TMPDIR`, and a cross-filesystem `mv` falls back to copying rather than
+  unlinking the destination first, which is `ETXTBSY` on Linux over a running orqi on
+  implementations that don't recover from that. A same-directory, same-filesystem rename is
+  unconditionally correct regardless of `mv`'s fallback behaviour, so this is the stronger
+  guarantee either way. Its staging dir is a sibling of `$INSTALL_DIR/orqi` for exactly the same
+  reason `src/update.ts`'s is, and `orqi --version` there verifies the staged copy, before the
+  `mv`, not the installed one. Both staging dirs (`.orqi-update-*` from `runUpdate`,
+  `.orqi-install-*` from `install.sh`) live in the same directory and are named with a common
+  enough prefix that `runUpdate`'s age-based orphan sweep also collects `install.sh`'s: its
+  `trap ... EXIT` does not fire on SIGINT, so an interrupted install can otherwise leave one behind
+  forever. `runUpdate`'s own staging dir is created with `mkdtempSync`, not a pid-derived name - a
+  wrapped pid could otherwise collide with a still-live staging dir from an earlier run.
 - **`install_method: "binary"` merges `install.sh` and a hand-extracted tarball on purpose.** Both
   land as a plain file named `orqi` on `PATH`, both get replaced the same way - a rename onto the
   same kind of file - and `ORQI_INSTALL_DIR` means the containing directory proves nothing about

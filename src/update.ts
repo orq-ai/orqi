@@ -27,7 +27,7 @@
  * call - which of the two URL forms install.sh uses - can still be checked.
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { $ } from "bun";
 import { VERSION } from "./branding.ts";
@@ -123,8 +123,13 @@ export function readCache(agentDir: string): UpdateCache | undefined {
  * Temp file + rename in the same directory, mirroring the atomic swap pattern
  * elsewhere in this codebase: a half-written cache must never be read as
  * valid, and a rename within one directory cannot land a partial file.
+ *
+ * `agentDir` may not exist yet: `orqi update --check` can be the very first
+ * thing to run after `install.sh`, before anything else has created
+ * `~/.orqi/agent` (mirrors `maybeUpdateSkills`'s mkdirSync in src/skills.ts).
  */
 export function writeCache(agentDir: string, cache: UpdateCache): void {
+	mkdirSync(agentDir, { recursive: true });
 	const target = cachePath(agentDir);
 	const staging = mkdtempSync(join(agentDir, ".update-cache-"));
 	const tmp = join(staging, "update-check.json");
@@ -310,6 +315,16 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 	}
 
 	const pinned = process.env.ORQI_VERSION;
+	// ORQI_VERSION is interpolated straight into the release URL below (see
+	// releaseUrl). Setting a victim's environment already implies code
+	// execution, so this is cheap insurance rather than closing a real hole:
+	// without it, a value containing "../" would resolve to another repo's
+	// release asset on github.com, which then gets executed and renamed over
+	// the user's binary.
+	if (pinned !== undefined && !/^v?\d+\.\d+\.\d+$/.test(pinned)) {
+		console.error(`cannot update: ORQI_VERSION "${pinned}" is not a valid release tag (expected e.g. "0.2.0" or "v0.2.0")`);
+		return 1;
+	}
 	const tag = pinned ?? (await latestVersion());
 	if (!tag) {
 		console.error("cannot update: could not determine the latest release (network or GitHub API failure)");
@@ -332,12 +347,21 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 	// Creating it here also fails early and loudly when the install dir
 	// itself is not writable, rather than after a wasted download.
 	const installDir = dirname(target);
-	const staging = join(installDir, `.orqi-update-${process.pid}`);
+	// Sweep by age, never by name alone: a second orqi may be mid-update in its
+	// own staging dir right now, and deleting it would fail that update. A pid
+	// can wrap and collide with a still-live staging dir from an earlier run
+	// under the same pid, so the staging dir itself is now made with
+	// mkdtempSync (as writeCache already does) rather than a fixed pid-derived
+	// name - there is no slot to pre-clean, so nothing here can delete a dir a
+	// live process still owns.
+	let staging = "";
 	try {
-		// Sweep by age, never by name alone: a second orqi may be mid-update in
-		// its own staging dir right now, and deleting it would fail that update.
+		// Also sweeps install.sh's own `.orqi-install-XXXXXX` staging dirs: its
+		// `trap ... EXIT` does not fire on SIGINT, so an interrupted install can
+		// leave one behind in this same directory. Age-based, same as ours -
+		// never by name alone, for the same live-process reason.
 		for (const entry of readdirSync(installDir)) {
-			if (!entry.startsWith(".orqi-update-")) continue;
+			if (!entry.startsWith(".orqi-update-") && !entry.startsWith(".orqi-install-")) continue;
 			const path = join(installDir, entry);
 			try {
 				if (Date.now() - statSync(path).mtimeMs > STAGING_ORPHAN_MS) rmSync(path, { recursive: true, force: true });
@@ -345,8 +369,7 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 				// Vanished under us, or another process is mid-write. Either way, leave it.
 			}
 		}
-		rmSync(staging, { recursive: true, force: true }); // ours from a previous run in this same pid slot
-		mkdirSync(staging, { recursive: true });
+		staging = mkdtempSync(join(installDir, ".orqi-update-"));
 
 		// Deliberately no xattr step: curl and tar never set
 		// com.apple.quarantine themselves - only LaunchServices-aware
@@ -370,13 +393,22 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 			return 1;
 		}
 		const extracted = join(staging, "orqi");
+		// A well-formed tarball with no orqi inside would otherwise make
+		// chmodSync throw a raw ENOENT; install.sh already has prose for exactly
+		// this case ("the archive did not contain an orqi binary"), so match it.
+		if (!existsSync(extracted)) {
+			console.error(`cannot update: the archive did not contain an orqi binary: ${asset}`);
+			return 1;
+		}
 		chmodSync(extracted, 0o755);
 
 		// Verify before swapping: catches wrong-arch, a truncated download and a
 		// Gatekeeper kill while the file is still in staging, not after it has
 		// replaced the running binary. This is why --version must stay
-		// credential-free and network-free (AGENTS.md).
-		const verify = Bun.spawnSync([extracted, "--version"]);
+		// credential-free and network-free (AGENTS.md). A timeout matters here
+		// too: the download has --max-time 120, but a hung downloaded binary
+		// would otherwise hang `orqi update` forever with no such bound.
+		const verify = Bun.spawnSync([extracted, "--version"], { timeout: 10_000 });
 		if (!verify.success || !verify.stdout.toString().includes(version)) {
 			console.error("cannot update: downloaded binary failed verification");
 			return 1;
@@ -394,7 +426,10 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 		// download or a failed verification never lays a finger on `target`.
 		renameSync(extracted, target);
 
-		console.log(`Updated orqi ${VERSION} -> ${version}`);
+		// Name the path, not just the versions: when target is a $PATH copy that
+		// is not the realpath'd binary actually invoked, this is the only line
+		// that tells the user where the update landed.
+		console.log(`Updated orqi ${VERSION} -> ${version} (${target})`);
 		console.log(`  Release notes: https://github.com/${REPO}/releases/tag/v${version}`);
 		return 0;
 	} catch (error) {
@@ -405,6 +440,9 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 		console.error(`cannot update: ${error instanceof Error ? error.message : String(error)}`);
 		return 1;
 	} finally {
-		rmSync(staging, { recursive: true, force: true });
+		// staging is "" if mkdtempSync itself never ran (e.g. the readdirSync
+		// sweep threw); rmSync("") is a thrown ERR_INVALID_ARG_VALUE, not a
+		// no-op, even with force: true.
+		if (staging) rmSync(staging, { recursive: true, force: true });
 	}
 }

@@ -126,13 +126,15 @@ printf '\n'
 # $tmp is a sibling of the install target, not a bare `mktemp -d`: that is
 # what makes the `mv` below a same-filesystem rename rather than a
 # cross-filesystem copy. A bare mktemp -d lands under $TMPDIR (often /tmp,
-# often tmpfs), which is routinely a different filesystem than
-# $INSTALL_DIR - and `mv` across filesystems does not unlink the destination
-# first, it opens it O_TRUNC and copies into it, which is ETXTBSY on Linux
-# when the destination is the running orqi. Same directory guarantees same
-# filesystem, which guarantees a real rename(2), which is legal over a busy
-# text file on both Linux and macOS. This mirrors the sibling staging dir
-# `runUpdate` uses in src/update.ts (see AGENTS.md).
+# often tmpfs), which is routinely a different filesystem than $INSTALL_DIR,
+# and a cross-filesystem `mv` falls back to copying. GNU coreutils' `mv` does
+# recover from that by unlinking the destination first when the copy's open
+# fails - so this is not "cannot recover from ETXTBSY", it is "should not have
+# to rely on a GNU-specific fallback to avoid it". Same directory guarantees
+# same filesystem, which guarantees a real rename(2) unconditionally, on any
+# `mv` implementation, and that is legal over a busy text file on both Linux
+# and macOS. This mirrors the sibling staging dir `runUpdate` uses in
+# src/update.ts (see AGENTS.md).
 mkdir -p "$INSTALL_DIR"
 tmp=$(mktemp -d "$INSTALL_DIR/.orqi-install-XXXXXX")
 trap 'rm -rf "$tmp"' EXIT

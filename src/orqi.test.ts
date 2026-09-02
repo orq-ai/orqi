@@ -32,6 +32,7 @@ import {
 	refusal,
 	releaseUrl,
 	REPO,
+	runUpdate,
 	type UpdateCache,
 	updateNote,
 	writeCache,
@@ -610,6 +611,59 @@ test("formatStatus matches orq update --check's field order in both forms", () =
 	// latest is omitted from the plain form entirely when unknown, not printed empty.
 	expect(formatStatus(noLatest, false)).toBe(["current: 0.1.0", "install_method: binary", "update_available: false"].join("\n"));
 	expect(JSON.parse(formatStatus(noLatest, true))).toEqual(noLatest);
+	// This no-`latest` plain form is documentation only: runUpdate always
+	// substitutes "unknown" for a failed fetch before calling formatStatus, so
+	// the branch above is never reached from the real code path. Left in place
+	// because formatStatus's own contract - omit an absent field, don't print
+	// it empty - is still worth pinning independent of who calls it.
+});
+
+test("writeCache creates a fresh ~/.orqi/agent on the first-ever run", () => {
+	// The first `orqi update --check` after install.sh can run before anything
+	// else has ever created the agent dir. Without an explicit mkdirSync,
+	// mkdtempSync(join(agentDir, ...)) throws a raw ENOENT instead of printing
+	// the status line.
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-fresh-"));
+	const agentDir = join(root, "agent");
+	try {
+		expect(existsSync(agentDir)).toBe(false);
+		const cache: UpdateCache = { checked_at: Date.now(), latest: "0.2.0", current_at_check: "0.1.0" };
+		expect(() => writeCache(agentDir, cache)).not.toThrow();
+		expect(readCache(agentDir)).toEqual(cache);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runUpdate rejects an unknown flag before touching disk or network", () => {
+	// The known-flags check runs first and returns before realpathSync, so a
+	// bogus agentDir must never be touched - if it were, this test would be
+	// exercising I/O rather than the early-return branch it targets.
+	const untouchedDir = join(tmpdir(), "orqi-update-should-not-exist");
+	rmSync(untouchedDir, { recursive: true, force: true });
+	return runUpdate(["--bogus"], untouchedDir).then((code) => {
+		expect(code).toBe(1);
+		expect(existsSync(untouchedDir)).toBe(false);
+	});
+});
+
+test("the `update` argv string and the /update command registration stay in sync", () => {
+	// A rename of either half would silently break `orqi update`: main.ts
+	// would fall through to booting a session with "update" as the prompt, or
+	// the in-session /update command would vanish with no error (pi drops
+	// unregistered-name collisions and typos alike, silently).
+	const mainSource = readFileSync(join(import.meta.dir, "main.ts"), "utf8");
+	expect(mainSource).toContain('oneShot === "update"');
+
+	const registered: string[] = [];
+	const pi = {
+		registerEntryRenderer: () => {},
+		registerCommand: (name: string) => registered.push(name),
+		on: () => {},
+		appendEntry: () => {},
+	} as any;
+	orqCommands(async () => "", ["orq_list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
+	expect(registered).toContain("update");
 });
 
 test("refusal names both the method and the found path for every channel orqi does not own", () => {
