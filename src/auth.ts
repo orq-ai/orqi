@@ -7,14 +7,10 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 
-export const API_BASE_URL = process.env.ORQ_API_BASE_URL ?? "https://api.orq.ai";
+export const API_BASE_URL = process.env.ORQ_SERVER ?? process.env.ORQ_API_BASE_URL ?? "https://api.orq.ai";
 export const MCP_URL = process.env.ORQ_MCP_URL ?? `${API_BASE_URL}/v2/mcp`;
 export const ROUTER_URL = process.env.ORQ_GATEWAY_URL ?? `${API_BASE_URL}/v3/router`;
-
-const SESSION_FILE = join(homedir(), ".orq", "sessions", `${process.env.ORQ_PROFILE ?? "default"}.json`);
 
 export interface OrqResult {
 	ok: boolean;
@@ -62,9 +58,32 @@ export async function projectForCredential(token: string): Promise<string | unde
 	}
 }
 
-function readSession(): { activeWorkspaceKey?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] } | undefined {
+interface Session { activeWorkspaceKey?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] }
+
+/** Session file named by `orq auth whoami --json`, or undefined when the output is not that. */
+export function sessionFileOf(whoamiJson: string): string | undefined {
 	try {
-		return JSON.parse(readFileSync(SESSION_FILE, "utf8"));
+		const file = JSON.parse(whoamiJson)?.session_file;
+		return typeof file === "string" && file ? file : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The orq CLI login session, freshly read.
+ *
+ * Which file under `~/.orq/sessions/` holds it is the CLI's business: it was
+ * `<profile>.json` up to 5.2 and is `<host>.json` from 5.3 (RES-1500), so ask
+ * `whoami` for the path rather than guessing. whoami also refreshes an expired
+ * token and proves the session is live.
+ */
+function readSession(): Session | undefined {
+	const whoami = runOrq(["auth", "whoami", "--json"]);
+	const file = whoami.ok ? sessionFileOf(whoami.stdout) : undefined;
+	if (!file) return undefined;
+	try {
+		return JSON.parse(readFileSync(file, "utf8"));
 	} catch {
 		return undefined;
 	}
@@ -92,21 +111,6 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
 	}
 }
 
-/** Active-workspace token from the orq CLI login session, if there is one. */
-function sessionCredential(): Credential | undefined {
-	// whoami first: it refreshes an expired token and proves the session is live.
-	if (!runOrq(["auth", "whoami"]).ok) return undefined;
-	try {
-		const session = readSession();
-		const workspace = session?.activeWorkspaceKey;
-		const token = workspace ? session?.workspaceTokens?.[workspace]?.token : undefined;
-		if (typeof token !== "string" || !token) return undefined;
-		return { token, source: "orq login session", workspace };
-	} catch {
-		return undefined;
-	}
-}
-
 /**
  * Credentials to try, best first.
  *
@@ -118,12 +122,14 @@ function sessionCredential(): Credential | undefined {
  */
 export function credentialCandidates(): Credential[] {
 	const candidates: Credential[] = [];
+	const session = readSession();
 	if (process.env.ORQ_API_KEY) {
 		const token = process.env.ORQ_API_KEY;
-		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, readSession()) });
+		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
 	}
-	const session = sessionCredential();
-	if (session) candidates.push(session);
+	const workspace = session?.activeWorkspaceKey;
+	const token = workspace ? session?.workspaceTokens?.[workspace]?.token : undefined;
+	if (typeof token === "string" && token) candidates.push({ token, source: "orq login session", workspace });
 	return candidates;
 }
 
