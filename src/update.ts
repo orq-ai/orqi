@@ -17,12 +17,19 @@
  * atomically on either platform, and the already-running process keeps its
  * own inode until it exits normally.
  *
- * This file is the pure half only: no network, no filesystem writes beyond
- * the cache, no CLI entry point. Task 2 appends the rest.
+ * Every background path below - `maybeCheckUpdate` and the fetch inside it -
+ * is a silent return on failure, the same contract as src/skills.ts: the
+ * worst acceptable outcome is a stale notice, never a slow or broken boot.
+ *
+ * The network and filesystem-mutating pieces (the fetch, the download, the
+ * swap) are not unit-tested: no network in tests, per AGENTS.md. `releaseUrl`
+ * is pulled out precisely so the one genuinely pure fact about the network
+ * call - which of the two URL forms install.sh uses - can still be checked.
  */
 
-import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
+import { $ } from "bun";
 import { VERSION } from "./branding.ts";
 
 export const REPO = "orq-ai/orqi";
@@ -190,4 +197,182 @@ export function refusal(method: InstallMethod, execPath: string): string {
 		);
 	}
 	throw new Error(`refusal() called with method "binary": ${execPath} can self-update, there is nothing to refuse`);
+}
+
+const FETCH_TIMEOUT_MS = 10_000;
+
+/** Exactly the two forms `install.sh` builds: pinned by tag, or GitHub's "latest" redirect. */
+export function releaseUrl(asset: string, tag?: string): string {
+	if (tag) return `https://github.com/${REPO}/releases/download/${tag}/${asset}`;
+	return `https://github.com/${REPO}/releases/latest/download/${asset}`;
+}
+
+/**
+ * `undefined` on any failure, non-ok status, or a tag that does not look like
+ * a released version - an unparsable "latest" must never trigger an update
+ * prompt (same rule as `isNewer`).
+ */
+export async function latestVersion(timeoutMs = FETCH_TIMEOUT_MS): Promise<string | undefined> {
+	try {
+		const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (!response.ok) return undefined;
+		const tag = ((await response.json()) as { tag_name?: string }).tag_name;
+		if (!tag) return undefined;
+		const version = normalizeTag(tag);
+		return /^\d+\.\d+\.\d+$/.test(version) ? version : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Fire-and-forget daily check, mirroring `maybeUpdateSkills` exactly: gated by
+ * `checkDue`, silent on every failure, and the cache is written only after a
+ * successful parse - never on a failed fetch. Marking a failed attempt would
+ * pin the check for 24h on a check that never actually happened, the same
+ * reasoning as the skills `last-check` marker (src/skills.ts).
+ */
+export async function maybeCheckUpdate(agentDir: string): Promise<void> {
+	try {
+		if (!checkDue(readCache(agentDir))) return;
+		const latest = await latestVersion();
+		if (!latest) return;
+		writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+	} catch {
+		// Silent by design; the header note and /doctor reflect whatever landed.
+	}
+}
+
+const USAGE = `orqi update - replace this binary with the latest published release
+
+  orqi update           download and install the latest release
+  orqi update --check   report what is available, change nothing
+  orqi update --json    machine-readable output
+
+ORQI_VERSION pins the release tag to install.`;
+
+/** Orphaned staging dirs are swept, in-flight ones are not: a swap takes seconds, not an hour. */
+const STAGING_ORPHAN_MS = 60 * 60 * 1000;
+
+/** `orqi update`'s entry point; returns a process exit code. */
+export async function runUpdate(args: string[], agentDir: string): Promise<number> {
+	const known = new Set(["--check", "--json"]);
+	for (const arg of args) {
+		if (!known.has(arg)) {
+			console.error(USAGE);
+			return 1;
+		}
+	}
+	const check = args.includes("--check");
+	const json = args.includes("--json");
+
+	const target = realpathSync(process.execPath);
+	const method = installMethod(target);
+
+	if (check) {
+		const latest = await latestVersion();
+		if (latest) writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+		const status = {
+			current: VERSION,
+			install_method: method,
+			latest,
+			update_available: latest !== undefined && isNewer(latest, VERSION),
+		};
+		console.log(formatStatus(status, json));
+		return latest ? 0 : 1;
+	}
+
+	if (method !== "binary") {
+		console.error(refusal(method, target));
+		return 1;
+	}
+
+	const pinned = process.env.ORQI_VERSION;
+	const tag = pinned ?? (await latestVersion());
+	if (!tag) {
+		console.error("cannot update: could not determine the latest release (network or GitHub API failure)");
+		return 1;
+	}
+	const version = normalizeTag(tag);
+	if (!pinned && !isNewer(version, VERSION)) {
+		console.log(`orqi ${VERSION} is already the latest version.`);
+		return 0;
+	}
+
+	const asset = assetName();
+	if (!asset) {
+		console.error(`cannot update: no published release for this platform (${process.platform}/${process.arch})`);
+		return 1;
+	}
+
+	// A sibling of the target, not $TMPDIR: rename(2) does not cross
+	// filesystems, and ~/.local/bin and /tmp are routinely different mounts.
+	// Creating it here also fails early and loudly when the install dir
+	// itself is not writable, rather than after a wasted download.
+	const installDir = dirname(target);
+	const staging = join(installDir, `.orqi-update-${process.pid}`);
+	try {
+		// Sweep by age, never by name alone: a second orqi may be mid-update in
+		// its own staging dir right now, and deleting it would fail that update.
+		for (const entry of readdirSync(installDir)) {
+			if (!entry.startsWith(".orqi-update-")) continue;
+			const path = join(installDir, entry);
+			try {
+				if (Date.now() - statSync(path).mtimeMs > STAGING_ORPHAN_MS) rmSync(path, { recursive: true, force: true });
+			} catch {
+				// Vanished under us, or another process is mid-write. Either way, leave it.
+			}
+		}
+		rmSync(staging, { recursive: true, force: true }); // ours from a previous run in this same pid slot
+		mkdirSync(staging, { recursive: true });
+
+		const tarball = join(staging, asset);
+		const url = pinned ? releaseUrl(asset, tag) : releaseUrl(asset);
+		try {
+			await $`curl -fsSL --max-time 120 ${url} -o ${tarball}`.quiet();
+		} catch {
+			console.error(`cannot update: download failed (${url})`);
+			return 1;
+		}
+
+		try {
+			// No --wildcards: it is GNU-only and bsdtar on macOS rejects it
+			// outright (AGENTS.md). Both tars treat a bare pattern as a wildcard.
+			await $`tar -xzf ${tarball} -C ${staging}`.quiet();
+		} catch {
+			console.error("cannot update: could not extract the downloaded release");
+			return 1;
+		}
+		const extracted = join(staging, "orqi");
+		chmodSync(extracted, 0o755);
+
+		// Verify before swapping: catches wrong-arch, a truncated download and a
+		// Gatekeeper kill while the file is still in staging, not after it has
+		// replaced the running binary. This is why --version must stay
+		// credential-free and network-free (AGENTS.md).
+		const verify = Bun.spawnSync([extracted, "--version"]);
+		if (!verify.success || !verify.stdout.toString().includes(version)) {
+			console.error("cannot update: downloaded binary failed verification");
+			return 1;
+		}
+
+		// renameSync, never extracting the tarball straight over the target:
+		// GNU tar truncates rather than unlinking, so overwriting a busy file
+		// is ETXTBSY on Linux, while bsdtar on macOS unlinks first and quietly
+		// succeeds - exactly why this does not shell out to install.sh. A
+		// rename is legal over a busy text file on both: the running process
+		// keeps its own inode and finishes normally.
+		renameSync(extracted, target);
+
+		console.log(`Updated orqi ${VERSION} -> ${version}`);
+		console.log(`  Release notes: https://github.com/${REPO}/releases/tag/v${version}`);
+		return 0;
+	} catch {
+		console.error("cannot update: unexpected failure during update");
+		return 1;
+	} finally {
+		rmSync(staging, { recursive: true, force: true });
+	}
 }

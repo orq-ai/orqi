@@ -30,6 +30,8 @@ import {
 	normalizeTag,
 	readCache,
 	refusal,
+	releaseUrl,
+	REPO,
 	type UpdateCache,
 	updateNote,
 	writeCache,
@@ -608,4 +610,13 @@ test("refusal names both the method and the found path for every channel orqi do
 
 	// Calling it with "binary" is a programming error, not a user-facing state.
 	expect(() => refusal("binary", "/x/orqi")).toThrow();
+});
+
+test("releaseUrl builds the same two forms install.sh does, pinned or latest", () => {
+	expect(releaseUrl("orqi-macos-arm64.tar.gz")).toBe(
+		`https://github.com/${REPO}/releases/latest/download/orqi-macos-arm64.tar.gz`,
+	);
+	expect(releaseUrl("orqi-linux-x64.tar.gz", "v0.2.0")).toBe(
+		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
+	);
 });
