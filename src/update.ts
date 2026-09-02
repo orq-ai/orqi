@@ -27,8 +27,7 @@
  * call - which of the two URL forms install.sh uses - can still be checked.
  */
 
-import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { $ } from "bun";
 import { VERSION } from "./branding.ts";
@@ -108,6 +107,10 @@ function cachePath(agentDir: string): string {
 	return join(agentDir, "update-check.json");
 }
 
+function failureMarkerPath(agentDir: string): string {
+	return join(agentDir, "update-check-failed.json");
+}
+
 function isUpdateCache(value: unknown): value is UpdateCache {
 	if (typeof value !== "object" || value === null) return false;
 	const cache = value as Record<string, unknown>;
@@ -118,123 +121,65 @@ function isUpdateCache(value: unknown): value is UpdateCache {
 	);
 }
 
-/** Missing, unreadable, unparseable or wrong-shaped all read as "no cache" - never throws. */
-export function readCache(agentDir: string): UpdateCache | undefined {
+function readFailureMarker(agentDir: string): number | undefined {
 	try {
-		const parsed = JSON.parse(readFileSync(cachePath(agentDir), "utf8"));
-		return isUpdateCache(parsed) ? parsed : undefined;
+		const marker = JSON.parse(readFileSync(failureMarkerPath(agentDir), "utf8")) as { checked_at?: unknown };
+		return typeof marker.checked_at === "number" ? marker.checked_at : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
 /**
- * Temp file + rename in the same directory, mirroring the atomic swap pattern
- * elsewhere in this codebase: a half-written cache must never be read as
- * valid, and a rename within one directory cannot land a partial file.
- *
- * `agentDir` may not exist yet: `orqi update --check` can be the very first
- * thing to run after `install.sh`, before anything else has created
- * `~/.orqi/agent` (mirrors `maybeUpdateSkills`'s mkdirSync in src/skills.ts).
+ * Merge the last successful release record with the completed-failure marker.
+ * The newer attempt owns `checked_at`, while release data comes only from a
+ * successful fetch. Missing, unreadable, or malformed files never throw.
  */
-export function writeCache(agentDir: string, cache: UpdateCache): void {
-	mkdirSync(agentDir, { recursive: true });
-	const target = cachePath(agentDir);
-	const staging = mkdtempSync(join(agentDir, ".update-cache-"));
-	const tmp = join(staging, "update-check.json");
+export function readCache(agentDir: string): UpdateCache | undefined {
+	let successful: UpdateCache | undefined;
 	try {
-		writeFileSync(tmp, JSON.stringify(cache), { mode: 0o600 });
-		renameSync(tmp, target);
+		const parsed = JSON.parse(readFileSync(cachePath(agentDir), "utf8"));
+		if (isUpdateCache(parsed) && parsed.latest !== null) successful = parsed;
+	} catch {
+		// No successful release has been cached yet.
+	}
+	const failedAt = readFailureMarker(agentDir);
+	if (failedAt === undefined || (successful && successful.checked_at >= failedAt)) return successful;
+	return {
+		checked_at: failedAt,
+		latest: successful?.latest ?? null,
+		current_at_check: successful?.current_at_check ?? VERSION,
+	};
+}
+
+/**
+ * Temp file + rename in the same directory: readers see the previous complete
+ * value or the next complete value, never a partial write.
+ */
+function writeAtomic(agentDir: string, name: string, value: string): void {
+	mkdirSync(agentDir, { recursive: true });
+	const staging = mkdtempSync(join(agentDir, ".update-cache-"));
+	const tmp = join(staging, name);
+	try {
+		writeFileSync(tmp, value, { mode: 0o600 });
+		renameSync(tmp, join(agentDir, name));
 	} finally {
 		rmSync(staging, { recursive: true, force: true });
 	}
 }
 
-const CACHE_LOCK_NAME = ".update-check.lock";
-const CACHE_LOCK_WAIT_MS = 250;
-const CACHE_LOCK_RETRY_MS = 10;
-
-interface CacheLockOwner {
-	pid: number;
-	token: string;
-}
-
-interface CacheLock {
-	owned(): boolean;
-	release(): void;
-}
-
-function readCacheLock(path: string): CacheLockOwner | undefined {
-	try {
-		const owner = JSON.parse(readFileSync(path, "utf8")) as Partial<CacheLockOwner>;
-		if (!Number.isSafeInteger(owner.pid) || (owner.pid ?? 0) <= 0 || typeof owner.token !== "string") return undefined;
-		return owner as CacheLockOwner;
-	} catch {
-		return undefined;
-	}
-}
-
-function processIsAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code !== "ESRCH";
-	}
-}
-
-/** Remove a lock only if the path still names the exact ownership token read. */
-function removeOwnedCacheLock(path: string, token: string): boolean {
-	if (readCacheLock(path)?.token !== token) return false;
-	try {
-		unlinkSync(path);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-		throw error;
-	}
-}
-
 /**
- * Serialize the cache's read-modify-write transition across orqi processes.
- * The owner record is written before an atomic hard-link claims the stable lock
- * path, so contenders never see a half-written owner. A live PID is never
- * evicted based on elapsed wall time; a dead owner is reclaimed by token.
+ * The successful cache is the last release GitHub returned. A failed check
+ * writes only this timestamp marker, so it cannot overwrite release data from
+ * a concurrent successful process.
  */
-async function acquireCacheLock(agentDir: string): Promise<CacheLock | undefined> {
-	mkdirSync(agentDir, { recursive: true });
-	const lock = join(agentDir, CACHE_LOCK_NAME);
-	const owner: CacheLockOwner = { pid: process.pid, token: randomUUID() };
-	const candidate = join(agentDir, `.update-check-lock-${owner.pid}-${owner.token}`);
-	writeFileSync(candidate, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
-	const deadline = Date.now() + CACHE_LOCK_WAIT_MS;
-	try {
-		for (;;) {
-			try {
-				linkSync(candidate, lock);
-				return {
-					owned: () => readCacheLock(lock)?.token === owner.token,
-					release: () => {
-						removeOwnedCacheLock(lock, owner.token);
-					},
-				};
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			}
+function writeFailureMarker(agentDir: string, checkedAt: number): void {
+	writeAtomic(agentDir, "update-check-failed.json", JSON.stringify({ checked_at: checkedAt }));
+}
 
-			const existing = readCacheLock(lock);
-			if (existing && !processIsAlive(existing.pid)) {
-				removeOwnedCacheLock(lock, existing.token);
-				continue;
-			}
-
-			const remaining = deadline - Date.now();
-			if (remaining <= 0) return undefined;
-			await Bun.sleep(Math.min(CACHE_LOCK_RETRY_MS, remaining));
-		}
-	} finally {
-		rmSync(candidate, { force: true });
-	}
+/** The public writer owns the atomic last-successful-release record. */
+export function writeCache(agentDir: string, cache: UpdateCache): void {
+	writeAtomic(agentDir, "update-check.json", JSON.stringify(cache));
 }
 
 /**
@@ -338,9 +283,10 @@ export async function latestVersion(timeoutMs = FETCH_TIMEOUT_MS): Promise<strin
 }
 
 /**
- * Fetch latest → persist the completed attempt → return the fetched answer.
- * A completed failed check advances the TTL while preserving a previously
- * known release; an interrupted or unresolved fetch never reaches this write.
+ * Fetch latest → atomically persist either release data or a failure timestamp
+ * → return the fetched answer. The split targets are conflict-free: a failed
+ * process never writes `update-check.json`, so it cannot erase a concurrent
+ * success. An interrupted or unresolved fetch never reaches either write.
  */
 export async function checkNow(
 	agentDir: string,
@@ -348,26 +294,14 @@ export async function checkNow(
 ): Promise<string | undefined> {
 	const latest = await fetchLatest();
 	try {
-		const lock = await acquireCacheLock(agentDir);
-		if (lock) {
-			try {
-				const cached = readCache(agentDir);
-				const next = {
-					checked_at: Date.now(),
-					latest: latest ?? cached?.latest ?? null,
-					current_at_check: VERSION,
-				};
-				// Ownership may be lost only through external interference; verify at
-				// the commit boundary so this process never writes after displacement.
-				if (lock.owned()) writeCache(agentDir, next);
-			} finally {
-				lock.release();
-			}
+		if (latest) {
+			writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+		} else {
+			writeFailureMarker(agentDir, Date.now());
 		}
 	} catch {
-		// A direct check still has a useful answer when only persistence fails.
-		// Leaving the old/missing cache untouched also makes background checks
-		// retry next run instead of claiming the failed write completed.
+		// Persistence is best-effort. A successful direct check still returns its
+		// answer, and without a new timestamp the next launch retries.
 	}
 	return latest;
 }

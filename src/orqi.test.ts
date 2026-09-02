@@ -1,7 +1,7 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceOfKey } from "./auth.ts";
@@ -686,10 +686,12 @@ test("a failed update check preserves the last known release", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-update-preserve-"));
 	try {
 		writeCache(dir, { checked_at: 1, latest: "9.9.9", current_at_check: VERSION });
+		const successfulRecord = readFileSync(join(dir, "update-check.json"), "utf8");
 		expect(await checkNow(dir, async () => undefined)).toBeUndefined();
 		const cache = readCache(dir);
 		expect(cache?.latest).toBe("9.9.9");
 		expect(cache?.checked_at).toBeGreaterThan(1);
+		expect(readFileSync(join(dir, "update-check.json"), "utf8")).toBe(successfulRecord);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -697,48 +699,20 @@ test("a failed update check preserves the last known release", async () => {
 
 test("a failed update check cannot overwrite a concurrent successful check", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-update-concurrent-"));
-	const lock = join(dir, ".update-check.lock");
 	try {
-		mkdirSync(lock);
-		let settled = false;
-		const failed = checkNow(dir, async () => undefined).finally(() => {
-			settled = true;
-		});
+		let finishFailed: (latest: undefined) => void = () => {};
+		const failed = checkNow(dir, () => new Promise((resolve) => {
+			finishFailed = resolve;
+		}));
 
-		await Bun.sleep(25);
-		expect(settled).toBe(false);
-		writeCache(dir, { checked_at: Date.now(), latest: "9.9.9", current_at_check: VERSION });
-		rmSync(lock, { recursive: true });
-
+		expect(await checkNow(dir, async () => "9.9.9")).toBe("9.9.9");
+		const successfulRecord = readFileSync(join(dir, "update-check.json"), "utf8");
+		await Bun.sleep(2);
+		finishFailed(undefined);
 		await failed;
-		expect(readCache(dir)?.latest).toBe("9.9.9");
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
-test("a completed check recovers a stale cache lock left by a crashed process", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "orqi-update-stale-lock-"));
-	const lock = join(dir, ".update-check.lock");
-	try {
-		writeFileSync(lock, JSON.stringify({ pid: 2_147_483_647, token: "dead-owner" }));
-		expect(await checkNow(dir, async () => "9.9.9")).toBe("9.9.9");
 		expect(readCache(dir)?.latest).toBe("9.9.9");
-		expect(existsSync(lock)).toBe(false);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test("an aged cache lock owned by a live process is never reclaimed", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "orqi-update-live-lock-"));
-	const lock = join(dir, ".update-check.lock");
-	try {
-		writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "live-owner" }));
-		utimesSync(lock, new Date(0), new Date(0));
-		expect(await checkNow(dir, async () => "9.9.9")).toBe("9.9.9");
-		expect(readCache(dir)).toBeUndefined();
-		expect(JSON.parse(readFileSync(lock, "utf8"))).toEqual({ pid: process.pid, token: "live-owner" });
+		expect(readFileSync(join(dir, "update-check.json"), "utf8")).toBe(successfulRecord);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
