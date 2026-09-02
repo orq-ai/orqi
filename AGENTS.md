@@ -87,10 +87,12 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   still reaches the model because it is a second argv entry, not the first.
 - **The update swaps by `renameSync`, never by extracting the tarball over the running binary.**
   GNU tar truncates a file it is overwriting rather than unlinking it first, so `tar -xzf` onto a
-  busy executable is `ETXTBSY` on Linux; bsdtar on macOS unlinks first and succeeds. Shelling out
-  to `install.sh` would therefore self-update on macOS and fail on every Linux box - `runUpdate` in
-  `src/update.ts` downloads and extracts into a staging dir, then renames the result onto the
-  target, which is legal over a busy file on both platforms.
+  busy executable is `ETXTBSY` on Linux; bsdtar on macOS unlinks first and succeeds. Both
+  `runUpdate` and `install.sh` now download and extract beside the target, verify the staged binary,
+  and rename it into place, which is legal over a busy file on both platforms. They remain separate
+  implementations so the self-updater stays self-contained and never invokes a shell. Cross-file
+  tests and shared invariants around tags, assets, verification and staging mitigate that accepted
+  duplication.
 - **The update's staging dir is a sibling of the binary, not `$TMPDIR`.** `rename(2)` does not
   cross filesystems, and `~/.local/bin` and `/tmp` are routinely different mounts. Creating the
   staging dir there also proves the install directory is writable before anything downloads,

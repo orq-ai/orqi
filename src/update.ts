@@ -103,6 +103,11 @@ export interface UpdateCache {
 	current_at_check: string;
 }
 
+/** Persisted release data exists only after a successful GitHub response. */
+export interface SuccessfulUpdateCache extends UpdateCache {
+	latest: string;
+}
+
 function cachePath(agentDir: string): string {
 	return join(agentDir, "update-check.json");
 }
@@ -111,12 +116,12 @@ function failureMarkerPath(agentDir: string): string {
 	return join(agentDir, "update-check-failed.json");
 }
 
-function isUpdateCache(value: unknown): value is UpdateCache {
+function isSuccessfulUpdateCache(value: unknown): value is SuccessfulUpdateCache {
 	if (typeof value !== "object" || value === null) return false;
 	const cache = value as Record<string, unknown>;
 	return (
 		typeof cache.checked_at === "number" &&
-		(typeof cache.latest === "string" || cache.latest === null) &&
+		typeof cache.latest === "string" &&
 		typeof cache.current_at_check === "string"
 	);
 }
@@ -136,10 +141,10 @@ function readFailureMarker(agentDir: string): number | undefined {
  * successful fetch. Missing, unreadable, or malformed files never throw.
  */
 export function readCache(agentDir: string): UpdateCache | undefined {
-	let successful: UpdateCache | undefined;
+	let successful: SuccessfulUpdateCache | undefined;
 	try {
 		const parsed = JSON.parse(readFileSync(cachePath(agentDir), "utf8"));
-		if (isUpdateCache(parsed) && parsed.latest !== null) successful = parsed;
+		if (isSuccessfulUpdateCache(parsed)) successful = parsed;
 	} catch {
 		// No successful release has been cached yet.
 	}
@@ -178,7 +183,7 @@ function writeFailureMarker(agentDir: string, checkedAt: number): void {
 }
 
 /** The public writer owns the atomic last-successful-release record. */
-export function writeCache(agentDir: string, cache: UpdateCache): void {
+export function writeCache(agentDir: string, cache: SuccessfulUpdateCache): void {
 	writeAtomic(agentDir, "update-check.json", JSON.stringify(cache));
 }
 

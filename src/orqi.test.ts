@@ -34,6 +34,7 @@ import {
 	REPO,
 	runUpdate,
 	checkNow,
+	type SuccessfulUpdateCache,
 	type UpdateCache,
 	pendingUpdate,
 	writeCache,
@@ -593,7 +594,7 @@ test("update cache round-trips through disk and never throws on garbage", () => 
 	try {
 		expect(readCache(dir)).toBeUndefined(); // nothing written yet
 
-		const cache: UpdateCache = { checked_at: Date.now(), latest: "0.2.0", current_at_check: "0.1.0" };
+		const cache: SuccessfulUpdateCache = { checked_at: Date.now(), latest: "0.2.0", current_at_check: "0.1.0" };
 		writeCache(dir, cache);
 		expect(readCache(dir)).toEqual(cache);
 		expect(statSync(join(dir, "update-check.json")).mode & 0o777).toBe(0o600);
@@ -648,7 +649,7 @@ test("writeCache creates a fresh ~/.orqi/agent on the first-ever run", () => {
 	const agentDir = join(root, "agent");
 	try {
 		expect(existsSync(agentDir)).toBe(false);
-		const cache: UpdateCache = { checked_at: Date.now(), latest: "0.2.0", current_at_check: "0.1.0" };
+		const cache: SuccessfulUpdateCache = { checked_at: Date.now(), latest: "0.2.0", current_at_check: "0.1.0" };
 		expect(() => writeCache(agentDir, cache)).not.toThrow();
 		expect(readCache(agentDir)).toEqual(cache);
 	} finally {

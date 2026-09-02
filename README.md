@@ -40,7 +40,7 @@ never runs automatically.
 | | |
 |---|---|
 | **orq AI Router** | The only model provider, so `/model` offers exactly the models the workspace has enabled |
-| **5 workspace commands** | `/tools`, `/whoami`, `/workspace [key]`, `/doctor`, `/whatsnew` (the orq.ai changelog) |
+| **6 workspace commands** | `/tools`, `/whoami`, `/workspace [key]`, `/doctor`, `/whatsnew` (the orq.ai changelog), `/update` |
 | **43 orq MCP tools** | Every tool the workspace's MCP server exposes today, minus three invocation surfaces ([why](ARCHITECTURE.md#tools)). Wrapped as native pi tools with an `orq_` prefix. Results render as a one-line summary (`23 items · 6.0 KB`); `ctrl+o` expands to pretty-printed JSON. The model always receives the full payload |
 | **22 skills** | 15 from [orq-ai/assistant-plugins](https://github.com/orq-ai/assistant-plugins) plus the 7 orqi skills, vendored in `skills/`. The upstream 15 refresh themselves: orqi checks once a day and picks up new ones without waiting for a release |
 | **3 subagents** | `investigator`, `analyst`, `docs`, in-process, each with a narrow orq tool subset |
