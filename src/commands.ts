@@ -5,10 +5,13 @@
  * about is who you are on orq and which workspace you are pointed at.
  */
 
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { runOrq } from "./auth.ts";
-import { CHANGELOG_URL, headerLines, type HeaderInfo } from "./branding.ts";
+import { CHANGELOG_URL, headerLines, type HeaderInfo, VERSION } from "./branding.ts";
+import { isNewer, latestVersion, writeCache } from "./update.ts";
 
 /** Called after a workspace switch: the workspace token changed. */
 export type ReconnectFn = () => Promise<string>;
@@ -38,7 +41,12 @@ export function groupTools(names: string[]): string {
 const HEADER_ENTRY = "orqi-header";
 const WORKSPACE_STATUS = "orq-workspace";
 
-export function orqCommands(reconnect: ReconnectFn, toolNames: string[], header: HeaderInfo) {
+export function orqCommands(
+	reconnect: ReconnectFn,
+	toolNames: string[],
+	header: HeaderInfo,
+	agentDir = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"),
+) {
 	const showWorkspace = (ctx: { ui: { setStatus(key: string, text: string | undefined): void } }) =>
 		ctx.ui.setStatus(WORKSPACE_STATUS, header.workspace ? `orq:${header.workspace}` : undefined);
 
@@ -121,6 +129,29 @@ export function orqCommands(reconnect: ReconnectFn, toolNames: string[], header:
 			description: "inspect orq config, auth state and endpoint reachability",
 			handler: async (_args, ctx) => {
 				report(ctx, runOrq(["doctor"]));
+			},
+		});
+
+		// Check-only, deliberately: swapping the binary here would succeed while
+		// this process keeps running the old code, so the session would tell the
+		// user they are updated when the running binary is not. `orqi update`
+		// outside the session (a fresh process) does the actual swap.
+		pi.registerCommand("update", {
+			description: "check for a newer orqi release",
+			handler: async (_args, ctx) => {
+				const latest = await latestVersion();
+				if (!latest) {
+					ctx.ui.notify("could not check for updates (network or GitHub API failure)", "warning");
+					return;
+				}
+				// Force-refreshes past the daily TTL: an explicit /update is a direct
+				// request for the current answer, not the cached one.
+				writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+				if (isNewer(latest, VERSION)) {
+					ctx.ui.notify(`orqi ${VERSION} → ${latest} · run: orqi update`);
+				} else {
+					ctx.ui.notify(`orqi ${VERSION} is already the latest version.`);
+				}
 			},
 		});
 	};

@@ -83,6 +83,8 @@ export interface HeaderInfo {
 	/** model · counts */
 	status: string;
 	cwd: string;
+	/** Newer version reported by the update cache, if any; adds a footer line naming it. */
+	update?: string;
 }
 
 /** Terminal size at render time, or a safe default when it cannot be read. */
@@ -112,6 +114,10 @@ export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
 		"",
 		`${indent}${color(HINTS, MUTED)}`,
 		`${indent}${color(`changelog ${CHANGELOG_URL}`, MUTED)}`,
+		// Only when a check actually found something newer: most sessions never
+		// see this line, matching orqi update's own "check daily, tell, never
+		// auto-install" contract.
+		...(info.update ? [`${indent}${color("update available · run: orqi update", MUTED)}`] : []),
 	];
 	const logo = ORQI_LOGO.map((row) => {
 		return color(row, PULSE_ORANGE);

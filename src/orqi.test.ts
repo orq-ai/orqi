@@ -385,6 +385,23 @@ test("the header uses the ORQI splash", () => {
 	for (const line of art) expect(line.length).toBeLessThanOrEqual(100);
 });
 
+test("the header shows an update line only when a newer release is cached", () => {
+	// The footer must stay silent for the common case (no update, or a check
+	// that hasn't run yet) and the six-row logo must survive either way - a
+	// regression here would either nag every session or silently drop the notice.
+	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	const base = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
+
+	const withoutUpdate = strip(headerLines(base, { cols: 100, rows: 40 }));
+	expect(withoutUpdate).not.toContain("update available");
+
+	const withUpdate = strip(headerLines({ ...base, update: "9.9.9" }, { cols: 100, rows: 40 }));
+	expect(withUpdate).toContain("update available · run: orqi update");
+
+	const art = withUpdate.split("\n").filter((line) => /[█▀▄]/.test(line));
+	expect(art.length).toBe(6);
+});
+
 test("the header entry is appended on fresh sessions only", () => {
 	// Entries are session-persisted: appending on resume would stack a second
 	// header onto a transcript that already has one.
