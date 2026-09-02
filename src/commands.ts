@@ -11,7 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { runOrq } from "./auth.ts";
 import { CHANGELOG_URL, headerLines, type HeaderInfo, VERSION } from "./branding.ts";
-import { isNewer, latestVersion, writeCache } from "./update.ts";
+import { checkNow, isNewer } from "./update.ts";
 
 /** Called after a workspace switch: the workspace token changed. */
 export type ReconnectFn = () => Promise<string>;
@@ -139,14 +139,14 @@ export function orqCommands(
 		pi.registerCommand("update", {
 			description: "check for a newer orqi release",
 			handler: async (_args, ctx) => {
-				const latest = await latestVersion();
+				// checkNow always fetches - an explicit /update is a direct request
+				// for the current answer, not the cached one, so there is no
+				// checkDue gate here (unlike maybeCheckUpdate's daily background check).
+				const latest = await checkNow(agentDir);
 				if (!latest) {
 					ctx.ui.notify("could not check for updates (network or GitHub API failure)", "warning");
 					return;
 				}
-				// Force-refreshes past the daily TTL: an explicit /update is a direct
-				// request for the current answer, not the cached one.
-				writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
 				if (isNewer(latest, VERSION)) {
 					ctx.ui.notify(`orqi ${VERSION} → ${latest} · run: orqi update`);
 				} else {

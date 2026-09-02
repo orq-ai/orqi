@@ -10,7 +10,7 @@
  * costs nothing because the worst acceptable outcome is "the notice is a day
  * stale", never a slow or broken startup.
  *
- * The swap itself (Task 2) replaces the binary with `renameSync`, never by
+ * The swap itself replaces the binary with `renameSync`, never by
  * extracting a tarball over the running executable: GNU tar truncates rather
  * than unlinking, so overwriting a busy file is ETXTBSY on Linux while bsdtar
  * on macOS unlinks first and quietly succeeds. A rename lands the new file
@@ -27,7 +27,7 @@
  * call - which of the two URL forms install.sh uses - can still be checked.
  */
 
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { $ } from "bun";
 import { VERSION } from "./branding.ts";
@@ -80,10 +80,15 @@ export function normalizeTag(tag: string): string {
  * never newer - an unparsable "latest" must never trigger an update prompt.
  */
 export function isNewer(latest: string, current: string): boolean {
+	// Number.parseInt("9garbage", 10) is 9, so a shape check has to run before
+	// parsing - otherwise a garbled tag like "9garbage.0.0" or a prerelease
+	// suffix like "0.9.0-rc1" would parse its leading digits and compare as a
+	// real version instead of reading as unparsable.
+	const STRICT = /^\d+\.\d+\.\d+$/;
+	if (!STRICT.test(latest) || !STRICT.test(current)) return false;
 	const parse = (v: string) => v.split(".").map((part) => Number.parseInt(part, 10));
 	const a = parse(latest);
 	const b = parse(current);
-	if (a.some(Number.isNaN) || b.some(Number.isNaN) || a.length === 0 || b.length === 0) return false;
 	const len = Math.max(a.length, b.length);
 	for (let i = 0; i < len; i++) {
 		const x = a[i] ?? 0;
@@ -156,14 +161,19 @@ export function checkDue(cache: UpdateCache | undefined, env: NodeJS.ProcessEnv 
 }
 
 /**
- * Short header note - it rides in the `" · "`-joined status list beside
- * things like the skills note, so it stays terse rather than descriptive.
+ * `note` rides in the `" · "`-joined status list beside things like the
+ * skills note, so it stays terse rather than descriptive. `latest` is the
+ * same underlying fact, unprefixed, for the footer's own "update available"
+ * line - one derivation instead of two so their gating cannot diverge.
  */
-export function updateNote(cache: UpdateCache | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function updateNote(
+	cache: UpdateCache | undefined,
+	env: NodeJS.ProcessEnv = process.env,
+): { note: string; latest: string } | undefined {
 	if (env.ORQI_UPDATE_CHECK === "0") return undefined;
 	if (!cache) return undefined;
 	if (!isNewer(cache.latest, VERSION)) return undefined;
-	return `update v${cache.latest}`;
+	return { note: `update v${cache.latest}`, latest: cache.latest };
 }
 
 export interface UpdateStatus {
@@ -183,25 +193,22 @@ export function formatStatus(status: UpdateStatus, json: boolean): string {
 }
 
 /**
- * Called with "binary" is a programming error - there is nothing to refuse,
- * the caller should be running the swap instead. Throwing rather than
- * returning an empty string surfaces that mistake immediately rather than
- * printing a blank refusal to the user.
+ * "binary" is excluded from the type, not checked at runtime: there is
+ * nothing to refuse for a method that can self-update, and the single call
+ * site is already gated by `if (method !== "binary")`, so the impossible
+ * case is now a compile error instead of a thrown-and-caught one.
  */
-export function refusal(method: InstallMethod, execPath: string): string {
+export function refusal(method: Exclude<InstallMethod, "binary">, execPath: string): string {
 	if (method === "homebrew") {
 		return `cannot update: this orqi came from Homebrew (found at ${execPath})\n  brew upgrade orq-ai/tap/orqi`;
 	}
 	if (method === "npm") {
 		return `cannot update: this orqi came from npm (found at ${execPath})\n  npm install -g @orq-ai/orqi@latest`;
 	}
-	if (method === "source") {
-		return (
-			`cannot update: this is a source checkout, not an installed binary (running under ${execPath})\n` +
-			"  git pull  (or: curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh)"
-		);
-	}
-	throw new Error(`refusal() called with method "binary": ${execPath} can self-update, there is nothing to refuse`);
+	return (
+		`cannot update: this is a source checkout, not an installed binary (running under ${execPath})\n` +
+		"  git pull  (or: curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh)"
+	);
 }
 
 const FETCH_TIMEOUT_MS = 10_000;
@@ -233,18 +240,27 @@ export async function latestVersion(timeoutMs = FETCH_TIMEOUT_MS): Promise<strin
 }
 
 /**
+ * Fetch latest → write the cache only on a successful parse → return it. Used
+ * to be written out three times (`maybeCheckUpdate`, `runUpdate`'s `--check`
+ * branch, and `/update` in src/commands.ts); each caller keeps its own gating
+ * (or none) and its own presentation on top of this one fact-gathering step.
+ */
+export async function checkNow(agentDir: string): Promise<string | undefined> {
+	const latest = await latestVersion();
+	if (latest) writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+	return latest;
+}
+
+/**
  * Fire-and-forget daily check, mirroring `maybeUpdateSkills` exactly: gated by
- * `checkDue`, silent on every failure, and the cache is written only after a
- * successful parse - never on a failed fetch. Marking a failed attempt would
- * pin the check for 24h on a check that never actually happened, the same
- * reasoning as the skills `last-check` marker (src/skills.ts).
+ * `checkDue`, silent on every failure. Marking a failed attempt would pin the
+ * check for 24h on a check that never actually happened, the same reasoning
+ * as the skills `last-check` marker (src/skills.ts).
  */
 export async function maybeCheckUpdate(agentDir: string): Promise<void> {
 	try {
 		if (!checkDue(readCache(agentDir))) return;
-		const latest = await latestVersion();
-		if (!latest) return;
-		writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+		await checkNow(agentDir);
 	} catch {
 		// Silent by design; the header note and /doctor reflect whatever landed.
 	}
@@ -252,9 +268,9 @@ export async function maybeCheckUpdate(agentDir: string): Promise<void> {
 
 const USAGE = `orqi update - replace this binary with the latest published release
 
-  orqi update           download and install the latest release
-  orqi update --check   report what is available, change nothing
-  orqi update --json    machine-readable output
+  orqi update                  download and install the latest release
+  orqi update --check          report what is available, change nothing
+  orqi update --check --json   machine-readable output (requires --check)
 
 ORQI_VERSION pins the release tag to install.`;
 
@@ -278,6 +294,25 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 	}
 	const check = args.includes("--check");
 	const json = args.includes("--json");
+	// --json without --check would otherwise fall through to the real update
+	// path below and perform a live binary swap while printing human-readable
+	// text throughout - the flag has to gate on --check, not stand alone.
+	if (json && !check) {
+		console.error(USAGE);
+		return 1;
+	}
+
+	// Validated first, ahead of realpathSync/installMethod and any network or
+	// filesystem work: ORQI_VERSION is interpolated straight into the release
+	// URL later (see releaseUrl), so an unchecked "../../other-repo/v1" would
+	// resolve to a different repo's release asset on github.com. Setting a
+	// victim's environment already implies code execution, so this is cheap
+	// insurance rather than closing a real hole.
+	const pinned = process.env.ORQI_VERSION;
+	if (pinned !== undefined && !/^v?\d+\.\d+\.\d+$/.test(pinned)) {
+		console.error(`cannot update: ORQI_VERSION "${pinned}" is not a valid release tag (expected e.g. "0.2.0" or "v0.2.0")`);
+		return 1;
+	}
 
 	// This is a foreground command: a throw here (a vanished /proc/self/exe, an
 	// unreadable symlink) should read as a one-line reason like every other
@@ -293,8 +328,7 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 	}
 
 	if (check) {
-		const latest = await latestVersion();
-		if (latest) writeCache(agentDir, { checked_at: Date.now(), latest, current_at_check: VERSION });
+		const latest = await checkNow(agentDir);
 		const status: UpdateStatus = {
 			current: VERSION,
 			install_method: method,
@@ -314,17 +348,6 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 		return 1;
 	}
 
-	const pinned = process.env.ORQI_VERSION;
-	// ORQI_VERSION is interpolated straight into the release URL below (see
-	// releaseUrl). Setting a victim's environment already implies code
-	// execution, so this is cheap insurance rather than closing a real hole:
-	// without it, a value containing "../" would resolve to another repo's
-	// release asset on github.com, which then gets executed and renamed over
-	// the user's binary.
-	if (pinned !== undefined && !/^v?\d+\.\d+\.\d+$/.test(pinned)) {
-		console.error(`cannot update: ORQI_VERSION "${pinned}" is not a valid release tag (expected e.g. "0.2.0" or "v0.2.0")`);
-		return 1;
-	}
 	const tag = pinned ?? (await latestVersion());
 	if (!tag) {
 		console.error("cannot update: could not determine the latest release (network or GitHub API failure)");
@@ -400,6 +423,16 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 			console.error(`cannot update: the archive did not contain an orqi binary: ${asset}`);
 			return 1;
 		}
+		// lstatSync, not existsSync/statSync: those follow symlinks, and so do
+		// chmodSync, Bun.spawnSync and renameSync below. A tarball entry named
+		// "orqi" that is a symlink out of the staging dir would otherwise get
+		// chmod'd, executed and renamed over the user's binary without ever
+		// having been a real file this code extracted. Requiring a regular file
+		// makes that whole path impossible rather than merely unlikely.
+		if (!lstatSync(extracted).isFile()) {
+			console.error(`cannot update: the archive did not contain an orqi binary: ${asset}`);
+			return 1;
+		}
 		chmodSync(extracted, 0o755);
 
 		// Verify before swapping: catches wrong-arch, a truncated download and a
@@ -409,7 +442,10 @@ export async function runUpdate(args: string[], agentDir: string): Promise<numbe
 		// too: the download has --max-time 120, but a hung downloaded binary
 		// would otherwise hang `orqi update` forever with no such bound.
 		const verify = Bun.spawnSync([extracted, "--version"], { timeout: 10_000 });
-		if (!verify.success || !verify.stdout.toString().includes(version)) {
+		// Exact compare, not .includes: "0.1.0" is a substring of "0.10.0" and of
+		// a truncated line, either of which would let a wrong-version download
+		// pass verification. --version prints VERSION bare, so .trim() is enough.
+		if (!verify.success || verify.stdout.toString().trim() !== version) {
 			console.error("cannot update: downloaded binary failed verification");
 			return 1;
 		}

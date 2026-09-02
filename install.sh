@@ -110,6 +110,13 @@ esac
 
 asset="orqi-$PLATFORM.tar.gz"
 if [ -n "${ORQI_VERSION:-}" ]; then
+	# Interpolated straight into the release URL below, same as src/update.ts
+	# does for the equivalent env var: an unchecked "../../other-repo/v1"
+	# would resolve to a different repo's release asset on github.com.
+	if ! echo "$ORQI_VERSION" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+		err "ORQI_VERSION \"$ORQI_VERSION\" is not a valid release tag (expected e.g. \"0.2.0\" or \"v0.2.0\")"
+		exit 1
+	fi
 	url="https://github.com/$REPO/releases/download/$ORQI_VERSION/$asset"
 else
 	url="https://github.com/$REPO/releases/latest/download/$asset"
@@ -139,7 +146,11 @@ mkdir -p "$INSTALL_DIR"
 tmp=$(mktemp -d "$INSTALL_DIR/.orqi-install-XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
-if ! curl -fSL --progress-bar -o "$tmp/$asset" "$url"; then
+# --max-time bounds this the same way runUpdate's curl does (src/update.ts):
+# the staging-dir sweep there treats any ".orqi-install-*"/".orqi-update-*"
+# dir older than an hour as orphaned, and age is only a safe proxy for that
+# if the download itself cannot run indefinitely.
+if ! curl -fSL --max-time 120 --progress-bar -o "$tmp/$asset" "$url"; then
 	err "download failed: $url"
 	err "check https://github.com/$REPO/releases for available versions"
 	exit 1

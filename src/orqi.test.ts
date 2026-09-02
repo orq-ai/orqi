@@ -531,12 +531,25 @@ test("installMethod tells a brew-managed binary from a plain one", () => {
 	expect(installMethod("/Users/x/.bun/bin/bun")).toBe("source"); // basename isn't "orqi"
 });
 
-test("assetName covers exactly what install.sh builds tarballs for", () => {
-	// Asserted against a literal list, not derived, so this file and
-	// install.sh cannot silently drift apart.
-	expect(assetName("darwin", "arm64")).toBe("orqi-macos-arm64.tar.gz");
-	expect(assetName("darwin", "x64")).toBe("orqi-macos-x64.tar.gz");
-	expect(assetName("linux", "x64")).toBe("orqi-linux-x64.tar.gz");
+test("assetName covers exactly what install.sh's platform table builds tarballs for", () => {
+	// Scrapes install.sh's `uname -s`-`uname -m` case arms rather than
+	// asserting a second copy of the same literals here - that would only
+	// prove this file agrees with itself. This is the same technique as "our
+	// commands never collide with a pi built-in" above: read the other file,
+	// extract its names, and check them through the function under test.
+	const script = readFileSync(join(import.meta.dir, "..", "install.sh"), "utf8");
+	const armPattern = /^\s*([A-Za-z]+)-([A-Za-z0-9_]+)\)\s*PLATFORM=(\S+)\s*;;/gm;
+	const arms = [...script.matchAll(armPattern)].map((m) => ({ uname: m[1], mach: m[2], platform: m[3] }));
+	expect(arms.length).toBeGreaterThan(0); // the scrape still finds the table
+
+	const UNAME_TO_NODE_PLATFORM: Record<string, NodeJS.Platform> = { Darwin: "darwin", Linux: "linux" };
+	const MACHINE_TO_NODE_ARCH: Record<string, string> = { arm64: "arm64", x86_64: "x64" };
+	for (const arm of arms) {
+		const platform = UNAME_TO_NODE_PLATFORM[arm.uname];
+		const arch = MACHINE_TO_NODE_ARCH[arm.mach];
+		expect(assetName(platform, arch)).toBe(`orqi-${arm.platform}.tar.gz`);
+	}
+
 	expect(assetName("linux", "arm64")).toBeUndefined();
 	expect(assetName("win32", "x64")).toBeUndefined();
 });
@@ -552,6 +565,11 @@ test("isNewer compares versions numerically, not lexically", () => {
 	expect(isNewer("0.9.0", "0.9.0")).toBe(false); // equal is not newer
 	expect(isNewer("garbage", "0.9.0")).toBe(false);
 	expect(isNewer("0.9.0", "garbage")).toBe(false);
+	// Number.parseInt("9garbage", 10) is 9, so a naive parse would read this as
+	// newer than 1.0.0. A version that does not parse must never be newer.
+	expect(isNewer("9garbage.0.0", "1.0.0")).toBe(false);
+	// A prerelease-shaped tag also fails the strict three-part shape check.
+	expect(isNewer("0.9.0-rc1", "0.8.0")).toBe(false);
 });
 
 test("the daily update check is due only when it should be", () => {
@@ -594,7 +612,10 @@ test("updateNote is short and only fires when a real newer version is cached", (
 	const newer: UpdateCache = { checked_at: Date.now(), latest: "999.0.0", current_at_check: VERSION };
 	const stale: UpdateCache = { checked_at: Date.now(), latest: VERSION, current_at_check: VERSION };
 
-	expect(updateNote(newer, {})).toBe("update v999.0.0");
+	// One return value drives both the header status line ("note") and the
+	// footer's "update available" line ("latest"), so the two surfaces read
+	// the same fact instead of two separately-gated derivations of it.
+	expect(updateNote(newer, {})).toEqual({ note: "update v999.0.0", latest: "999.0.0" });
 	expect(updateNote(stale, {})).toBeUndefined(); // not newer: nothing to say
 	expect(updateNote(undefined, {})).toBeUndefined(); // no cache: nothing to say
 	expect(updateNote(newer, { ORQI_UPDATE_CHECK: "0" })).toBeUndefined(); // pinned: stay silent
@@ -647,6 +668,38 @@ test("runUpdate rejects an unknown flag before touching disk or network", () => 
 	});
 });
 
+test("runUpdate rejects --json without --check before touching disk or network", () => {
+	// Without this gate, `orqi update --json` (no --check) falls through to the
+	// live update path and performs a real binary swap while printing
+	// human-readable text - the model for this is the unknown-flag test above.
+	const untouchedDir = join(tmpdir(), "orqi-update-should-not-exist-json");
+	rmSync(untouchedDir, { recursive: true, force: true });
+	return runUpdate(["--json"], untouchedDir).then((code) => {
+		expect(code).toBe(1);
+		expect(existsSync(untouchedDir)).toBe(false);
+	});
+});
+
+test("runUpdate rejects a traversal-shaped ORQI_VERSION before touching disk or network", () => {
+	// The comment on this guard in src/update.ts calls it security-relevant
+	// (an unchecked value resolves to another repo's release asset on
+	// github.com), so it needs its own test rather than riding along with the
+	// happy path.
+	const untouchedDir = join(tmpdir(), "orqi-update-should-not-exist-traversal");
+	rmSync(untouchedDir, { recursive: true, force: true });
+	const prior = process.env.ORQI_VERSION;
+	process.env.ORQI_VERSION = "../../other-repo/v1";
+	return runUpdate([], untouchedDir)
+		.then((code) => {
+			expect(code).toBe(1);
+			expect(existsSync(untouchedDir)).toBe(false);
+		})
+		.finally(() => {
+			if (prior === undefined) delete process.env.ORQI_VERSION;
+			else process.env.ORQI_VERSION = prior;
+		});
+});
+
 test("the `update` argv string and the /update command registration stay in sync", () => {
 	// A rename of either half would silently break `orqi update`: main.ts
 	// would fall through to booting a session with "update" as the prompt, or
@@ -679,8 +732,8 @@ test("refusal names both the method and the found path for every channel orqi do
 	expect(refusal("source", srcPath)).toContain(srcPath);
 	expect(refusal("source", srcPath)).toContain("git pull");
 
-	// Calling it with "binary" is a programming error, not a user-facing state.
-	expect(() => refusal("binary", "/x/orqi")).toThrow();
+	// "binary" is no longer a legal argument: Exclude<InstallMethod, "binary">
+	// makes the impossible case a compile error instead of a runtime throw.
 });
 
 test("releaseUrl builds the same two forms install.sh does, pinned or latest", () => {
