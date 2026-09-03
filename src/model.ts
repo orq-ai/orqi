@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { API_BASE_URL, ROUTER_URL } from "./auth.ts";
+import { apiBaseUrl, routerUrl } from "./auth.ts";
 
 export const PROVIDER_ID = "orq";
 export const DEFAULT_MODEL = process.env.ORQI_MODEL ?? "openai/gpt-5.6-terra";
@@ -36,7 +36,7 @@ const FALLBACK: ModelInfo[] = [{ id: DEFAULT_MODEL, responses: true }];
  * without it (search models, embeddings) are skipped even when enabled.
  */
 async function fetchModels(token: string): Promise<ModelInfo[]> {
-	const res = await fetch(`${API_BASE_URL}/v2/models`, {
+	const res = await fetch(`${apiBaseUrl()}/v2/models`, {
 		headers: { Authorization: `Bearer ${token}` },
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 	});
@@ -156,7 +156,7 @@ export async function createOrqModelRuntime(agentDir: string, token: string): Pr
 			{
 				providers: {
 					[PROVIDER_ID]: {
-						baseUrl: ROUTER_URL,
+						baseUrl: routerUrl(),
 						apiKey: "$ORQ_API_KEY",
 						api: "openai-completions",
 						models: models.map(routerModelEntry),

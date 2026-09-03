@@ -74,6 +74,10 @@ Both are delegated to the [orq CLI](https://github.com/orq-ai/orq-cli) rather th
 `~/.orq/sessions/` since CLI 5.3, per profile before), so which login is in play follows `ORQ_SERVER`
 exactly as it does for the CLI.
 
+The API host is one per run. `ORQ_SERVER` (or the deprecated `ORQ_API_BASE_URL`) wins; otherwise it
+is the `server` the same whoami call reports, so `orq server set` and a self-hosted login carry into
+orqi with no configuration of their own. `my.orq.ai` is the fallback when the CLI says nothing.
+
 Credentials are tried in order (`ORQ_API_KEY`, then the login session) on the real MCP connection: a
 401 selects the next candidate, anything else is a real error (see [AGENTS.md](AGENTS.md) for why
 they are not pre-probed). The startup line always names the credential that won.

@@ -117,6 +117,14 @@ export function orqCommands(
 					report(ctx, runOrq(["workspace", "list"]));
 					return;
 				}
+				// A switch would not stick: reconnect() re-reads the session and the
+				// override re-pins it, after `orq workspace use` already moved the
+				// on-disk session under every other orq consumer.
+				const pinned = process.env.ORQ_WORKSPACE?.trim();
+				if (pinned) {
+					ctx.ui.notify(`ORQ_WORKSPACE=${pinned} pins this session; unset it and restart to switch.`, "warning");
+					return;
+				}
 				if (!report(ctx, runOrq(["workspace", "use", key]))) return;
 				// Workspace tokens are workspace-scoped, so the tools must be rebuilt.
 				ctx.ui.notify(await reconnect());

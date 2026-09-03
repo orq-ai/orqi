@@ -44,8 +44,10 @@ orqi does not implement authentication. It reads the session the
 It never writes credentials to disk itself and never logs a token. The startup
 line names which credential was accepted, not its value.
 
-Credentials are sent only to the orq API endpoints (`ORQ_API_BASE_URL`,
-`ORQ_MCP_URL`, `ORQ_GATEWAY_URL`, all overridable for on-prem). The daily
+Credentials are sent only to the orq API endpoints: the host from `ORQ_SERVER`
+(or the deprecated `ORQ_API_BASE_URL`), else the one the orq CLI reports in
+`orq auth whoami --json`, else `my.orq.ai`, with `ORQ_MCP_URL` and
+`ORQ_GATEWAY_URL` overriding individual endpoints for on-prem. The daily
 skills check to `api.github.com` is unauthenticated and carries no credential.
 
 ## What runs with your shell

@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { cliVersionNote, sessionFileOf, workspaceOfKey } from "./auth.ts";
+import { cliVersionNote, credentialWarning, pickWorkspaceToken, sessionFileOf, whoamiProblem, whoamiReport, workspaceOfKey } from "./auth.ts";
 import { headerLines, PULSE_ORANGE, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -661,16 +661,6 @@ test("capsNote counts only the models whose caps were guessed", () => {
 	expect(capsNote([{ id: "b" }])).toBe("caps guessed for 1 model");
 });
 
-test("cliVersionNote warns only for a provably old orq CLI", () => {
-	// Real 5.x output, including the API-version second line.
-	expect(cliVersionNote("orq version 5.1.1\nbuilt against orq API 4.14.3\n")).toBeUndefined();
-	// A pre-5 CLI predates `orq workspace` and the modern doctor.
-	expect(cliVersionNote("orq version 4.9.0\n")).toContain("< 5");
-	// No CLI, or output we do not recognize, is not a warning: the failure
-	// already surfaces per command, with its own message.
-	expect(cliVersionNote("")).toBeUndefined();
-	expect(cliVersionNote("zsh: command not found: orq")).toBeUndefined();
-});
 
 test("workspaceOfKey reads the workspace out of an orq API key", () => {
 	// orq keys are sk-orq-<jwt> and the payload carries workspace_id, so a key
@@ -1114,4 +1104,155 @@ test("releaseUrl builds the same two forms install.sh does, pinned or latest", (
 	expect(releaseUrl("orqi-linux-x64.tar.gz", "0.2.0")).toBe(
 		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
 	);
+});
+
+test("/workspace refuses to switch while ORQ_WORKSPACE pins the session", () => {
+	// Unguarded, `orq workspace use` moves the on-disk session and reconnect()
+	// then re-pins the old workspace: a no-op that mutated disk. Returning before
+	// the shell-out is also what keeps this test from spawning orq.
+	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
+	const pi = {
+		registerEntryRenderer: () => {},
+		registerCommand: (name: string, def: { handler: (args: string, ctx: any) => Promise<void> }) => commands.set(name, def.handler),
+		on: () => {},
+		appendEntry: () => {},
+	} as any;
+	let reconnected = 0;
+	orqCommands(
+		async () => {
+			reconnected++;
+			return "";
+		},
+		["orq_list_traces"],
+		{ name: "orqi", version: "v0", workspace: "orq-research", status: "", cwd: "~" },
+	)(pi);
+
+	const notices: [string, string | undefined][] = [];
+	const ctx = {
+		ui: { notify: (message: string, type?: string) => notices.push([message, type]), setStatus: () => {} },
+	} as any;
+
+	const prior = process.env.ORQ_WORKSPACE;
+	try {
+		process.env.ORQ_WORKSPACE = " orq-research ";
+		commands.get("workspace")?.("research-workspace", ctx);
+		expect(notices).toHaveLength(1);
+		expect(notices[0][0]).toContain("ORQ_WORKSPACE=orq-research");
+		expect(notices[0][1]).toBe("warning");
+		// Nothing was rewired.
+		expect(reconnected).toBe(0);
+	} finally {
+		if (prior === undefined) delete process.env.ORQ_WORKSPACE;
+		else process.env.ORQ_WORKSPACE = prior;
+	}
+});
+
+test("credentialWarning says what was ignored and why", () => {
+	const inert = "ORQ_WORKSPACE has no effect on ORQ_API_KEY.";
+	// An exported key carries its own workspace, so the override is inert.
+	expect(credentialWarning({ ORQ_API_KEY: "sk-orq-x", ORQ_WORKSPACE: "ws" }, undefined)).toBe(inert);
+	// No key, or no override, is nothing to report.
+	expect(credentialWarning({ ORQ_WORKSPACE: "ws" }, undefined)).toBeUndefined();
+	expect(credentialWarning({ ORQ_API_KEY: "sk-orq-x" }, undefined)).toBeUndefined();
+	expect(credentialWarning({ ORQ_API_KEY: "sk-orq-x", ORQ_WORKSPACE: "  " }, undefined)).toBeUndefined();
+	// Without a key the session is the credential, so its problem is the warning.
+	expect(credentialWarning({}, "whoami blew up.")).toBe("whoami blew up.");
+	// With a key the session is only a fallback and the CLI never caches its
+	// token on a key-carrying whoami, so its problem waits for main.ts's failure path.
+	expect(credentialWarning({ ORQ_API_KEY: "sk-orq-x", ORQ_WORKSPACE: "ws" }, "whoami blew up.")).toBe(inert);
+	expect(credentialWarning({ ORQ_API_KEY: "sk-orq-x" }, "no cached token.")).toBeUndefined();
+	// Absent, not an empty line main.ts would print.
+	expect(credentialWarning({}, undefined)).toBeUndefined();
+});
+
+test("pickWorkspaceToken honors ORQ_WORKSPACE and never falls back silently", () => {
+	const session = {
+		activeWorkspaceKey: "home",
+		workspaceTokens: { home: { token: "tok-home" }, other: { token: "tok-other" } },
+	};
+	// No override: the session's active workspace, as before.
+	expect(pickWorkspaceToken({}, session)).toEqual({ credential: { token: "tok-home", workspace: "home", overridden: false } });
+	// Override with a cached token wins, and says it was an override.
+	expect(pickWorkspaceToken({ ORQ_WORKSPACE: " other " }, session)).toEqual({ credential: { token: "tok-other", workspace: "other", overridden: true } });
+	// No cached token: a problem naming the key, not the wrong workspace.
+	const missing = pickWorkspaceToken({ ORQ_WORKSPACE: "ghost" }, session);
+	expect(missing.credential).toBeUndefined();
+	expect(missing.problem).toContain('ORQ_WORKSPACE="ghost"');
+	// Whitespace-only is no override; no session is no credential and no problem.
+	expect(pickWorkspaceToken({ ORQ_WORKSPACE: "  " }, session).credential?.workspace).toBe("home");
+	expect(pickWorkspaceToken({}, undefined)).toEqual({});
+});
+
+test("cliVersionNote warns only for a provably old orq CLI", () => {
+	// Real 5.x output, including the API-version second line.
+	expect(cliVersionNote("orq version 5.1.1\nbuilt against orq API 4.14.3\n")).toBeUndefined();
+	// A pre-5 CLI predates `orq workspace` and the modern doctor.
+	expect(cliVersionNote("orq version 4.9.0\n")).toContain("< 4.13.8");
+	// 4.13.8 is the floor, where --no-input and --workspace landed together.
+	expect(cliVersionNote("orq version 4.13.8\n")).toBeUndefined();
+	expect(cliVersionNote("orq version 4.14.0\n")).toBeUndefined();
+	expect(cliVersionNote("orq version 4.13.7\n")).toContain("< 4.13.8");
+	// Unrecognized output is not a warning: a missing CLI surfaces per command.
+	expect(cliVersionNote("")).toBeUndefined();
+	expect(cliVersionNote("zsh: command not found: orq")).toBeUndefined();
+});
+
+test("ORQ_API_KEY suppresses the override, keeping the session candidate alive", () => {
+	// The CLI's PreRun returns before its workspace-token exchange when a key is
+	// configured, so the override's token is never cached. Honoring it anyway
+	// dropped the session credential that exists to cover a rejected key.
+	const session = {
+		activeWorkspaceKey: "home",
+		workspaceTokens: { home: { token: "tok-home" } },
+	};
+	const picked = pickWorkspaceToken({ ORQ_API_KEY: "sk-orq-x", ORQ_WORKSPACE: "other" }, session);
+	expect(picked.credential).toEqual({ token: "tok-home", workspace: "home", overridden: false });
+	expect(picked.problem).toBeUndefined();
+	// Without the key the override is honored again, and its absence is a problem.
+	expect(pickWorkspaceToken({ ORQ_WORKSPACE: "other" }, session).credential).toBeUndefined();
+});
+
+test("a live session that yields no token says so instead of going quiet", () => {
+	// whoami has already passed here, so silence sends a logged-in user the
+	// generic login hint.
+	const problem = pickWorkspaceToken({}, { activeWorkspaceKey: "home", workspaceTokens: {} }).problem;
+	expect(problem).toContain("home");
+	expect(problem).toContain("orq workspace use home");
+	// No version floor in this message; cliVersionNote owns that.
+	expect(problem).not.toContain(">= 5");
+});
+
+test("whoamiProblem tells a logged-in user what actually broke", () => {
+	// No session file: really not logged in, so LOGIN_HINT already covers it.
+	expect(whoamiProblem("Error: you are not logged in", false, undefined)).toBeUndefined();
+
+	// A session exists, so the fault is the refresh, not a missing login.
+	const expired = whoamiProblem("Error: token refresh failed: connection refused", true, undefined);
+	expect(expired).toContain("token refresh failed: connection refused");
+	expect(expired).toContain("orq auth login");
+	// The CLI's own "Error:" is stripped rather than doubled under the prefix.
+	expect(expired).toBe("orq auth whoami failed: token refresh failed: connection refused. Run `orq auth login` to sign in again.");
+
+	// A bogus override kills whoami before pickWorkspaceToken runs, so the remedy
+	// is the override, not a login.
+	const bogus = whoamiProblem('Error: workspace "bogus-ws": Account not found!', true, "bogus-ws");
+	expect(bogus).toContain('workspace "bogus-ws": Account not found!');
+	expect(bogus).toContain("Unset ORQ_WORKSPACE");
+	expect(bogus).not.toContain("orq auth login");
+
+	// runOrq synthesizes this one: the CLI left PATH after a login.
+	expect(whoamiProblem("orq CLI not found on PATH (spawn orq ENOENT)", true, undefined)).toContain("not found on PATH");
+
+	// Never an empty warning line.
+	expect(whoamiProblem("", true, undefined)).toBeUndefined();
+	expect(whoamiProblem("   \n ", true, "ws")).toBeUndefined();
+});
+
+
+test("whoamiReport takes the host and the session path from whoami, and nothing from noise", () => {
+	const report = whoamiReport('{"authenticated":true,"server":"https://self.example/","session_file":"/home/u/.orq/sessions/self.example.json"}');
+	expect(report).toEqual({ server: "https://self.example/", session_file: "/home/u/.orq/sessions/self.example.json" });
+	// Another program's output, cast unchecked: a non-string never reaches `.trim()` in the caller.
+	expect(whoamiReport('{"server": 8080, "session_file": ""}')).toEqual({ server: undefined, session_file: undefined });
+	expect(whoamiReport("you are not logged in")).toEqual({});
 });

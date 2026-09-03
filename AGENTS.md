@@ -78,15 +78,17 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   the 96 KB those tools occupy on disk: `outputSchema` is never forwarded, so cache bytes are not
   request bytes. Do not quote the 96 KB as a per-request saving again. Denylisted names must never
   appear in a subagent's tool list; a test guards that.
-- **One API host per run, resolved at module load** (`resolveApiBase` in `src/auth.ts`), the
-  CLI's own rule: the credential fallback tries candidates in order against one server, and a
+- **One API host per run, and only the environment is read at import** (`apiBaseUrl()` in
+  `src/auth.ts`). The credential fallback tries candidates in order against one server; a
   per-credential host would let a stall on one server be misread as a bad credential for the
-  other. The ladder is `ORQ_SERVER` → `ORQ_API_BASE_URL` (deprecated, honored) → the login
-  session's `apiBaseUrl` → `my.orq.ai`. The module-init session read is a try/catch'd sync JSON
-  read, so `--version` stays instant.
-- **`runOrq` sets `ORQ_NO_INPUT=1` in the child env, not `--no-input` on argv.** A pre-5 CLI
-  rejects the unknown flag, which would break the session credential outright; it ignores the
-  unknown env var. Any CLI prompt under `spawnSync` hangs the TUI with nothing on screen.
+  other. `ORQ_SERVER` (or the deprecated `ORQ_API_BASE_URL`) is resolved at module load; otherwise
+  `credentialCandidates()` takes the host from the `server` field of `orq auth whoami --json`, the
+  same call that names the session file, before anything connects. Nothing about the host or the
+  session path is guessed from the CLI's file layout: that guess drifted twice (`<profile>.json` to
+  `<host>.json`, `api.orq.ai` to `my.orq.ai`). `--version` never runs whoami, so it stays instant.
+- **`runOrq` sets `ORQ_NO_INPUT=1` in the child env, not `--no-input` on argv.** A CLI older
+  than 4.13.8 rejects the unknown flag, which would break the session credential outright; it
+  ignores the unknown env var. Any CLI prompt under `spawnSync` hangs the TUI with nothing on screen.
 - **`--version` and `--help` are answered before anything else runs** (`src/main.ts`). `argv[2]` is
   otherwise a prompt, so without those two branches `orqi --version` boots a session, connects to
   the MCP server and bills a model call. `install.sh` calls `--version` to prove the binary it just

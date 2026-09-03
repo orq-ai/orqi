@@ -6,11 +6,37 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-export const API_BASE_URL = process.env.ORQ_SERVER ?? process.env.ORQ_API_BASE_URL ?? "https://api.orq.ai";
-export const MCP_URL = process.env.ORQ_MCP_URL ?? `${API_BASE_URL}/v2/mcp`;
-export const ROUTER_URL = process.env.ORQ_GATEWAY_URL ?? `${API_BASE_URL}/v3/router`;
+/** A host from the environment, or undefined. Whitespace-only is unset. */
+function envHost(env: NodeJS.ProcessEnv): string | undefined {
+	// ORQ_API_BASE_URL is the deprecated pre-4.15 spelling, still honored.
+	const host = env.ORQ_SERVER?.trim() || env.ORQ_API_BASE_URL?.trim();
+	return host ? host.replace(/\/+$/, "") : undefined;
+}
+
+/**
+ * One API host per run, as in the CLI: two credentials tried against two hosts
+ * would let a stall on one be misread as a bad credential for the other.
+ *
+ * The environment wins, and is all `--version` ever sees. Otherwise the host is
+ * whatever `orq auth whoami --json` reports as `server`, set by
+ * credentialCandidates() before anything connects, so `orq server set` and a
+ * self-hosted login carry into orqi with no configuration of their own.
+ */
+let apiBase = envHost(process.env) ?? "https://my.orq.ai";
+
+export function apiBaseUrl(): string {
+	return apiBase;
+}
+export function mcpUrl(): string {
+	return process.env.ORQ_MCP_URL ?? `${apiBase}/v2/mcp`;
+}
+export function routerUrl(): string {
+	return process.env.ORQ_GATEWAY_URL ?? `${apiBase}/v3/router`;
+}
 
 export interface OrqResult {
 	ok: boolean;
@@ -21,10 +47,9 @@ export interface OrqResult {
 /**
  * Run the orq CLI. Never throws: a missing binary is just a failed result.
  *
- * ORQ_NO_INPUT as an env var, not the --no-input flag: a pre-5 CLI rejects an
- * unknown flag (which would break the session credential outright) but ignores
- * unknown env, and any prompt under spawnSync would hang the TUI forever with
- * nothing on screen to say why.
+ * ORQ_NO_INPUT as an env var, not the --no-input flag: a CLI older than 4.13.8
+ * rejects the unknown flag but ignores the unknown env var. A prompt under
+ * spawnSync hangs the TUI with nothing on screen.
  */
 export function runOrq(args: string[]): OrqResult {
 	const res = spawnSync("orq", args, { encoding: "utf8", env: { ...process.env, ORQ_NO_INPUT: "1" } });
@@ -44,7 +69,7 @@ interface Project { id?: string; name?: string; key?: string; default?: boolean;
 /** Resolve the project label from the authenticated Projects REST API. */
 export async function projectForCredential(token: string): Promise<string | undefined> {
 	try {
-		const response = await fetch(`${API_BASE_URL}/v2/projects?limit=200`, {
+		const response = await fetch(`${apiBase}/v2/projects?limit=200`, {
 			headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
 		});
 		if (!response.ok) return undefined;
@@ -65,29 +90,42 @@ export async function projectForCredential(token: string): Promise<string | unde
 	}
 }
 
-interface Session { activeWorkspaceKey?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] }
+/** The shape of the session file the CLI names in `orq auth whoami --json`. */
+export interface OrqSession {
+	activeWorkspaceKey?: string;
+	workspaceTokens?: Record<string, { token?: string }>;
+	workspaces?: { id: string; key: string }[];
+}
 
-/** Session file named by `orq auth whoami --json`, or undefined when the output is not that. */
-export function sessionFileOf(whoamiJson: string): string | undefined {
+/** What orqi reads out of `orq auth whoami --json`. Either field may be missing. */
+export interface WhoamiReport {
+	server?: string;
+	session_file?: string;
+}
+
+/** The fields orqi uses from `orq auth whoami --json`, or {} when the output is not that. */
+export function whoamiReport(json: string): WhoamiReport {
 	try {
-		const file = JSON.parse(whoamiJson)?.session_file;
-		return typeof file === "string" && file ? file : undefined;
+		const parsed = JSON.parse(json);
+		const pick = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+		return { server: pick(parsed?.server), session_file: pick(parsed?.session_file) };
 	} catch {
-		return undefined;
+		return {};
 	}
 }
 
+/** Session file named by `orq auth whoami --json`, or undefined when the output is not that. */
+export function sessionFileOf(whoamiJson: string): string | undefined {
+	return whoamiReport(whoamiJson).session_file;
+}
+
 /**
- * The orq CLI login session, freshly read.
- *
- * Which file under `~/.orq/sessions/` holds it is the CLI's business: it was
- * `<profile>.json` up to 5.2 and is `<host>.json` from 5.3 (RES-1500), so ask
- * `whoami` for the path rather than guessing. whoami also refreshes an expired
- * token and proves the session is live.
+ * Which file under `~/.orq/sessions/` holds the session is the CLI's business:
+ * `<profile>.json` up to 5.2, `<host>.json` from 5.3 (RES-1500). Ask whoami
+ * rather than guess. It also refreshes an expired token and, with no API key
+ * set, caches the ORQ_WORKSPACE override's token.
  */
-function readSession(): Session | undefined {
-	const whoami = runOrq(["auth", "whoami", "--json"]);
-	const file = whoami.ok ? sessionFileOf(whoami.stdout) : undefined;
+function readSession(file: string | undefined): OrqSession | undefined {
 	if (!file) return undefined;
 	try {
 		return JSON.parse(readFileSync(file, "utf8"));
@@ -119,6 +157,107 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
 }
 
 /**
+ * The workspace whose token a session credential should carry.
+ *
+ * ORQ_WORKSPACE is ignored when ORQ_API_KEY is set, matching the CLI: its PreRun
+ * returns at `apiKeyConfigured()` before the workspace-token exchange, so the
+ * override's token is never cached and honoring it here would only drop the
+ * session candidate. `credentialWarning` says the override was ignored.
+ *
+ * A workspace with no token is reported, never silently swapped for another.
+ */
+export function pickWorkspaceToken(
+	env: NodeJS.ProcessEnv,
+	session: OrqSession | undefined,
+): { credential?: { token: string; workspace: string; overridden: boolean }; problem?: string } {
+	const override = env.ORQ_API_KEY ? undefined : env.ORQ_WORKSPACE?.trim();
+	const workspace = override || session?.activeWorkspaceKey;
+	if (!workspace) return {};
+	const token = session?.workspaceTokens?.[workspace]?.token;
+	if (typeof token !== "string" || !token) {
+		// No version advice here; cliVersionNote owns that, against 4.13.8.
+		return {
+			problem: override
+				? `ORQ_WORKSPACE="${override}" has no cached token in the orq login session. Run \`orq workspace use ${override}\`, or unset ORQ_WORKSPACE.`
+				: `The orq login session has no cached token for its active workspace (${workspace}). Run \`orq workspace use ${workspace}\`, or \`orq auth login\`.`,
+		};
+	}
+	return { credential: { token, workspace, overridden: Boolean(override) } };
+}
+
+/**
+ * Why `orq auth whoami` failed, when that is worth saying.
+ *
+ * No session on disk means simply not logged in, which LOGIN_HINT already
+ * covers. A session that still fails whoami has a real fault (expired refresh,
+ * bad ORQ_WORKSPACE, unreachable server) and the CLI's stderr is the only record
+ * of it. The remedy rides in the message because a working ORQ_API_KEY can
+ * carry the boot to where LOGIN_HINT is never printed.
+ */
+export function whoamiProblem(stderr: string, hasSession: boolean, override: string | undefined): string | undefined {
+	// The CLI prefixes its own errors with "Error:", which would double up.
+	const trimmed = stderr.trim().replace(/^Error:\s*/i, "");
+	if (!trimmed || !hasSession) return undefined;
+	const reason = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+	const remedy = override
+		? `Unset ORQ_WORKSPACE or name a workspace you belong to (\`orq workspace list\`).`
+		: "Run `orq auth login` to sign in again.";
+	return `orq auth whoami failed: ${reason} ${remedy}`;
+}
+
+/** Whether any login session exists on disk, whatever the CLI named it. */
+function anySessionOnDisk(): boolean {
+	const dir = join(homedir(), ".orq", "sessions");
+	try {
+		return existsSync(dir) && readdirSync(dir).some((name) => name.endsWith(".json"));
+	} catch {
+		return false;
+	}
+}
+
+/** Active-workspace token from the orq CLI login session, plus the session itself. */
+function sessionCredential(): { credential?: Credential; problem?: string; session?: OrqSession } {
+	const whoami = runOrq(["auth", "whoami", "--json"]);
+	if (!whoami.ok) {
+		return { problem: whoamiProblem(whoami.stderr, anySessionOnDisk(), process.env.ORQ_WORKSPACE?.trim()) };
+	}
+	const report = whoamiReport(whoami.stdout);
+	if (!envHost(process.env) && report.server) apiBase = report.server.replace(/\/+$/, "");
+	const session = readSession(report.session_file);
+	const picked = pickWorkspaceToken(process.env, session);
+	if (picked.credential) {
+		const { token, workspace, overridden } = picked.credential;
+		return { session, credential: { token, source: overridden ? "orq login session (ORQ_WORKSPACE)" : "orq login session", workspace } };
+	}
+	// whoami passed, so the user is logged in: the CLI can authenticate from
+	// ~/.orq/credentials.json with no session file, leaving no token to read.
+	// Returning nothing here is what sent a logged-in user the generic hint.
+	return {
+		session,
+		problem:
+			picked.problem ??
+			`orq auth whoami succeeded but named no session file with a workspace token. Export ORQ_API_KEY, or run \`orq auth login\` so the CLI caches one.`,
+	};
+}
+
+/**
+ * Everything worth saying about the credentials this run resolved, as one line.
+ * Split out from credentialCandidates, which shells out and so is untestable.
+ *
+ * With ORQ_API_KEY set the session is only a fallback, and the CLI never caches
+ * a workspace token on a key-carrying whoami, so its problems are expected
+ * rather than news: they stay out of the boot line and surface only when the
+ * key is rejected (see main.ts).
+ */
+export function credentialWarning(env: NodeJS.ProcessEnv, sessionProblem: string | undefined): string | undefined {
+	const warnings: string[] = [];
+	// The key names its own workspace in its claims; the override cannot move it.
+	if (env.ORQ_API_KEY && env.ORQ_WORKSPACE?.trim()) warnings.push("ORQ_WORKSPACE has no effect on ORQ_API_KEY.");
+	if (sessionProblem && !env.ORQ_API_KEY) warnings.push(sessionProblem);
+	return warnings.length ? warnings.join(" ") : undefined;
+}
+
+/**
  * Credentials to try, best first.
  *
  * `orq launch` documents env-key-first, but an exported key is often stale or
@@ -126,29 +265,36 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
  * the caller settles it on the real connection. Probing here would need a
  * second round-trip against a server that intermittently hangs, and a hang
  * would then be misread as a bad credential.
+ *
+ * `sessionProblem` is the fallback's own fault, for the caller to print when
+ * the fallback turns out to be needed.
  */
-export function credentialCandidates(): Credential[] {
+export function credentialCandidates(): { candidates: Credential[]; warning?: string; sessionProblem?: string } {
 	const candidates: Credential[] = [];
-	const session = readSession();
+	const session = sessionCredential();
 	if (process.env.ORQ_API_KEY) {
 		const token = process.env.ORQ_API_KEY;
-		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
+		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session.session) });
 	}
-	const workspace = session?.activeWorkspaceKey;
-	const token = workspace ? session?.workspaceTokens?.[workspace]?.token : undefined;
-	if (typeof token === "string" && token) candidates.push({ token, source: "orq login session", workspace });
-	return candidates;
+	if (session.credential) candidates.push(session.credential);
+	return { candidates, warning: credentialWarning(process.env, session.problem), sessionProblem: session.problem };
 }
 
 /**
- * Header note when the orq CLI on PATH predates the commands orqi shells out
- * to (`workspace`, the modern `doctor` — both 5.x). Missing or unparseable
- * output is not a warning: no CLI at all already surfaces per command.
+ * Header note when the orq CLI on PATH predates what orqi relies on.
+ *
+ * The floor is 4.13.8, where `--no-input`, global `--workspace` and the session
+ * token cache landed together; `orq workspace` and `orq doctor` are far older,
+ * so a "< 5" note would call every working 4.x install broken. Unparseable
+ * output is not a warning: a missing CLI already surfaces per command.
  */
 export function cliVersionNote(stdout: string): string | undefined {
-	const major = stdout.match(/^orq version (\d+)/m)?.[1];
-	if (!major || Number(major) >= 5) return undefined;
-	return `orq CLI ${major}.x (< 5): /workspace and /doctor may misbehave`;
+	const parsed = stdout.match(/^orq version (\d+)\.(\d+)\.(\d+)/m);
+	if (!parsed) return undefined;
+	const [major, minor, patch] = parsed.slice(1, 4).map(Number);
+	const supported = major > 4 || (major === 4 && (minor > 13 || (minor === 13 && patch >= 8)));
+	if (supported) return undefined;
+	return `orq CLI ${major}.${minor}.${patch} (< 4.13.8): ORQ_WORKSPACE and prompt-free shell-outs are unsupported`;
 }
 
 export const LOGIN_HINT = "No orq credential accepted. Run `orq auth login` (or /login here), or export a valid ORQ_API_KEY.";
