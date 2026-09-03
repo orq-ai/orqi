@@ -89,6 +89,12 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **`runOrq` sets `ORQ_NO_INPUT=1` in the child env, not `--no-input` on argv.** A CLI older
   than 4.13.8 rejects the unknown flag, which would break the session credential outright; it
   ignores the unknown env var. Any CLI prompt under `spawnSync` hangs the TUI with nothing on screen.
+- **When every credential is rejected, `main.ts` prints one line and exits 1; anything else
+  rethrows.** `rejectedLine` in `src/mcp.ts` names the MCP host and the server's
+  `error_description`. The host matters: a login session token carries an `aud` of one server's
+  `/v2/mcp`, so a stale `ORQ_SERVER`/`ORQ_MCP_URL`, or an old binary with `api.orq.ai` baked in,
+  is a 401 "audience does not match" that reads like a bad credential. A stall or a dead network
+  keeps the transport's stack, because that is a bug and the trace is the useful artefact.
 - **`--version` and `--help` are answered before anything else runs** (`src/main.ts`). `argv[2]` is
   otherwise a prompt, so without those two branches `orqi --version` boots a session, connects to
   the MCP server and bills a model call. `install.sh` calls `--version` to prove the binary it just

@@ -236,7 +236,7 @@ function sessionCredential(): { credential?: Credential; problem?: string; sessi
 		session,
 		problem:
 			picked.problem ??
-			`orq auth whoami succeeded but named no session file with a workspace token. Export ORQ_API_KEY, or run \`orq auth login\` so the CLI caches one.`,
+			`orq auth whoami passed but reported no session_file, so this orq CLI is too old for orqi to read its login session. Update the orq CLI, or export ORQ_API_KEY.`,
 	};
 }
 

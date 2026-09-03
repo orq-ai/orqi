@@ -8,7 +8,7 @@ import { cliVersionNote, credentialWarning, pickWorkspaceToken, sessionFileOf, w
 import { headerLines, PULSE_ORANGE, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
-import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { DENYLISTED_TOOLS, describe, keptTools, rejectedLine, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { capsNote, onlyOrq, PROVIDER_ID, routerModelEntry } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
@@ -615,6 +615,25 @@ test("our commands never collide with a pi built-in", () => {
 
 	expect(registered).toContain("whatsnew");
 	expect(registered.filter((name) => builtins.has(name))).toEqual([]);
+});
+
+test("rejectedLine names the host and the server's reason, and leaves stalls to the stack", () => {
+	// Seen in the wild: orqi 0.1.0 baked api.orq.ai while the login session's
+	// token carries aud my.orq.ai/v2/mcp. The transport's error is a Bun stack;
+	// this is the one line the user should get instead.
+	const audience = new Error(
+		'Streamable HTTP error: Error POSTing to endpoint: {"error":"invalid_token","error_description":"The ORQ MCP token audience does not match this MCP server."}',
+	);
+	const line = rejectedLine(audience, "https://api.orq.ai/v2/mcp");
+	expect(line).toBe(
+		"No orq credential accepted at https://api.orq.ai/v2/mcp (The ORQ MCP token audience does not match this MCP server). The token was issued for a different host: check ORQ_SERVER / ORQ_MCP_URL, or update orqi. Run `orq auth login` (or /login here), or export a valid ORQ_API_KEY.",
+	);
+	// A plain 401 with no JSON body: host and remedy, no host-mismatch advice.
+	const bare = rejectedLine(new Error("HTTP 401 Unauthorized"), "https://my.orq.ai/v2/mcp");
+	expect(bare).toBe("No orq credential accepted at https://my.orq.ai/v2/mcp. Run `orq auth login` (or /login here), or export a valid ORQ_API_KEY.");
+	// Not an auth failure: undefined, so main.ts rethrows and the stack survives.
+	expect(rejectedLine(new Error("request timed out"), "https://my.orq.ai/v2/mcp")).toBeUndefined();
+	expect(rejectedLine(new Error("no orq credential available"), "https://my.orq.ai/v2/mcp")).toBeUndefined();
 });
 
 test("summarize collapses orq payloads to one line", () => {

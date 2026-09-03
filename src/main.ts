@@ -22,10 +22,10 @@ import {
 	SessionManager,
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
-import { cliVersionNote, credentialCandidates, LOGIN_HINT, projectForCredential, runOrq } from "./auth.ts";
+import { cliVersionNote, credentialCandidates, LOGIN_HINT, mcpUrl, projectForCredential, runOrq } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { orqCommands } from "./commands.ts";
-import { connectOrqTools } from "./mcp.ts";
+import { connectOrqTools, rejectedLine } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
@@ -107,7 +107,12 @@ try {
 	orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json"));
 } catch (error) {
 	for (const line of new Set([warning, sessionProblem])) if (line) console.error(line);
-	throw error;
+	// Every candidate rejected: one line naming the host beats the transport's
+	// stack. A stall or a dead network keeps the stack, which is what a bug wants.
+	const rejected = rejectedLine(error, mcpUrl());
+	if (!rejected) throw error;
+	console.error(rejected);
+	process.exit(1);
 }
 const credential = orq.credential;
 const models = await createOrqModelRuntime(AGENT_DIR, credential.token);

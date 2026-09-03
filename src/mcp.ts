@@ -223,9 +223,33 @@ export function summarize(text: string): string {
 	}
 }
 
-function isAuthError(error: unknown): boolean {
+export function isAuthError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return /401|403|invalid_token|Unauthorized|audience/i.test(message);
+}
+
+/**
+ * One line for the user when every credential was rejected, or undefined when
+ * the failure was something else (a stall, the network), where the stack is
+ * the useful artefact and main.ts lets it through.
+ *
+ * Names the host: a login session token carries an `aud` of one server's
+ * `/v2/mcp`, so a stale ORQ_SERVER / ORQ_MCP_URL or an old binary's baked host
+ * is a 401 that reads like a bad credential. The server's own
+ * `error_description` says "audience", which is the whole diagnosis.
+ */
+export function rejectedLine(error: unknown, url: string): string | undefined {
+	if (!isAuthError(error)) return undefined;
+	const message = error instanceof Error ? error.message : String(error);
+	let reason: string | undefined;
+	try {
+		reason = JSON.parse(message.slice(message.indexOf("{")))?.error_description;
+	} catch {
+		// Not the server's JSON body: the status alone will have to do.
+	}
+	const detail = typeof reason === "string" && reason.trim() ? ` (${reason.trim().replace(/\.$/, "")})` : "";
+	const host = /audience/i.test(message) ? " The token was issued for a different host: check ORQ_SERVER / ORQ_MCP_URL, or update orqi." : "";
+	return `No orq credential accepted at ${url}${detail}.${host} Run \`orq auth login\` (or /login here), or export a valid ORQ_API_KEY.`;
 }
 
 /**
