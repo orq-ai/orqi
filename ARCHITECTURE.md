@@ -17,7 +17,8 @@ orqi
 │   │                            the rest shell out to the orq CLI  src/commands.ts
 │   └── startup header           session entry, not stdout        src/commands.ts
 ├── model            orq AI Router as a pi provider              src/model.ts
-└── credentials      ORQ_API_KEY or the orq CLI login session    src/auth.ts
+├── credentials       ORQ_API_KEY or the orq CLI login session    src/auth.ts
+└── self-update       `orqi update`, daily check, header note     src/update.ts
 ```
 
 | File | Does |
@@ -27,7 +28,8 @@ orqi
 | `src/mcp.ts` | orq MCP to pi tools, catalogue cache, result rendering |
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
-| `src/commands.ts` | The pi extension: startup header entry plus `/tools /whoami /workspace /doctor /whatsnew` |
+| `src/commands.ts` | The pi extension: startup header entry plus `/tools /whoami /workspace /doctor /whatsnew /update` |
+| `src/update.ts` | `orqi update`: daily release check, header note, the binary swap |
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
 

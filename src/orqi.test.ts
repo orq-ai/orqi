@@ -1,11 +1,11 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceOfKey } from "./auth.ts";
-import { headerLines } from "./branding.ts";
+import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
@@ -21,12 +21,67 @@ import {
 	updateDue,
 	vendoredNames,
 } from "./skills.ts";
+import {
+	assetName,
+	checkDue,
+	formatStatus,
+	installMethod,
+	isNewer,
+	normalizeTag,
+	readCache,
+	refusal,
+	releaseUrl,
+	REPO,
+	runUpdate,
+	checkNow,
+	type SuccessfulUpdateCache,
+	type UpdateCache,
+	pendingUpdate,
+	writeCache,
+} from "./update.ts";
 
 // The tool catalogue is only cached once orqi has run against a real workspace,
 // so it is absent in CI and on a fresh clone. The tests that read it are skipped
 // out loud there: a check that quietly passes on no data is worse than no check.
 const CATALOGUE_PATH = join(process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"), "tool-catalogue.json");
 const noCatalogue = !existsSync(CATALOGUE_PATH);
+
+function writeVersionBinary(path: string, version: string): void {
+	writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' '${version}'\n`);
+	chmodSync(path, 0o755);
+}
+
+function releaseFixture(root: string, version: string): string {
+	const payload = join(root, "payload");
+	mkdirSync(payload, { recursive: true });
+	writeVersionBinary(join(payload, "orqi"), version);
+	const tarball = join(root, "release.tar.gz");
+	const packed = Bun.spawnSync(["tar", "-czf", tarball, "-C", payload, "orqi"]);
+	if (!packed.success) throw new Error(packed.stderr.toString());
+	return tarball;
+}
+
+function installerEnv(root: string, tarball: string): Record<string, string | undefined> {
+	const fakeBin = join(root, "fake-bin");
+	mkdirSync(fakeBin, { recursive: true });
+	const curl = join(fakeBin, "curl");
+	writeFileSync(curl, `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-o" ]; then cp "$ORQI_TEST_TARBALL" "$2"; exit; fi
+	shift
+done
+exit 1
+`);
+	chmodSync(curl, 0o755);
+	return {
+		...process.env,
+		PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+		NO_COLOR: "1",
+		ORQI_INSTALL_DIR: join(root, "install"),
+		ORQI_VERSION: "999.0.0",
+		ORQI_TEST_TARBALL: tarball,
+	};
+}
 
 /** Names in the cached catalogue. A cache that exists but will not parse fails the test. */
 function catalogueNames(): Set<string> {
@@ -370,6 +425,23 @@ test("the header uses the ORQI splash", () => {
 	for (const line of art) expect(line.length).toBeLessThanOrEqual(100);
 });
 
+test("the header shows an update line only when a newer release is cached", () => {
+	// The footer must stay silent for the common case (no update, or a check
+	// that hasn't run yet) and the six-row logo must survive either way - a
+	// regression here would either nag every session or silently drop the notice.
+	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	const base = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
+
+	const withoutUpdate = strip(headerLines(base, { cols: 100, rows: 40 }));
+	expect(withoutUpdate).not.toContain("update available");
+
+	const withUpdate = strip(headerLines({ ...base, updateAvailable: true }, { cols: 100, rows: 40 }));
+	expect(withUpdate).toContain("update available · run: orqi update");
+
+	const art = withUpdate.split("\n").filter((line) => /[█▀▄]/.test(line));
+	expect(art.length).toBe(6);
+});
+
 test("the header entry is appended on fresh sessions only", () => {
 	// Entries are session-persisted: appending on resume would stack a second
 	// header onto a transcript that already has one.
@@ -487,4 +559,431 @@ test("workspaceOfKey reads the workspace out of an orq API key", () => {
 
 	expect(workspaceOfKey("not-a-key", undefined)).toBeUndefined();
 	expect(workspaceOfKey("sk-orq-a.notbase64!!.c", undefined)).toBeUndefined();
+});
+
+test("installMethod tells a brew-managed binary from a plain one", () => {
+	// What breaks: a Homebrew user gets their brew-managed file renamed out
+	// from under brew if this ever says "binary" for a Cellar path.
+	expect(installMethod("/Users/x/.local/bin/orqi")).toBe("binary");
+	expect(installMethod("/opt/homebrew/Cellar/orqi/0.1.0/bin/orqi")).toBe("homebrew");
+	expect(installMethod("/opt/homebrew/bin/orqi")).toBe("binary");
+	expect(installMethod("/opt/homebrew-backup/bin/orqi")).toBe("binary");
+	expect(installMethod("/Users/x/proj/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi")).toBe("npm");
+	expect(installMethod("/Users/x/.bun/bin/bun")).toBe("source"); // basename isn't "orqi"
+});
+
+test("assetName covers exactly what install.sh's platform table builds tarballs for", () => {
+	// Scrapes install.sh's `uname -s`-`uname -m` case arms rather than
+	// asserting a second copy of the same literals here - that would only
+	// prove this file agrees with itself. This is the same technique as "our
+	// commands never collide with a pi built-in" above: read the other file,
+	// extract its names, and check them through the function under test.
+	const script = readFileSync(join(import.meta.dir, "..", "install.sh"), "utf8");
+	const armPattern = /^\s*([A-Za-z]+)-([A-Za-z0-9_]+)\)\s*PLATFORM=(\S+)\s*;;/gm;
+	const arms = [...script.matchAll(armPattern)].map((m) => ({ uname: m[1], mach: m[2], platform: m[3] }));
+	expect(arms.length).toBeGreaterThan(0); // the scrape still finds the table
+
+	const UNAME_TO_NODE_PLATFORM: Record<string, NodeJS.Platform> = { Darwin: "darwin", Linux: "linux" };
+	const MACHINE_TO_NODE_ARCH: Record<string, string> = { arm64: "arm64", x86_64: "x64" };
+	for (const arm of arms) {
+		const platform = UNAME_TO_NODE_PLATFORM[arm.uname];
+		const arch = MACHINE_TO_NODE_ARCH[arm.mach];
+		expect(assetName(platform, arch)).toBe(`orqi-${arm.platform}.tar.gz`);
+	}
+
+	expect(assetName("linux", "arm64")).toBeUndefined();
+	expect(assetName("win32", "x64")).toBeUndefined();
+});
+
+test("isNewer compares versions numerically, not lexically", () => {
+	// A string compare puts "0.9.0" ahead of "0.10.0"; that would tell a user
+	// on 0.10.0 there is nothing new when 0.9.0 is the "latest" seen.
+	expect(normalizeTag("v0.10.0")).toBe("0.10.0");
+	expect(normalizeTag("0.10.0")).toBe("0.10.0");
+	expect(normalizeTag("  v1.2.3  ")).toBe("1.2.3");
+
+	expect(isNewer("0.10.0", "0.9.0")).toBe(true);
+	expect(isNewer("0.9.0", "0.9.0")).toBe(false); // equal is not newer
+	expect(isNewer("garbage", "0.9.0")).toBe(false);
+	expect(isNewer("0.9.0", "garbage")).toBe(false);
+	// Number.parseInt("9garbage", 10) is 9, so a naive parse would read this as
+	// newer than 1.0.0. A version that does not parse must never be newer.
+	expect(isNewer("9garbage.0.0", "1.0.0")).toBe(false);
+	// A prerelease-shaped tag also fails the strict three-part shape check.
+	expect(isNewer("0.9.0-rc1", "0.8.0")).toBe(false);
+});
+
+test("the daily update check is due only when it should be", () => {
+	// Direct analogue of the skills updateDue test: wrong answers here mean
+	// either hammering GitHub every boot or never telling anyone about a release.
+	const now = Date.now();
+	const cache: UpdateCache = { checked_at: now, latest: "0.2.0" };
+	expect(checkDue(undefined, {})).toBe(true); // never checked
+	expect(checkDue(cache, {})).toBe(false); // just checked
+	expect(checkDue(cache, {}, now + 25 * 60 * 60 * 1000)).toBe(true); // a day later
+	expect(checkDue(cache, { ORQI_REFRESH_UPDATE: "1" })).toBe(true); // forced
+	expect(checkDue(cache, { CI: "true" })).toBe(false); // nobody there to see it
+	expect(checkDue(cache, { CI: "true", ORQI_REFRESH_UPDATE: "1" })).toBe(true); // an explicit force wins
+	// The pin beats the force flag: it is the escape hatch for a bad upstream.
+	expect(checkDue(cache, { ORQI_UPDATE_CHECK: "0", ORQI_REFRESH_UPDATE: "1" })).toBe(false);
+});
+
+test("update cache round-trips through disk and never throws on garbage", () => {
+	// A half-written or corrupt cache must read as "no cache", never crash boot.
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-"));
+	try {
+		expect(readCache(dir)).toBeUndefined(); // nothing written yet
+
+		const cache: SuccessfulUpdateCache = { checked_at: Date.now(), latest: "0.2.0" };
+		writeCache(dir, cache);
+		expect(readCache(dir)).toEqual(cache);
+		expect(statSync(join(dir, "update-check.json")).mode & 0o777).toBe(0o600);
+
+		writeFileSync(join(dir, "update-check.json"), "not json");
+		expect(readCache(dir)).toBeUndefined();
+
+		writeFileSync(join(dir, "update-check.json"), JSON.stringify({ latest: "0.2.0" })); // wrong shape
+		expect(readCache(dir)).toBeUndefined();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("pendingUpdate only fires when a real newer version is cached", () => {
+	// The one gate behind the header's "update available" line: a false
+	// positive here nags every session to install what it already runs.
+	const newer: UpdateCache = { checked_at: Date.now(), latest: "999.0.0" };
+	const stale: UpdateCache = { checked_at: Date.now(), latest: VERSION };
+	const failed: UpdateCache = { checked_at: Date.now(), latest: null };
+
+	expect(pendingUpdate(newer, {})).toBe("999.0.0");
+	expect(pendingUpdate(stale, {})).toBeUndefined(); // not newer: nothing to say
+	expect(pendingUpdate(undefined, {})).toBeUndefined(); // no cache: nothing to say
+	expect(pendingUpdate(failed, {})).toBeUndefined();
+	expect(pendingUpdate(newer, { ORQI_UPDATE_CHECK: "0" })).toBeUndefined(); // pinned: stay silent
+});
+
+test("formatStatus matches orq update --check's field order in both forms", () => {
+	const withLatest = { current: "0.1.0", install_method: "binary" as const, latest: "0.2.0", update_available: true };
+	expect(formatStatus(withLatest, false)).toBe(
+		["current: 0.1.0", "install_method: binary", "latest: 0.2.0", "update_available: true"].join("\n"),
+	);
+	expect(JSON.parse(formatStatus(withLatest, true))).toEqual(withLatest);
+
+	// A failed fetch keeps the same four keys in both forms: a consumer that
+	// reads `latest` must not have to tell "absent" from "unknown" apart from
+	// the outcome that produced it.
+	const noLatest = { current: "0.1.0", install_method: "binary" as const, latest: null, update_available: false };
+	expect(formatStatus(noLatest, false)).toBe(
+		["current: 0.1.0", "install_method: binary", "latest: unknown", "update_available: false"].join("\n"),
+	);
+	expect(JSON.parse(formatStatus(noLatest, true))).toEqual(noLatest);
+});
+
+test("writeCache creates a fresh ~/.orqi/agent on the first-ever run", () => {
+	// The first `orqi update --check` after install.sh can run before anything
+	// else has ever created the agent dir. Without an explicit mkdirSync,
+	// mkdtempSync(join(agentDir, ...)) throws a raw ENOENT instead of printing
+	// the status line.
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-fresh-"));
+	const agentDir = join(root, "agent");
+	try {
+		expect(existsSync(agentDir)).toBe(false);
+		const cache: SuccessfulUpdateCache = { checked_at: Date.now(), latest: "0.2.0" };
+		expect(() => writeCache(agentDir, cache)).not.toThrow();
+		expect(readCache(agentDir)).toEqual(cache);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a successful update check survives a cache write failure", async () => {
+	// Explicit `--check` and `/update` calls must report a fetched result instead
+	// of turning a cache-only failure into an uncaught error.
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-write-failure-"));
+	const notDirectory = join(root, "not-a-directory");
+	try {
+		writeFileSync(notDirectory, "occupied");
+		expect(await checkNow(notDirectory, async () => "0.2.0")).toBe("0.2.0");
+		expect(readCache(notDirectory)).toBeUndefined();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a completed failed update check is cached for the normal TTL", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-failed-"));
+	try {
+		expect(await checkNow(dir, async () => undefined)).toBeUndefined();
+		const cache = readCache(dir);
+		expect(cache?.latest).toBeNull();
+		expect(checkDue(cache, {}, cache?.checked_at)).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a failed update check preserves the last known release", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-preserve-"));
+	try {
+		writeCache(dir, { checked_at: 1, latest: "9.9.9" });
+		const successfulRecord = readFileSync(join(dir, "update-check.json"), "utf8");
+		expect(await checkNow(dir, async () => undefined)).toBeUndefined();
+		const cache = readCache(dir);
+		expect(cache?.latest).toBe("9.9.9");
+		expect(cache?.checked_at).toBeGreaterThan(1);
+		expect(readFileSync(join(dir, "update-check.json"), "utf8")).toBe(successfulRecord);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a failed update check cannot overwrite a concurrent successful check", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-update-concurrent-"));
+	try {
+		let finishFailed: (latest: undefined) => void = () => {};
+		const failed = checkNow(dir, () => new Promise((resolve) => {
+			finishFailed = resolve;
+		}));
+
+		expect(await checkNow(dir, async () => "9.9.9")).toBe("9.9.9");
+		const successfulRecord = readFileSync(join(dir, "update-check.json"), "utf8");
+		await Bun.sleep(2);
+		finishFailed(undefined);
+		await failed;
+
+		expect(readCache(dir)?.latest).toBe("9.9.9");
+		expect(readFileSync(join(dir, "update-check.json"), "utf8")).toBe(successfulRecord);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("runUpdate rejects an unknown flag before touching disk or network", () => {
+	// The known-flags check runs first and returns before realpathSync, so a
+	// bogus agentDir must never be touched - if it were, this test would be
+	// exercising I/O rather than the early-return branch it targets.
+	const untouchedDir = join(tmpdir(), "orqi-update-should-not-exist");
+	rmSync(untouchedDir, { recursive: true, force: true });
+	return runUpdate(["--bogus"], untouchedDir).then((code) => {
+		expect(code).toBe(1);
+		expect(existsSync(untouchedDir)).toBe(false);
+	});
+});
+
+test("runUpdate rejects --json without --check before touching disk or network", () => {
+	// Without this gate, `orqi update --json` (no --check) falls through to the
+	// live update path and performs a real binary swap while printing
+	// human-readable text - the model for this is the unknown-flag test above.
+	const untouchedDir = join(tmpdir(), "orqi-update-should-not-exist-json");
+	rmSync(untouchedDir, { recursive: true, force: true });
+	return runUpdate(["--json"], untouchedDir).then((code) => {
+		expect(code).toBe(1);
+		expect(existsSync(untouchedDir)).toBe(false);
+	});
+});
+
+test("runUpdate rejects a traversal-shaped ORQI_VERSION before touching disk or network", () => {
+	// The comment on this guard in src/update.ts calls it security-relevant
+	// (an unchecked value resolves to another repo's release asset on
+	// github.com), so it needs its own test rather than riding along with the
+	// happy path.
+	const untouchedDir = join(tmpdir(), "orqi-update-should-not-exist-traversal");
+	rmSync(untouchedDir, { recursive: true, force: true });
+	const prior = process.env.ORQI_VERSION;
+	process.env.ORQI_VERSION = "../../other-repo/v1";
+	return runUpdate([], untouchedDir)
+		.then((code) => {
+			expect(code).toBe(1);
+			expect(existsSync(untouchedDir)).toBe(false);
+		})
+		.finally(() => {
+			if (prior === undefined) delete process.env.ORQI_VERSION;
+			else process.env.ORQI_VERSION = prior;
+		});
+});
+
+test("runUpdate treats an empty ORQI_VERSION as unpinned, matching install.sh", async () => {
+	const prior = process.env.ORQI_VERSION;
+	const priorError = console.error;
+	const errors: string[] = [];
+	process.env.ORQI_VERSION = "";
+	console.error = (...args) => errors.push(args.join(" "));
+	try {
+		// Running under Bun is classified as a source checkout, so this reaches a
+		// deterministic refusal without touching the network.
+		expect(await runUpdate([], tmpdir())).toBe(1);
+		expect(errors.join("\n")).not.toContain("is not a valid release tag");
+	} finally {
+		console.error = priorError;
+		if (prior === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior;
+	}
+});
+
+test("runUpdate verifies and atomically replaces a binary from a release tarball", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-integration-"));
+	const target = join(root, "orqi");
+	const tarball = releaseFixture(root, "999.0.0");
+	const prior = process.env.ORQI_VERSION;
+	process.env.ORQI_VERSION = "999.0.0";
+	writeVersionBinary(target, VERSION);
+	try {
+		const code = await runUpdate([], join(root, "agent"), {
+			execPath: target,
+			releaseUrl: () => `file://${tarball}`,
+		});
+		expect(code).toBe(0);
+		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("999.0.0");
+	} finally {
+		if (prior === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runUpdate preserves the installed binary across download, extraction, and verification failures", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-failures-"));
+	const target = join(root, "orqi");
+	const corrupt = join(root, "corrupt.tar.gz");
+	const wrongVersion = releaseFixture(root, "998.0.0");
+	const original = `#!/bin/sh\nprintf '%s\\n' '${VERSION}'\n`;
+	const prior = process.env.ORQI_VERSION;
+	process.env.ORQI_VERSION = "999.0.0";
+	writeVersionBinary(target, VERSION);
+	writeFileSync(corrupt, "not a tarball");
+	try {
+		for (const url of [
+			`file://${join(root, "missing.tar.gz")}`,
+			`file://${corrupt}`,
+			`file://${wrongVersion}`,
+		]) {
+			expect(await runUpdate([], join(root, "agent"), { execPath: target, releaseUrl: () => url })).toBe(1);
+			expect(readFileSync(target, "utf8")).toBe(original);
+		}
+	} finally {
+		if (prior === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("install.sh verifies before replacing its target and preserves the old binary on failure", () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-installer-integration-"));
+	const installDir = join(root, "install");
+	const target = join(installDir, "orqi");
+	const script = join(import.meta.dir, "..", "install.sh");
+	mkdirSync(installDir);
+	writeVersionBinary(target, VERSION);
+	const original = readFileSync(target, "utf8");
+	try {
+		const good = releaseFixture(join(root, "good"), "999.0.0");
+		const installed = Bun.spawnSync(["sh", script], { env: installerEnv(root, good) });
+		expect(installed.success, installed.stderr.toString()).toBe(true);
+		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("999.0.0");
+
+		writeFileSync(target, original);
+		chmodSync(target, 0o755);
+		const badRoot = join(root, "bad");
+		mkdirSync(badRoot);
+		const wrong = releaseFixture(badRoot, "998.0.0");
+		const rejected = Bun.spawnSync(["sh", script], { env: installerEnv(root, wrong) });
+		expect(rejected.success).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe(original);
+
+		const missing = Bun.spawnSync(["sh", script], {
+			env: installerEnv(root, join(root, "missing.tar.gz")),
+		});
+		expect(missing.success).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe(original);
+
+		const corrupt = join(root, "corrupt.tar.gz");
+		writeFileSync(corrupt, "not a tarball");
+		const unextractable = Bun.spawnSync(["sh", script], { env: installerEnv(root, corrupt) });
+		expect(unextractable.success).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe(original);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("install.sh times out verification without a delayed signal to a reaped PID", () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-installer-timeout-"));
+	const installDir = join(root, "install");
+	const target = join(installDir, "orqi");
+	const sourceScript = join(import.meta.dir, "..", "install.sh");
+	const script = join(root, "install.sh");
+	const payload = join(root, "hung", "payload");
+	const tarball = join(root, "hung.tar.gz");
+	mkdirSync(installDir);
+	mkdirSync(payload, { recursive: true });
+	writeVersionBinary(target, VERSION);
+	const original = readFileSync(target, "utf8");
+	const hung = join(payload, "orqi");
+	writeFileSync(hung, "#!/bin/sh\nwhile :; do :; done\n");
+	chmodSync(hung, 0o755);
+	expect(Bun.spawnSync(["tar", "-czf", tarball, "-C", payload, "orqi"]).success).toBe(true);
+	try {
+		const source = readFileSync(sourceScript, "utf8");
+		writeFileSync(script, source.replace("VERIFY_TIMEOUT_SECONDS=10", "VERIFY_TIMEOUT_SECONDS=1"));
+		const env = installerEnv(root, tarball);
+		const result = Bun.spawnSync(["sh", script], { env, timeout: 5_000 });
+		expect(result.success).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe(original);
+
+		// The old background watchdog waits, then signals a PID after the parent
+		// may already have reaped it. Keep timeout ownership in the parent instead.
+		expect(source).not.toContain('(sleep 10; kill -KILL "$verify_pid"');
+		expect(source).toContain("alarm shift; exec @ARGV");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the `update` argv string and the /update command registration stay in sync", () => {
+	// A rename of either half would silently break `orqi update`: main.ts
+	// would fall through to booting a session with "update" as the prompt, or
+	// the in-session /update command would vanish with no error (pi drops
+	// unregistered-name collisions and typos alike, silently).
+	const mainSource = readFileSync(join(import.meta.dir, "main.ts"), "utf8");
+	expect(mainSource).toContain('oneShot === "update"');
+
+	const registered: string[] = [];
+	const pi = {
+		registerEntryRenderer: () => {},
+		registerCommand: (name: string) => registered.push(name),
+		on: () => {},
+		appendEntry: () => {},
+	} as any;
+	orqCommands(async () => "", ["orq_list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
+	expect(registered).toContain("update");
+});
+
+test("refusal names both the method and the found path for every channel orqi does not own", () => {
+	const path = "/opt/homebrew/Cellar/orqi/0.1.0/bin/orqi";
+	expect(refusal("homebrew", path)).toContain(path);
+	expect(refusal("homebrew", path)).toContain("brew upgrade orq-ai/tap/orqi");
+
+	const npmPath = "/proj/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi";
+	expect(refusal("npm", npmPath)).toContain(npmPath);
+	expect(refusal("npm", npmPath)).toContain("npm install -g @orq-ai/orqi@latest");
+
+	const srcPath = "/Users/x/.bun/bin/bun";
+	expect(refusal("source", srcPath)).toContain(srcPath);
+	expect(refusal("source", srcPath)).toContain("git pull");
+
+	// "binary" is no longer a legal argument: Exclude<InstallMethod, "binary">
+	// makes the impossible case a compile error instead of a runtime throw.
+});
+
+test("releaseUrl builds the same two forms install.sh does, pinned or latest", () => {
+	expect(releaseUrl("orqi-macos-arm64.tar.gz")).toBe(
+		`https://github.com/${REPO}/releases/latest/download/orqi-macos-arm64.tar.gz`,
+	);
+	expect(releaseUrl("orqi-linux-x64.tar.gz", "v0.2.0")).toBe(
+		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
+	);
+	expect(releaseUrl("orqi-linux-x64.tar.gz", "0.2.0")).toBe(
+		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
+	);
 });

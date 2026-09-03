@@ -28,7 +28,10 @@ import type { ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent"
 import { $ } from "bun";
 import lock from "../skills.lock.json" with { type: "json" };
 
-const CHECK_TTL_MS = 24 * 60 * 60 * 1000;
+/** One check a day, shared with src/update.ts so the two background checks
+ * cannot drift into different cadences. Only the constant is shared: the two
+ * differ in what they cache and what they sweep. */
+export const CHECK_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
 
 export const SKILLS_LOCK: { source: string; sha: string; vendored: string[] } = lock;

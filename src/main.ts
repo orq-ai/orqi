@@ -29,13 +29,18 @@ import { connectOrqTools } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
+import { maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
 
 const oneShot = process.argv[2];
+const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent");
 
 // Answered before anything else runs: argv[2] is otherwise a prompt, so `orqi
 // --version` would boot a session, connect to the MCP server and bill a model
 // call to answer it. install.sh calls this to prove the binary it just
 // extracted can execute at all, so it must not need credentials or a network.
+// `orqi update` sits alongside them for the same reason, plus one more: it
+// must work for someone logged out or offline, so it runs before credentials,
+// MCP and assetDir() below.
 if (oneShot === "--version" || oneShot === "-v") {
 	console.log(VERSION);
 	process.exit(0);
@@ -46,12 +51,14 @@ if (oneShot === "--help" || oneShot === "-h") {
   orqi                 interactive TUI
   orqi "<prompt>"      one-shot, prints the answer and exits
   orqi --version       print the version and exit
+  orqi update          replace this binary with the latest release
 
 Sign in with \`orq auth login\` or export ORQ_API_KEY.`);
 	process.exit(0);
 }
-
-const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent");
+if (oneShot === "update") {
+	process.exit(await runUpdate(process.argv.slice(3), AGENT_DIR));
+}
 
 /**
  * Where skills, themes and the system prompt live.
@@ -140,6 +147,7 @@ const services = await createAgentSessionServices({
 				},
 				orq.tools.map((tool) => tool.name),
 				header,
+				AGENT_DIR,
 			),
 		],
 	},
@@ -161,6 +169,7 @@ services.settingsManager.setTuiMode(process.env.ORQI_TUI === "regular" ? "regula
 services.settingsManager.setLastChangelogVersion("999.0.0");
 
 const skills = services.resourceLoader.getSkills().skills.length;
+const update = pendingUpdate(readCache(AGENT_DIR));
 header.workspace = credential.workspace;
 header.project = await projectForCredential(credential.token);
 header.status = [
@@ -177,10 +186,16 @@ header.status = [
 	.filter(Boolean)
 	.join(" · ");
 const startupLine = [header.name, header.workspace, header.status, credential.source].filter(Boolean).join(" · ");
+// The header's "update available" line is the only place a pending update is
+// announced: it used to also ride in the status list above, saying the same
+// thing twice in one screenful.
+header.updateAvailable = update !== undefined;
 
-// Daily skills update, after the session is wired: boot must never wait on
-// GitHub, and a failure here costs nothing but freshness. Lands next run.
+// Daily skills update and update-availability check, after the session is
+// wired: boot must never wait on GitHub, and a failure in either costs
+// nothing but freshness. Both land on the next run.
 void maybeUpdateSkills(AGENT_DIR);
+void maybeCheckUpdate(AGENT_DIR);
 
 try {
 	if (oneShot) {

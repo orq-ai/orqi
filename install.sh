@@ -97,6 +97,17 @@ for cmd in curl tar; do
 	fi
 done
 
+# Linux ships `timeout`; macOS ships Perl. Both run the verifier as the timed
+# process itself, so no delayed watchdog ever signals a pid after it is reused.
+if command -v timeout >/dev/null 2>&1; then
+	VERIFY_WITH=timeout
+elif command -v perl >/dev/null 2>&1; then
+	VERIFY_WITH=perl
+else
+	err "required command not found: timeout or perl (needed to verify the download safely)"
+	exit 1
+fi
+
 case "$(uname -s)-$(uname -m)" in
 	Darwin-arm64) PLATFORM=macos-arm64 ;;
 	Darwin-x86_64) PLATFORM=macos-x64 ;;
@@ -110,7 +121,15 @@ esac
 
 asset="orqi-$PLATFORM.tar.gz"
 if [ -n "${ORQI_VERSION:-}" ]; then
-	url="https://github.com/$REPO/releases/download/$ORQI_VERSION/$asset"
+	# Normalized and interpolated into the release URL below, same as
+	# src/update.ts does for the equivalent env var: an unchecked
+	# "../../other-repo/v1" could resolve to a different release path.
+	if ! echo "$ORQI_VERSION" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+		err "ORQI_VERSION \"$ORQI_VERSION\" is not a valid release tag (expected e.g. \"0.2.0\" or \"v0.2.0\")"
+		exit 1
+	fi
+	version=${ORQI_VERSION#v}
+	url="https://github.com/$REPO/releases/download/v$version/$asset"
 else
 	url="https://github.com/$REPO/releases/latest/download/$asset"
 fi
@@ -123,33 +142,77 @@ printf '\n'
 
 # --- Download and install --------------------------------------------------
 
-tmp=$(mktemp -d)
+# $tmp is a sibling of the install target, not a bare `mktemp -d`: that is
+# what makes the `mv` below a same-filesystem rename rather than a
+# cross-filesystem copy. A bare mktemp -d lands under $TMPDIR (often /tmp,
+# often tmpfs), which is routinely a different filesystem than $INSTALL_DIR,
+# and a cross-filesystem `mv` falls back to copying. GNU coreutils' `mv` does
+# recover from that by unlinking the destination first when the copy's open
+# fails - so this is not "cannot recover from ETXTBSY", it is "should not have
+# to rely on a GNU-specific fallback to avoid it". Same directory guarantees
+# same filesystem, which guarantees a real rename(2) unconditionally, on any
+# `mv` implementation, and that is legal over a busy text file on both Linux
+# and macOS. This mirrors the sibling staging dir `runUpdate` uses in
+# src/update.ts (see AGENTS.md).
+mkdir -p "$INSTALL_DIR"
+tmp=$(mktemp -d "$INSTALL_DIR/.orqi-install-XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
-if ! curl -fSL --progress-bar -o "$tmp/$asset" "$url"; then
+# --max-time bounds this the same way runUpdate's curl does (src/update.ts):
+# the staging-dir sweep there treats any ".orqi-install-*"/".orqi-update-*"
+# dir older than an hour as orphaned, and age is only a safe proxy for that
+# if the download itself cannot run indefinitely.
+if ! curl -fSL --max-time 120 --progress-bar -o "$tmp/$asset" "$url"; then
 	err "download failed: $url"
 	err "check https://github.com/$REPO/releases for available versions"
 	exit 1
 fi
 
-mkdir -p "$INSTALL_DIR"
-tar -xzf "$tmp/$asset" -C "$INSTALL_DIR"
+tar -xzf "$tmp/$asset" -C "$tmp"
 
-# tar exits 0 for any well-formed archive, whatever is inside it, so the binary
-# is confirmed rather than assumed. `orqi --version` needs no credentials and no
-# network, which makes it a real check that the file downloaded for this
-# platform can execute here: wrong architecture, a missing exec bit or a
-# Gatekeeper kill all fail loudly instead of printing a tick.
-if [ ! -f "$INSTALL_DIR/orqi" ]; then
+# Verify the staged copy, not the installed one - install.sh confirms before
+# it commits, the same order src/update.ts's runUpdate follows for `orqi
+# update`. tar exits 0 for any well-formed archive, whatever is inside it, so
+# the binary is confirmed rather than assumed. `orqi --version` needs no
+# credentials and no network, which makes it a real check that the file
+# downloaded for this platform can execute here: wrong architecture, a
+# missing exec bit or a Gatekeeper kill all fail loudly instead of printing a
+# tick, and all of that happens in $tmp, before anything touches the
+# installed file.
+if [ -L "$tmp/orqi" ] || [ ! -f "$tmp/orqi" ]; then
 	err "the archive did not contain an orqi binary: $asset"
 	exit 1
 fi
-chmod +x "$INSTALL_DIR/orqi"
-if ! installed=$("$INSTALL_DIR/orqi" --version 2>&1); then
-	err "installed to $INSTALL_DIR/orqi but it will not run:"
+chmod +x "$tmp/orqi"
+
+# POSIX sh has no timeout command. Use the platform utility when present;
+# otherwise Perl arms SIGALRM and then replaces itself with the verifier, so
+# the deadline belongs to that same process and no reusable pid is signalled.
+verify_output="$tmp/version-output"
+VERIFY_TIMEOUT_SECONDS=10
+if [ "$VERIFY_WITH" = timeout ]; then
+	verify_command_status=0
+	timeout -s KILL "$VERIFY_TIMEOUT_SECONDS" "$tmp/orqi" --version >"$verify_output" 2>&1 || verify_command_status=$?
+else
+	verify_command_status=0
+	perl -e 'alarm shift; exec @ARGV' "$VERIFY_TIMEOUT_SECONDS" "$tmp/orqi" --version >"$verify_output" 2>&1 || verify_command_status=$?
+fi
+verify_status=$verify_command_status
+installed=$(cat "$verify_output")
+if [ "$verify_status" -ne 0 ]; then
+	err "downloaded $asset but it will not run:"
 	err "$installed"
 	exit 1
 fi
+if [ -n "${version:-}" ] && [ "$installed" != "$version" ]; then
+	err "downloaded $asset but it reported version $installed (expected $version)"
+	exit 1
+fi
+
+# Only now, having verified the staged copy, commit it: a same-filesystem
+# rename, atomic and legal over a busy text file, so this also works when
+# $INSTALL_DIR/orqi is the currently-running orqi (see the comment above).
+mv "$tmp/orqi" "$INSTALL_DIR/orqi"
 
 printf '\n%s✓%s installed  %s %s\n' "$ORANGE" "$RESET" "$INSTALL_DIR/orqi" "$installed"
 
