@@ -58,7 +58,26 @@ export async function projectForCredential(token: string): Promise<string | unde
 	}
 }
 
-interface Session { activeWorkspaceKey?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] }
+interface Session { activeWorkspaceKey?: string; activeProjectId?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] }
+
+/**
+ * Token for the active workspace.
+ *
+ * CLI 5.x keyed `workspaceTokens` by workspace key; 6.x keys them
+ * `<workspaceKey>#<projectId>`, because a token is now project-scoped. An exact
+ * lookup on the workspace key therefore finds nothing on 6.x and orqi silently
+ * loses its login-session credential. Prefer the active project's entry, then
+ * the bare key, then any entry for that workspace.
+ */
+export function sessionToken(session: Session | undefined): string | undefined {
+	const workspace = session?.activeWorkspaceKey;
+	const tokens = session?.workspaceTokens;
+	if (!workspace || !tokens) return undefined;
+	const key = [`${workspace}#${session.activeProjectId}`, workspace].find((candidate) => tokens[candidate]?.token)
+		?? Object.keys(tokens).find((name) => name.startsWith(`${workspace}#`) && tokens[name]?.token);
+	const token = key ? tokens[key]?.token : undefined;
+	return typeof token === "string" && token ? token : undefined;
+}
 
 /** Session file named by `orq auth whoami --json`, or undefined when the output is not that. */
 export function sessionFileOf(whoamiJson: string): string | undefined {
@@ -73,10 +92,10 @@ export function sessionFileOf(whoamiJson: string): string | undefined {
 /**
  * The orq CLI login session, freshly read.
  *
- * Which file under `~/.orq/sessions/` holds it is the CLI's business: it was
- * `<profile>.json` up to 5.2 and is `<host>.json` from 5.3 (RES-1500), so ask
- * `whoami` for the path rather than guessing. whoami also refreshes an expired
- * token and proves the session is live.
+ * The file's name under `~/.orq/sessions/` and its internal shape are both the
+ * CLI's business, and both have already changed across releases (RES-1500), so
+ * ask `whoami` for the path rather than guessing. whoami also refreshes an
+ * expired token and proves the session is live.
  */
 function readSession(): Session | undefined {
 	const whoami = runOrq(["auth", "whoami", "--json"]);
@@ -128,8 +147,8 @@ export function credentialCandidates(): Credential[] {
 		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
 	}
 	const workspace = session?.activeWorkspaceKey;
-	const token = workspace ? session?.workspaceTokens?.[workspace]?.token : undefined;
-	if (typeof token === "string" && token) candidates.push({ token, source: "orq login session", workspace });
+	const token = sessionToken(session);
+	if (token) candidates.push({ token, source: "orq login session", workspace });
 	return candidates;
 }
 

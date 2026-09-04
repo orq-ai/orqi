@@ -70,9 +70,9 @@ pi's built-in providers are filtered out by `onlyOrq()` in `src/model.ts` (see
 ## Auth and workspace
 
 Both are delegated to the [orq CLI](https://github.com/orq-ai/orq-cli) rather than reimplemented.
-`src/auth.ts` only reads the session file the CLI names in `orq auth whoami --json` (per host under
-`~/.orq/sessions/` since CLI 5.3, per profile before), so which login is in play follows `ORQ_SERVER`
-exactly as it does for the CLI.
+`src/auth.ts` only reads the session file the CLI names in `orq auth whoami --json` (the CLI owns
+both the file's name under `~/.orq/sessions/` and its internal shape, so orqi asks rather than
+guesses), so which login is in play follows `ORQ_SERVER` exactly as it does for the CLI.
 
 Credentials are tried in order (`ORQ_API_KEY`, then the login session) on the real MCP connection: a
 401 selects the next candidate, anything else is a real error (see [AGENTS.md](AGENTS.md) for why
