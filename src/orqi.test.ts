@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { sessionFileOf, sessionToken, workspaceOfKey } from "./auth.ts";
+import { sessionFileOf, sessionToken, spawnFailure, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -542,6 +542,13 @@ test("summarize collapses orq payloads to one line", () => {
 
 	expect(summarize("not json at all")).toMatch(/^\d+ B$/);
 	expect(summarize("two\nlines")).toMatch(/^2 lines · \d+ B$/);
+});
+
+test("a timed-out orq call is not reported as a missing binary", () => {
+	// A stalled backend and an uninstalled CLI both surface as spawnSync's
+	// `error`; conflating them sends a working install off to debug its PATH.
+	expect(spawnFailure(Object.assign(new Error("spawnSync orq ETIMEDOUT"), { code: "ETIMEDOUT" }))).toMatch(/timed out after 15s/);
+	expect(spawnFailure(Object.assign(new Error("spawnSync orq ENOENT"), { code: "ENOENT" }))).toMatch(/not found on PATH/);
 });
 
 test("sessionFileOf takes the session path from whoami, whatever the CLI names it", () => {

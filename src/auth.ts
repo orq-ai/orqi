@@ -12,6 +12,10 @@ export const API_BASE_URL = process.env.ORQ_SERVER ?? process.env.ORQ_API_BASE_U
 export const MCP_URL = process.env.ORQ_MCP_URL ?? `${API_BASE_URL}/v2/mcp`;
 export const ROUTER_URL = process.env.ORQ_GATEWAY_URL ?? `${API_BASE_URL}/v3/router`;
 
+// The CLI talks to the same backend the MCP server does, and that one stalls
+// (see AGENTS.md), so no orq call may block a boot indefinitely.
+const CLI_TIMEOUT_MS = 15_000;
+
 export interface OrqResult {
 	ok: boolean;
 	stdout: string;
@@ -20,9 +24,21 @@ export interface OrqResult {
 
 /** Run the orq CLI. Never throws: a missing binary is just a failed result. */
 export function runOrq(args: string[]): OrqResult {
-	const res = spawnSync("orq", args, { encoding: "utf8", timeout: 15000 });
-	if (res.error) return { ok: false, stdout: "", stderr: `orq CLI not found on PATH (${res.error.message})` };
+	const res = spawnSync("orq", args, { encoding: "utf8", timeout: CLI_TIMEOUT_MS });
+	if (res.error) return { ok: false, stdout: "", stderr: spawnFailure(res.error) };
 	return { ok: res.status === 0, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+/**
+ * Why a spawn produced no exit status.
+ *
+ * A timeout also lands in `error`, and reporting it as a missing binary sends a
+ * user with a working install off to debug their PATH while the backend is
+ * merely slow.
+ */
+export function spawnFailure(error: Error & { code?: string }): string {
+	if (error.code === "ETIMEDOUT") return `orq CLI timed out after ${CLI_TIMEOUT_MS / 1000}s (the orq API may be slow)`;
+	return `orq CLI not found on PATH (${error.message})`;
 }
 
 export interface Credential {
