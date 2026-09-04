@@ -33,6 +33,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **Credentials are tried on the real MCP connection**, not pre-probed. A pre-probe would need a
   second round-trip against a server that stalls, and a stall would then be misread as a bad
   credential.
+- **`sessionToken()` tries three keys, not one.** CLI 5.x keyed `workspaceTokens` by workspace key;
+  6.x keys it `<workspaceKey>#<projectId>`, because a token is now project-scoped. An exact-key
+  lookup on 6.x finds nothing and silently loses the login-session credential, so the lookup tries
+  the active project's entry, then the bare key, then any entry for the workspace.
 - **Tool results render as a one-line summary.** The server answers with a single unbroken line of
   JSON, so pi's built-in 10-line preview never trims anything and one call wraps a whole screen.
   `renderResult` in `src/mcp.ts` summarises; the model still gets the full payload.

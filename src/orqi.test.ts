@@ -545,7 +545,7 @@ test("summarize collapses orq payloads to one line", () => {
 });
 
 test("sessionFileOf takes the session path from whoami, whatever the CLI names it", () => {
-	// 5.2 keyed the file by profile, 5.3 by host; orqi never guesses either.
+	// The CLI owns the file's name and shape, and both have changed across releases; orqi asks rather than guesses.
 	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe("/home/u/.orq/sessions/my.orq.ai.json");
 	expect(sessionFileOf('{"authenticated":true,"session_file":""}')).toBeUndefined();
 	expect(sessionFileOf("you are not logged in")).toBeUndefined();

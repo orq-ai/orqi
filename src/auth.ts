@@ -20,7 +20,7 @@ export interface OrqResult {
 
 /** Run the orq CLI. Never throws: a missing binary is just a failed result. */
 export function runOrq(args: string[]): OrqResult {
-	const res = spawnSync("orq", args, { encoding: "utf8" });
+	const res = spawnSync("orq", args, { encoding: "utf8", timeout: 15000 });
 	if (res.error) return { ok: false, stdout: "", stderr: `orq CLI not found on PATH (${res.error.message})` };
 	return { ok: res.status === 0, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
