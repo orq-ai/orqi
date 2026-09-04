@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { workspaceOfKey } from "./auth.ts";
+import { sessionFileOf, sessionToken, spawnFailure, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -544,6 +544,20 @@ test("summarize collapses orq payloads to one line", () => {
 	expect(summarize("two\nlines")).toMatch(/^2 lines · \d+ B$/);
 });
 
+test("a timed-out orq call is not reported as a missing binary", () => {
+	// A stalled backend and an uninstalled CLI both surface as spawnSync's
+	// `error`; conflating them sends a working install off to debug its PATH.
+	expect(spawnFailure(Object.assign(new Error("spawnSync orq ETIMEDOUT"), { code: "ETIMEDOUT" }))).toMatch(/timed out after 15s/);
+	expect(spawnFailure(Object.assign(new Error("spawnSync orq ENOENT"), { code: "ENOENT" }))).toMatch(/not found on PATH/);
+});
+
+test("sessionFileOf takes the session path from whoami, whatever the CLI names it", () => {
+	// The CLI owns the file's name and shape, and both have changed across releases; orqi asks rather than guesses.
+	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe("/home/u/.orq/sessions/my.orq.ai.json");
+	expect(sessionFileOf('{"authenticated":true,"session_file":""}')).toBeUndefined();
+	expect(sessionFileOf("you are not logged in")).toBeUndefined();
+});
+
 test("workspaceOfKey reads the workspace out of an orq API key", () => {
 	// orq keys are sk-orq-<jwt> and the payload carries workspace_id, so a key
 	// identifies its own workspace even with no login session on the machine.
@@ -559,6 +573,30 @@ test("workspaceOfKey reads the workspace out of an orq API key", () => {
 
 	expect(workspaceOfKey("not-a-key", undefined)).toBeUndefined();
 	expect(workspaceOfKey("sk-orq-a.notbase64!!.c", undefined)).toBeUndefined();
+});
+
+test("sessionToken finds the workspace's token across CLI versions", () => {
+	// 6.x: tokens are project-scoped, keyed `<workspace>#<projectId>`.
+	expect(sessionToken({
+		activeWorkspaceKey: "orq-research", activeProjectId: "30365aee",
+		workspaceTokens: { "orq-research#30365aee": { token: "tok-6x" } },
+	})).toBe("tok-6x");
+
+	// 5.x: bare workspace key, no project in the mix at all.
+	expect(sessionToken({
+		activeWorkspaceKey: "orq-research",
+		workspaceTokens: { "orq-research": { token: "tok-5x" } },
+	})).toBe("tok-5x");
+
+	// activeProjectId missing or stale: fall back to any entry for the workspace.
+	expect(sessionToken({
+		activeWorkspaceKey: "orq-research",
+		workspaceTokens: { "orq-research#other-project": { token: "tok-fallback" } },
+	})).toBe("tok-fallback");
+
+	expect(sessionToken(undefined)).toBeUndefined();
+	expect(sessionToken({ activeWorkspaceKey: "orq-research", workspaceTokens: {} })).toBeUndefined();
+	expect(sessionToken({ workspaceTokens: { "orq-research": { token: "tok" } } })).toBeUndefined();
 });
 
 test("installMethod tells a brew-managed binary from a plain one", () => {

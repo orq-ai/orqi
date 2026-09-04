@@ -7,14 +7,14 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 
-export const API_BASE_URL = process.env.ORQ_API_BASE_URL ?? "https://api.orq.ai";
+export const API_BASE_URL = process.env.ORQ_SERVER ?? process.env.ORQ_API_BASE_URL ?? "https://api.orq.ai";
 export const MCP_URL = process.env.ORQ_MCP_URL ?? `${API_BASE_URL}/v2/mcp`;
 export const ROUTER_URL = process.env.ORQ_GATEWAY_URL ?? `${API_BASE_URL}/v3/router`;
 
-const SESSION_FILE = join(homedir(), ".orq", "sessions", `${process.env.ORQ_PROFILE ?? "default"}.json`);
+// The CLI talks to the same backend the MCP server does, and that one stalls
+// (see AGENTS.md), so no orq call may block a boot indefinitely.
+const CLI_TIMEOUT_MS = 15_000;
 
 export interface OrqResult {
 	ok: boolean;
@@ -24,9 +24,21 @@ export interface OrqResult {
 
 /** Run the orq CLI. Never throws: a missing binary is just a failed result. */
 export function runOrq(args: string[]): OrqResult {
-	const res = spawnSync("orq", args, { encoding: "utf8" });
-	if (res.error) return { ok: false, stdout: "", stderr: `orq CLI not found on PATH (${res.error.message})` };
+	const res = spawnSync("orq", args, { encoding: "utf8", timeout: CLI_TIMEOUT_MS });
+	if (res.error) return { ok: false, stdout: "", stderr: spawnFailure(res.error) };
 	return { ok: res.status === 0, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+/**
+ * Why a spawn produced no exit status.
+ *
+ * A timeout also lands in `error`, and reporting it as a missing binary sends a
+ * user with a working install off to debug their PATH while the backend is
+ * merely slow.
+ */
+export function spawnFailure(error: Error & { code?: string }): string {
+	if (error.code === "ETIMEDOUT") return `orq CLI timed out after ${CLI_TIMEOUT_MS / 1000}s (the orq API may be slow)`;
+	return `orq CLI not found on PATH (${error.message})`;
 }
 
 export interface Credential {
@@ -62,9 +74,51 @@ export async function projectForCredential(token: string): Promise<string | unde
 	}
 }
 
-function readSession(): { activeWorkspaceKey?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] } | undefined {
+interface Session { activeWorkspaceKey?: string; activeProjectId?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] }
+
+/**
+ * Token for the active workspace.
+ *
+ * CLI 5.x keyed `workspaceTokens` by workspace key; 6.x keys them
+ * `<workspaceKey>#<projectId>`, because a token is now project-scoped. An exact
+ * lookup on the workspace key therefore finds nothing on 6.x and orqi silently
+ * loses its login-session credential. Prefer the active project's entry, then
+ * the bare key, then any entry for that workspace.
+ */
+export function sessionToken(session: Session | undefined): string | undefined {
+	const workspace = session?.activeWorkspaceKey;
+	const tokens = session?.workspaceTokens;
+	if (!workspace || !tokens) return undefined;
+	const key = [`${workspace}#${session.activeProjectId}`, workspace].find((candidate) => tokens[candidate]?.token)
+		?? Object.keys(tokens).find((name) => name.startsWith(`${workspace}#`) && tokens[name]?.token);
+	const token = key ? tokens[key]?.token : undefined;
+	return typeof token === "string" && token ? token : undefined;
+}
+
+/** Session file named by `orq auth whoami --json`, or undefined when the output is not that. */
+export function sessionFileOf(whoamiJson: string): string | undefined {
 	try {
-		return JSON.parse(readFileSync(SESSION_FILE, "utf8"));
+		const file = JSON.parse(whoamiJson)?.session_file;
+		return typeof file === "string" && file ? file : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The orq CLI login session, freshly read.
+ *
+ * The file's name under `~/.orq/sessions/` and its internal shape are both the
+ * CLI's business, and both have already changed across releases (RES-1500), so
+ * ask `whoami` for the path rather than guessing. whoami also refreshes an
+ * expired token and proves the session is live.
+ */
+function readSession(): Session | undefined {
+	const whoami = runOrq(["auth", "whoami", "--json"]);
+	const file = whoami.ok ? sessionFileOf(whoami.stdout) : undefined;
+	if (!file) return undefined;
+	try {
+		return JSON.parse(readFileSync(file, "utf8"));
 	} catch {
 		return undefined;
 	}
@@ -92,21 +146,6 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
 	}
 }
 
-/** Active-workspace token from the orq CLI login session, if there is one. */
-function sessionCredential(): Credential | undefined {
-	// whoami first: it refreshes an expired token and proves the session is live.
-	if (!runOrq(["auth", "whoami"]).ok) return undefined;
-	try {
-		const session = readSession();
-		const workspace = session?.activeWorkspaceKey;
-		const token = workspace ? session?.workspaceTokens?.[workspace]?.token : undefined;
-		if (typeof token !== "string" || !token) return undefined;
-		return { token, source: "orq login session", workspace };
-	} catch {
-		return undefined;
-	}
-}
-
 /**
  * Credentials to try, best first.
  *
@@ -118,12 +157,14 @@ function sessionCredential(): Credential | undefined {
  */
 export function credentialCandidates(): Credential[] {
 	const candidates: Credential[] = [];
+	const session = readSession();
 	if (process.env.ORQ_API_KEY) {
 		const token = process.env.ORQ_API_KEY;
-		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, readSession()) });
+		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
 	}
-	const session = sessionCredential();
-	if (session) candidates.push(session);
+	const workspace = session?.activeWorkspaceKey;
+	const token = sessionToken(session);
+	if (token) candidates.push({ token, source: "orq login session", workspace });
 	return candidates;
 }
 

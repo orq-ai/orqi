@@ -55,7 +55,8 @@ allows and one orq credential covers both the LLM and the tools.
 | Variable | Purpose |
 |---|---|
 | `ORQ_API_KEY` | Credential; falls back to the `orq auth login` session when unset or rejected. Works on its own, no session file needed |
-| `ORQ_PROFILE` | Which `orq auth login` session to read (default `default`) |
+| `ORQ_PROFILE` | Which credentials profile, and so which `orq auth login` session, to use; passed through to the orq CLI, which names the session file |
+| `ORQ_SERVER` | API base URL (default `https://api.orq.ai`), ahead of `ORQ_API_BASE_URL` |
 | `ORQI_MODEL` | Router model (default `openai/gpt-5.6-terra`) |
 | `ORQI_TUI` | `regular` renders inline instead of fullscreen (fullscreen is upstream-experimental) |
 | `ORQI_THEME` | `dark` selects the theme that keeps turquoise for success and red for errors; the default is one-hue amber. `/theme` switches mid-session |
