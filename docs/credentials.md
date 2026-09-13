@@ -8,15 +8,20 @@ token refresh and the session file; orqi shells out to it and reads what it is t
 
 ## 1. Which credential
 
-Two candidates, best first. Neither is probed up front — they are tried on the real MCP
+Up to three candidates, best first. None is probed up front — they are tried on the real MCP
 connection, where a 401 selects the next one and any other error is a real error.
 
-| Order | Candidate | Comes from | Shown as |
-|---|---|---|---|
-| 1 | `ORQ_API_KEY` | the environment, or pi's `/login` (which sets it for the session) | `ORQ_API_KEY` |
-| 2 | the login session | `orq auth login`, read through the CLI | `orq login session` |
+| Order | Candidate | Present when | Comes from | Shown as |
+|---|---|---|---|---|
+| 1 | the pinned profile's key | a profile is in force | `credentials.json`, by the name whoami reports (see [6](#6-pinning-a-profile)) | `orq profile <name>` |
+| 2 | `ORQ_API_KEY` | it is set, and differs from 1 | the environment, or pi's `/login` (which sets it for the session) | `ORQ_API_KEY` |
+| 3 | the login session | there is one | `orq auth login`, read through the CLI | `orq login session` |
 
-The startup line always names the one that won. If both fail, or there are none, orqi prints why
+The profile sits above `ORQ_API_KEY` because it does for the CLI, which warns and uses the profile
+(`applyProfileAPIKey`). orqi ranking them the other way would put the two on different credentials
+for the same command.
+
+The startup line always names the one that won. If they all fail, or there are none, orqi prints why
 (see [4](#4-when-nothing-works)) and exits.
 
 ## 2. Which server
@@ -131,9 +136,6 @@ is. whoami names the profile but not the file, and every command that prints a p
 That file has already been through one layout migration, so every step is optional: a moved file, a
 keyless profile or a renamed field warns and falls through to the next candidate.
 
-| Order (profile in force) | Credential |
-|---|---|
-| 1 | the profile's key from `credentials.json` |
-| 2 | `ORQ_API_KEY`, if it differs from that key |
-| 3 | the login session for the profile's server |
+The candidate order that results is the one in [1](#1-which-credential); a keyless or unreadable
+profile just drops row 1 and warns.
 

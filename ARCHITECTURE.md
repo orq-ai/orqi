@@ -17,7 +17,7 @@ orqi
 │   │                            the rest shell out to the orq CLI  src/commands.ts
 │   └── startup header           session entry, not stdout        src/commands.ts
 ├── model            orq AI Router as a pi provider              src/model.ts
-├── credentials       ORQ_API_KEY or the orq CLI login session    src/auth.ts
+├── credentials       orq profile, ORQ_API_KEY or the login session  src/auth.ts
 └── self-update       `orqi update`, daily check, header note     src/update.ts
 ```
 
@@ -87,7 +87,8 @@ whoami cannot answer. That is the only host variable orqi reads.
 [docs/credentials.md](docs/credentials.md) lays out the whole resolution - candidate order, env
 vars, the three-key token lookup and every failure message - as tables.
 
-Credentials are tried in order (`ORQ_API_KEY`, then the login session) on the real MCP connection: a
+Credentials are tried in order (a pinned profile's key, then `ORQ_API_KEY`, then the login session)
+on the real MCP connection: a
 401 selects the next candidate, anything else is a real error (see [AGENTS.md](AGENTS.md) for why
 they are not pre-probed). The startup line always names the credential that won.
 
