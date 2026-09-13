@@ -21,23 +21,30 @@ The startup line always names the one that won. If both fail, or there are none,
 
 ## 2. Which server
 
-orqi reads the endpoint from the environment and nothing else. It does not re-derive the host
-from the session file or from whoami.
+orqi does not work the host out for itself. The CLI resolves it — from `ORQ_SERVER`, from an
+API-key profile's own `server`, or from its own default — and reports the answer as `server` in the
+same `whoami` payload orqi already reads. orqi takes that.
+
+| Order | Source | Why here |
+|---|---|---|
+| 1 | `ORQ_API_BASE_URL` | orqi's own legacy override; the CLI cannot see it, so nothing else can honour it |
+| 2 | `server` from `orq auth whoami -o json` | the CLI's resolved answer, which already accounts for `ORQ_SERVER` and for the profile |
+| 3 | `ORQ_SERVER` | only reached when whoami could not answer at all (no CLI, a stall, a dead session) |
+| 4 | `https://api.orq.ai` | the default |
+
+Why it matters: an API-key profile carries its own server. `ORQ_PROFILE=achmea-aim-ithaka` puts the
+CLI on `https://aim.orq.ai` with no `ORQ_SERVER` in sight, and an env-only orqi would send that
+profile's token to `api.orq.ai`.
 
 | Variable | Effect | Read by |
 |---|---|---|
-| `ORQ_SERVER` | API base URL, and so which login session the CLI resolves | CLI, and orqi |
-| `ORQ_API_BASE_URL` | same, legacy name, loses to `ORQ_SERVER` | orqi |
-| `ORQ_PROFILE` | which **API-key profile** from `credentials.json` — not a browser login | CLI only |
+| `ORQ_SERVER` | API base URL, and so which login session the CLI resolves | CLI; orqi only as a fallback |
+| `ORQ_PROFILE` | which **API-key profile** from `credentials.json` — not a browser login; may carry its own server | CLI; orqi sees the result via whoami |
+| `ORQ_API_BASE_URL` | orqi-only override, wins over everything | orqi |
 | `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | override the MCP and router endpoints for on-prem | orqi |
 
-`orq orqi` resolves the server itself and exports it to the child process as `ORQ_SERVER`
-(`cli/custom/commands/orqi.go`), so that launch path is always consistent.
-
-One sharp edge, when orqi is started directly rather than through `orq orqi`: a profile can carry
-its own server (`orq auth profile list` shows it). If you set `ORQ_PROFILE` to such a profile
-without also setting `ORQ_SERVER`, the CLI resolves one host and orqi talks to another. Set both,
-or launch through `orq orqi`.
+`orq orqi` also exports the resolved server to the child process as `ORQ_SERVER`
+(`cli/custom/commands/orqi.go`), so that launch path agrees with whoami by construction.
 
 ## 3. Which session file, and which token inside it
 
@@ -51,7 +58,7 @@ Every step is the CLI's answer, not orqi's guess:
 
 | Step | What orqi does | Why not the obvious shortcut |
 |---|---|---|
-| Find the file | runs `orq auth whoami -o json`, reads `session_file` | the name has changed three times: `<profile>.json`, then `default.json`, now `<host>.json` |
+| Find the file | runs `orq auth whoami -o json`, reads `session_file` and `server` | the name has changed three times: `<profile>.json`, then `default.json`, now `<host>.json` |
 | Ask in the right dialect | `-o json`, never `--json` | orq-cli 8.4 removed the `--json` alias; `-o json` works from 5.0 onwards |
 | Refresh | none — `whoami` already refreshed an expiring token and proved the session is live | a second call costs another round trip against a backend that stalls |
 | Read the token | `sessionToken()`, three keys (below) | the map's key scheme changed in 6.x |

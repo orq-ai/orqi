@@ -41,6 +41,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (orq-cli#86) and answers `unknown flag`; `-o json` has worked since 5.0, so it covers every CLI
   orqi can meet. `orqi update --json` is orqi's own flag and is unrelated. A test scrapes the
   `runOrq` call sites to keep the alias from coming back.
+- **The host comes back off `whoami`, not out of the environment.** An API-key profile carries its
+  own server, so `ORQ_PROFILE` alone moves the CLI to another host with no `ORQ_SERVER` set; an
+  env-only orqi would then send that profile's token to `api.orq.ai`. `ORQ_SERVER` is an input the
+  CLI already weighed, so it is only a fallback for when whoami cannot answer.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
   backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit

@@ -75,9 +75,10 @@ both the file's name under `~/.orq/sessions/` and its internal shape, and has ch
 more than once, so orqi asks rather than guesses. A browser login belongs to a server, so which one
 is in play follows `ORQ_SERVER`; `ORQ_PROFILE` selects an API-key profile instead.
 
-The endpoint comes from the environment and nowhere else: `orq orqi` resolves the server itself and
-puts it in the subprocess env as `ORQ_SERVER`, so orqi reads that variable rather than working the
-host out a second time from the session file or from whoami's `urls.api_base_url`.
+The endpoint follows the CLI too. whoami reports the `server` it resolved, and orqi uses that, so a
+profile that carries its own server (`ORQ_PROFILE=…`) cannot leave the two talking to different
+hosts. `ORQ_SERVER` is an input the CLI has already weighed, so orqi only falls back to it when
+whoami cannot answer; `ORQ_API_BASE_URL` stays on top as the one override the CLI cannot see.
 
 [docs/credentials.md](docs/credentials.md) lays out the whole resolution - candidate order, env
 vars, the three-key token lookup and every failure message - as tables.

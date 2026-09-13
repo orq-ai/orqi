@@ -8,9 +8,36 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-export const API_BASE_URL = process.env.ORQ_SERVER ?? process.env.ORQ_API_BASE_URL ?? "https://api.orq.ai";
-export const MCP_URL = process.env.ORQ_MCP_URL ?? `${API_BASE_URL}/v2/mcp`;
-export const ROUTER_URL = process.env.ORQ_GATEWAY_URL ?? `${API_BASE_URL}/v3/router`;
+/**
+ * The server the CLI resolved for this environment, once whoami has answered.
+ *
+ * `ORQ_SERVER` is only one of the inputs the CLI weighs: an API-key profile
+ * carries its own server, so `ORQ_PROFILE=achmea-aim-ithaka` puts the CLI on
+ * `https://aim.orq.ai` with no `ORQ_SERVER` in sight. orqi reading only the
+ * environment would then send that profile's token to `api.orq.ai`. Reading
+ * the answer back off whoami keeps the two in step without orqi owning a
+ * second copy of the precedence rules.
+ */
+let cliServer: string | undefined;
+
+/**
+ * API base URL, best source first.
+ *
+ * `ORQ_API_BASE_URL` is orqi's own legacy override and the CLI cannot see it,
+ * so it stays on top as the escape hatch. `ORQ_SERVER` sits below whoami
+ * rather than above it because whoami has already accounted for it.
+ */
+export function apiBaseUrl(env: NodeJS.ProcessEnv = process.env, server = cliServer): string {
+	return env.ORQ_API_BASE_URL ?? server ?? env.ORQ_SERVER ?? "https://api.orq.ai";
+}
+
+export function mcpUrl(): string {
+	return process.env.ORQ_MCP_URL ?? `${apiBaseUrl()}/v2/mcp`;
+}
+
+export function routerUrl(): string {
+	return process.env.ORQ_GATEWAY_URL ?? `${apiBaseUrl()}/v3/router`;
+}
 
 // The CLI talks to the same backend the MCP server does, and that one stalls
 // (see AGENTS.md), so no orq call may block a boot indefinitely.
@@ -53,7 +80,7 @@ interface Project { id?: string; name?: string; key?: string; default?: boolean;
 /** Resolve the project label from the authenticated Projects REST API. */
 export async function projectForCredential(token: string): Promise<string | undefined> {
 	try {
-		const response = await fetch(`${API_BASE_URL}/v2/projects?limit=200`, {
+		const response = await fetch(`${apiBaseUrl()}/v2/projects?limit=200`, {
 			headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
 		});
 		if (!response.ok) return undefined;
@@ -100,9 +127,19 @@ export function sessionToken(session: Session | undefined): string | undefined {
  *
  * `--json` was an alias until orq-cli 8.4 dropped it (orq-cli#86); `-o json`
  * has worked since 5.0, so it covers every CLI orqi can meet. A test fails if
- * `--json` reappears anywhere in `src/`.
+ * `--json` reappears in a `runOrq` call.
  */
 export const WHOAMI_ARGS = ["auth", "whoami", "-o", "json"];
+
+/** Server the CLI resolved, from the same whoami payload as the session file. */
+export function serverOf(whoamiJson: string): string | undefined {
+	try {
+		const server = JSON.parse(whoamiJson)?.server;
+		return typeof server === "string" && server ? server : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 /** Session file named by `orq auth whoami`, or undefined when the output is not that. */
 export function sessionFileOf(whoamiJson: string): string | undefined {
@@ -125,6 +162,7 @@ export function sessionFileOf(whoamiJson: string): string | undefined {
 function readSession(): { session?: Session; failure?: string } {
 	const whoami = runOrq(WHOAMI_ARGS);
 	if (!whoami.ok) return { failure: whoami.stderr.trim() || "orq auth whoami failed" };
+	cliServer = serverOf(whoami.stdout);
 	const file = sessionFileOf(whoami.stdout);
 	if (!file) return { failure: "orq auth whoami named no session file" };
 	try {

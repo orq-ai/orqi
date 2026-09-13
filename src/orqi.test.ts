@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
+import { apiBaseUrl, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -542,6 +542,27 @@ test("summarize collapses orq payloads to one line", () => {
 
 	expect(summarize("not json at all")).toMatch(/^\d+ B$/);
 	expect(summarize("two\nlines")).toMatch(/^2 lines · \d+ B$/);
+});
+
+test("the host follows the CLI, because an API-key profile carries its own server", () => {
+	// `ORQ_PROFILE=achmea-aim-ithaka` puts the CLI on https://aim.orq.ai with no
+	// ORQ_SERVER set anywhere, so an env-only host would send that profile's
+	// token to api.orq.ai. whoami reports what the CLI resolved; orqi takes it.
+	const whoami = '{"authenticated":true,"server":"https://aim.orq.ai","session_file":"/h/.orq/sessions/aim.orq.ai.json"}';
+	expect(serverOf(whoami)).toBe("https://aim.orq.ai");
+	expect(apiBaseUrl({}, serverOf(whoami))).toBe("https://aim.orq.ai");
+
+	// ORQ_SERVER is an input the CLI already weighed, so it only matters when
+	// whoami could not answer at all.
+	expect(apiBaseUrl({ ORQ_SERVER: "https://my.orq.ai" }, "https://aim.orq.ai")).toBe("https://aim.orq.ai");
+	expect(apiBaseUrl({ ORQ_SERVER: "https://my.orq.ai" }, undefined)).toBe("https://my.orq.ai");
+
+	// The legacy orqi-only override stays on top: the CLI cannot see it.
+	expect(apiBaseUrl({ ORQ_API_BASE_URL: "https://onprem.example" }, "https://aim.orq.ai")).toBe("https://onprem.example");
+
+	expect(apiBaseUrl({}, undefined)).toBe("https://api.orq.ai");
+	expect(serverOf('{"authenticated":false}')).toBeUndefined();
+	expect(serverOf("you are not logged in")).toBeUndefined();
 });
 
 test("no orq call asks for --json, which the CLI dropped in 8.4", () => {

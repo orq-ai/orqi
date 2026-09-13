@@ -13,7 +13,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Type } from "typebox";
-import { MCP_URL, type Credential } from "./auth.ts";
+import { mcpUrl, type Credential } from "./auth.ts";
 import { VERSION } from "./branding.ts";
 
 // The orq MCP server answers tools/list in ~1s most of the time, but hangs
@@ -153,7 +153,7 @@ async function connectOnce(credential: Credential): Promise<Client> {
 	client.onerror = () => {};
 	try {
 		await client.connect(
-			new StreamableHTTPClientTransport(new URL(MCP_URL), {
+			new StreamableHTTPClientTransport(new URL(mcpUrl()), {
 				requestInit: { headers: { Authorization: `Bearer ${credential.token}` } },
 			}),
 			{ timeout: CALL_TIMEOUT_MS },
