@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { apiBaseUrl, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
+import { apiBaseUrl, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -590,6 +590,13 @@ test("sessionFileOf takes the session path from whoami, whatever the CLI names i
 	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe("/home/u/.orq/sessions/my.orq.ai.json");
 	expect(sessionFileOf('{"authenticated":true,"session_file":""}')).toBeUndefined();
 	expect(sessionFileOf("you are not logged in")).toBeUndefined();
+});
+
+test("profileOf names the API-key profile the CLI resolved", () => {
+	// ORQ_PROFILE pins a profile for the CLI; whoami is how orqi learns one is in force.
+	expect(profileOf('{"profile":"achmea-aim-ithaka","server":"https://aim.orq.ai"}')).toBe("achmea-aim-ithaka");
+	expect(profileOf('{"profile":null}')).toBeUndefined();
+	expect(profileOf("you are not logged in")).toBeUndefined();
 });
 
 test("workspaceOfKey reads the workspace out of an orq API key", () => {

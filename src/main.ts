@@ -89,12 +89,13 @@ const pkgDir = await assetDir();
 // neither of which applies to this binary. The header links orq's changelog.
 process.env.PI_SKIP_VERSION_CHECK ??= "1";
 
-const { candidates, failure } = credentialCandidates();
+const { candidates, failure, profileGap } = credentialCandidates();
 if (candidates.length === 0) {
 	if (failure) console.error(failure);
 	console.error(LOGIN_HINT);
 	process.exit(1);
 }
+if (profileGap) console.error(profileGap);
 
 const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json"));
 const credential = orq.credential;

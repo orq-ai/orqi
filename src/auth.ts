@@ -20,6 +20,9 @@ import { readFileSync } from "node:fs";
  */
 let cliServer: string | undefined;
 
+/** The API-key profile the CLI is using, once whoami has answered. */
+let cliProfile: string | undefined;
+
 /**
  * API base URL: what the CLI resolved, then the environment, then the default.
  *
@@ -142,6 +145,16 @@ export function serverOf(whoamiJson: string): string | undefined {
 	}
 }
 
+/** API-key profile the CLI resolved (`ORQ_PROFILE` or `orq auth profile use`). */
+export function profileOf(whoamiJson: string): string | undefined {
+	try {
+		const profile = JSON.parse(whoamiJson)?.profile;
+		return typeof profile === "string" && profile ? profile : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Session file named by `orq auth whoami`, or undefined when the output is not that. */
 export function sessionFileOf(whoamiJson: string): string | undefined {
 	try {
@@ -164,6 +177,7 @@ function readSession(): { session?: Session; failure?: string } {
 	const whoami = runOrq(WHOAMI_ARGS);
 	if (!whoami.ok) return { failure: whoami.stderr.trim() || "orq auth whoami failed" };
 	cliServer = serverOf(whoami.stdout);
+	cliProfile = profileOf(whoami.stdout);
 	const file = sessionFileOf(whoami.stdout);
 	if (!file) return { failure: "orq auth whoami named no session file" };
 	try {
@@ -208,7 +222,7 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
  * CLI, a stalled backend and a genuinely logged-out machine otherwise all
  * surface as the same empty list and the same "run orq auth login" hint.
  */
-export function credentialCandidates(): { candidates: Credential[]; failure?: string } {
+export function credentialCandidates(): { candidates: Credential[]; failure?: string; profileGap?: string } {
 	const candidates: Credential[] = [];
 	const { session, failure } = readSession();
 	if (process.env.ORQ_API_KEY) {
@@ -218,7 +232,15 @@ export function credentialCandidates(): { candidates: Credential[]; failure?: st
 	const workspace = session?.activeWorkspaceKey;
 	const token = sessionToken(session);
 	if (token) candidates.push({ token, source: "orq login session", workspace });
-	return { candidates, failure };
+	// A profile is an API key in the CLI's credentials.json, and the CLI masks it
+	// everywhere it prints it, so orqi cannot read it. `orq orqi` hands it down as
+	// ORQ_API_KEY (applyProfileAPIKey in the CLI); a direct launch with no key in
+	// the environment silently falls through to the browser session instead, which
+	// is a different credential for the same server.
+	const profileGap = cliProfile && !process.env.ORQ_API_KEY
+		? `orq profile "${cliProfile}" is in force but its key is not in the environment; using ${candidates[0]?.source ?? "no credential"} instead. Launch with \`orq orqi\` to use the profile.`
+		: undefined;
+	return { candidates, failure, profileGap };
 }
 
 export const LOGIN_HINT = "No orq credential accepted. Run `orq auth login` (or /login here), or export a valid ORQ_API_KEY.";
