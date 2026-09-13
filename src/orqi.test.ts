@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { sessionFileOf, sessionToken, spawnFailure, workspaceOfKey } from "./auth.ts";
+import { sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -542,6 +542,18 @@ test("summarize collapses orq payloads to one line", () => {
 
 	expect(summarize("not json at all")).toMatch(/^\d+ B$/);
 	expect(summarize("two\nlines")).toMatch(/^2 lines · \d+ B$/);
+});
+
+test("no orq call asks for --json, which the CLI dropped in 8.4", () => {
+	// `--json` was an alias until orq-cli#86 removed it; `-o json` has worked
+	// since 5.0. A revert would only surface as "not logged in" at boot.
+	// orqi's own `update --json` is a different flag and stays untouched, so
+	// this scrapes the runOrq call sites rather than the whole file.
+	expect(WHOAMI_ARGS).toEqual(["auth", "whoami", "-o", "json"]);
+	for (const file of ["auth.ts", "commands.ts", "main.ts"]) {
+		const calls = [...readFileSync(join(import.meta.dir, file), "utf8").matchAll(/runOrq\(([^)]*)\)/g)].map((m) => m[1]);
+		for (const call of calls) expect(call).not.toContain("--json");
+	}
 });
 
 test("a timed-out orq call is not reported as a missing binary", () => {

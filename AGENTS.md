@@ -37,6 +37,14 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   6.x keys it `<workspaceKey>#<projectId>`, because a token is now project-scoped. An exact-key
   lookup on 6.x finds nothing and silently loses the login-session credential, so the lookup tries
   the active project's entry, then the bare key, then any entry for the workspace.
+- **The orq CLI is asked with `-o json`, never `--json`.** orq-cli 8.4 removed the `--json` alias
+  (orq-cli#86) and answers `unknown flag`; `-o json` has worked since 5.0, so it covers every CLI
+  orqi can meet. `orqi update --json` is orqi's own flag and is unrelated. A test scrapes the
+  `runOrq` call sites to keep the alias from coming back.
+- **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
+  backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
+  the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit
+  it. [docs/credentials.md](docs/credentials.md) tabulates the whole resolution.
 - **Tool results render as a one-line summary.** The server answers with a single unbroken line of
   JSON, so pi's built-in 10-line preview never trims anything and one call wraps a whole screen.
   `renderResult` in `src/mcp.ts` summarises; the model still gets the full payload.

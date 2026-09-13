@@ -70,13 +70,17 @@ pi's built-in providers are filtered out by `onlyOrq()` in `src/model.ts` (see
 ## Auth and workspace
 
 Both are delegated to the [orq CLI](https://github.com/orq-ai/orq-cli) rather than reimplemented.
-`src/auth.ts` only reads the session file the CLI names in `orq auth whoami --json` (the CLI owns
-both the file's name under `~/.orq/sessions/` and its internal shape, so orqi asks rather than
-guesses), so which login is in play follows `ORQ_PROFILE` exactly as it does for the CLI.
+`src/auth.ts` only reads the session file the CLI names in `orq auth whoami -o json`. The CLI owns
+both the file's name under `~/.orq/sessions/` and its internal shape, and has changed each of them
+more than once, so orqi asks rather than guesses. A browser login belongs to a server, so which one
+is in play follows `ORQ_SERVER`; `ORQ_PROFILE` selects an API-key profile instead.
 
 The endpoint comes from the environment and nowhere else: `orq orqi` resolves the server itself and
 puts it in the subprocess env as `ORQ_SERVER`, so orqi reads that variable rather than working the
 host out a second time from the session file or from whoami's `urls.api_base_url`.
+
+[docs/credentials.md](docs/credentials.md) lays out the whole resolution - candidate order, env
+vars, the three-key token lookup and every failure message - as tables.
 
 Credentials are tried in order (`ORQ_API_KEY`, then the login session) on the real MCP connection: a
 401 selects the next candidate, anything else is a real error (see [AGENTS.md](AGENTS.md) for why

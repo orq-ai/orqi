@@ -95,7 +95,16 @@ export function sessionToken(session: Session | undefined): string | undefined {
 	return typeof token === "string" && token ? token : undefined;
 }
 
-/** Session file named by `orq auth whoami --json`, or undefined when the output is not that. */
+/**
+ * How to ask the CLI for machine-readable output.
+ *
+ * `--json` was an alias until orq-cli 8.4 dropped it (orq-cli#86); `-o json`
+ * has worked since 5.0, so it covers every CLI orqi can meet. A test fails if
+ * `--json` reappears anywhere in `src/`.
+ */
+export const WHOAMI_ARGS = ["auth", "whoami", "-o", "json"];
+
+/** Session file named by `orq auth whoami`, or undefined when the output is not that. */
 export function sessionFileOf(whoamiJson: string): string | undefined {
 	try {
 		const file = JSON.parse(whoamiJson)?.session_file;
@@ -113,14 +122,15 @@ export function sessionFileOf(whoamiJson: string): string | undefined {
  * ask `whoami` for the path rather than guessing. whoami also refreshes an
  * expired token and proves the session is live.
  */
-function readSession(): Session | undefined {
-	const whoami = runOrq(["auth", "whoami", "--json"]);
-	const file = whoami.ok ? sessionFileOf(whoami.stdout) : undefined;
-	if (!file) return undefined;
+function readSession(): { session?: Session; failure?: string } {
+	const whoami = runOrq(WHOAMI_ARGS);
+	if (!whoami.ok) return { failure: whoami.stderr.trim() || "orq auth whoami failed" };
+	const file = sessionFileOf(whoami.stdout);
+	if (!file) return { failure: "orq auth whoami named no session file" };
 	try {
-		return JSON.parse(readFileSync(file, "utf8"));
-	} catch {
-		return undefined;
+		return { session: JSON.parse(readFileSync(file, "utf8")) };
+	} catch (error) {
+		return { failure: `session file unreadable: ${file} (${(error as Error).message})` };
 	}
 }
 
@@ -154,10 +164,14 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
  * the caller settles it on the real connection. Probing here would need a
  * second round-trip against a server that intermittently hangs, and a hang
  * would then be misread as a bad credential.
+ *
+ * `failure` carries why the login session produced nothing, because a broken
+ * CLI, a stalled backend and a genuinely logged-out machine otherwise all
+ * surface as the same empty list and the same "run orq auth login" hint.
  */
-export function credentialCandidates(): Credential[] {
+export function credentialCandidates(): { candidates: Credential[]; failure?: string } {
 	const candidates: Credential[] = [];
-	const session = readSession();
+	const { session, failure } = readSession();
 	if (process.env.ORQ_API_KEY) {
 		const token = process.env.ORQ_API_KEY;
 		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
@@ -165,7 +179,7 @@ export function credentialCandidates(): Credential[] {
 	const workspace = session?.activeWorkspaceKey;
 	const token = sessionToken(session);
 	if (token) candidates.push({ token, source: "orq login session", workspace });
-	return candidates;
+	return { candidates, failure };
 }
 
 export const LOGIN_HINT = "No orq credential accepted. Run `orq auth login` (or /login here), or export a valid ORQ_API_KEY.";

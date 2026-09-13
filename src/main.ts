@@ -89,8 +89,9 @@ const pkgDir = await assetDir();
 // neither of which applies to this binary. The header links orq's changelog.
 process.env.PI_SKIP_VERSION_CHECK ??= "1";
 
-const candidates = credentialCandidates();
+const { candidates, failure } = credentialCandidates();
 if (candidates.length === 0) {
+	if (failure) console.error(failure);
 	console.error(LOGIN_HINT);
 	process.exit(1);
 }
@@ -137,8 +138,9 @@ const services = await createAgentSessionServices({
 		extensionFactories: [
 			orqCommands(
 				async () => {
-					const next = credentialCandidates().at(-1); // the login session, freshly read
-					if (!next) return LOGIN_HINT;
+					const reread = credentialCandidates(); // the login session, freshly read
+					const next = reread.candidates.at(-1);
+					if (!next) return reread.failure ? `${reread.failure}\n${LOGIN_HINT}` : LOGIN_HINT;
 					process.env.ORQ_API_KEY = next.token;
 					const count = await orq.reconnect(next);
 						header.workspace = next.workspace;
