@@ -113,20 +113,27 @@ workspace with no login session on the machine at all.
 ## 6. Pinning a profile
 
 `ORQ_PROFILE` (or `orq auth profile use`) pins an API-key profile. orqi never reads that variable
-itself; the CLI does, and orqi inherits the result through `whoami`.
+itself; the CLI does, and orqi learns which profile won from `whoami`'s `profile` field.
 
 | Launch | Server | Credential |
 |---|---|---|
 | `orq orqi` with a profile in force | the profile's, via `ORQ_SERVER` in the child env | the profile's key, exported as `ORQ_API_KEY` by the CLI (`applyProfileAPIKey`) |
-| `orqi` direct, `ORQ_API_KEY` set | the profile's, via whoami's `server` | `ORQ_API_KEY` as given |
-| `orqi` direct, no `ORQ_API_KEY` | the profile's, via whoami's `server` | the **browser session** for that server, not the profile — orqi warns |
+| `orqi` direct, profile in force | the profile's, via whoami's `server` | the profile's key, read from `credentials.json` |
+| `orqi` direct, no profile | whoami's `server` | `ORQ_API_KEY`, then the login session |
 
-The third row is a real gap, not an oversight: a profile *is* an API key living in the CLI's
-`credentials.json`, and the CLI masks it in every output (`eyJh****kIIo`) with no reveal flag. orqi
-reading that file would be exactly the guessing at CLI internals this whole page exists to avoid, so
-instead it says so:
+A profile outranks an exported `ORQ_API_KEY`, because it does for the CLI — which warns and uses the
+profile. orqi disagreeing would put the two on different credentials for the same workspace.
 
-> `orq profile "x" is in force but its key is not in the environment; using orq login session
-> instead. Launch with `orq orqi` to use the profile.`
+The profile's key is the **one** thing orqi reads out of the CLI's files without being told where it
+is. whoami names the profile but not the file, and every command that prints a profile masks its key
+(`eyJh****kIIo`) with no reveal flag, so `profileKey()` reads
+`$ORQ_CONFIG_DIRECTORY/credentials.json` (default `~/.orq`) and takes `profiles.<name>.api_key`.
+That file has already been through one layout migration, so every step is optional: a moved file, a
+keyless profile or a renamed field warns and falls through to the next candidate.
 
-`orq orqi` is the supported way to pin a profile and always will be.
+| Order (profile in force) | Credential |
+|---|---|
+| 1 | the profile's key from `credentials.json` |
+| 2 | `ORQ_API_KEY`, if it differs from that key |
+| 3 | the login session for the profile's server |
+

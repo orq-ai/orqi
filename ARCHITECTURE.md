@@ -74,10 +74,10 @@ Both are delegated to the [orq CLI](https://github.com/orq-ai/orq-cli) rather th
 both the file's name under `~/.orq/sessions/` and its internal shape, and has changed each of them
 more than once, so orqi asks rather than guesses. A browser login belongs to a server, so which one
 is in play follows `ORQ_SERVER`; `ORQ_PROFILE` selects an API-key profile instead. There is no
-`ORQI_PROFILE`: orqi does not read either variable, it reads what the CLI made of them. Pinning a
-profile therefore wants `orq orqi`, which hands the profile's key down as `ORQ_API_KEY`; a direct
-launch can see which profile is in force but not its key, and warns rather than quietly using the
-browser session.
+`ORQI_PROFILE`: orqi does not read either variable, it reads what the CLI made of them. A pinned
+profile works either way - `orq orqi` hands its key down as `ORQ_API_KEY`, and a direct launch reads
+it from `credentials.json` by the name whoami reports - and outranks an exported `ORQ_API_KEY`,
+exactly as it does for the CLI.
 
 The endpoint follows the CLI too. whoami reports the `server` it resolved, and orqi uses that, so a
 profile that carries its own server (`ORQ_PROFILE=…`) cannot leave the two talking to different

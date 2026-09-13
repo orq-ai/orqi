@@ -45,6 +45,13 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   own server, so `ORQ_PROFILE` alone moves the CLI to another host with no `ORQ_SERVER` set; an
   env-only orqi would then send that profile's token to `api.orq.ai`. `ORQ_SERVER` is an input the
   CLI already weighed, so it is only a fallback for when whoami cannot answer.
+- **The profile's key is read out of `credentials.json`, and it is the only such read.** whoami
+  names the profile in force but not the file it lives in, and every command that prints a profile
+  masks its key (`eyJh****kIIo`) with no reveal flag, so pinning a profile on a direct `orqi` launch
+  cannot work by asking. `profileKey()` therefore guesses one path and one field, and because that
+  file has already been through a layout migration, every step of it is optional: a moved file or a
+  keyless profile warns and falls through to the next candidate rather than failing the boot.
+  Retire it the day the CLI can hand the key over.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
   backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit

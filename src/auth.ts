@@ -7,6 +7,8 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 /**
  * The server the CLI resolved for this environment, once whoami has answered.
@@ -188,6 +190,31 @@ function readSession(): { session?: Session; failure?: string } {
 }
 
 /**
+ * The API key behind a named profile.
+ *
+ * This is the one thing orqi reads out of the CLI's files without being told
+ * where it is: whoami names the profile in force but not the file it lives in,
+ * and every command that prints a profile masks its key (`eyJh****kIIo`), with
+ * no reveal flag. The file has already been through one layout migration
+ * (`auth.MigrateLayout` in the CLI, and the `credentials.json.bak.<date>` it
+ * leaves behind), so treat every step as optional and fall back to the warning
+ * rather than failing a boot on a shape that moved again.
+ */
+export function profileKey(name: string, file = credentialsFile()): string | undefined {
+	try {
+		const key = JSON.parse(readFileSync(file, "utf8"))?.profiles?.[name]?.api_key;
+		return typeof key === "string" && key ? key : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Where the CLI keeps profiles. `config-directory` is a bartolo setting, so ORQ_CONFIG_DIRECTORY moves it. */
+export function credentialsFile(env: NodeJS.ProcessEnv = process.env): string {
+	return join(env.ORQ_CONFIG_DIRECTORY ?? join(homedir(), ".orq"), "credentials.json");
+}
+
+/**
  * Workspace an API key belongs to.
  *
  * orq keys are `sk-orq-<jwt>` and the payload carries `workspace_id`, so the key
@@ -225,20 +252,22 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
 export function credentialCandidates(): { candidates: Credential[]; failure?: string; profileGap?: string } {
 	const candidates: Credential[] = [];
 	const { session, failure } = readSession();
-	if (process.env.ORQ_API_KEY) {
+	// A profile outranks an exported key, because it does for the CLI: it warns
+	// and uses the profile (applyProfileAPIKey), and orqi disagreeing would put
+	// the two on different credentials for the same command.
+	const profile = cliProfile ? profileKey(cliProfile) : undefined;
+	if (profile) candidates.push({ token: profile, source: `orq profile ${cliProfile}`, workspace: workspaceOfKey(profile, session) });
+	if (process.env.ORQ_API_KEY && process.env.ORQ_API_KEY !== profile) {
 		const token = process.env.ORQ_API_KEY;
 		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
 	}
 	const workspace = session?.activeWorkspaceKey;
 	const token = sessionToken(session);
 	if (token) candidates.push({ token, source: "orq login session", workspace });
-	// A profile is an API key in the CLI's credentials.json, and the CLI masks it
-	// everywhere it prints it, so orqi cannot read it. `orq orqi` hands it down as
-	// ORQ_API_KEY (applyProfileAPIKey in the CLI); a direct launch with no key in
-	// the environment silently falls through to the browser session instead, which
-	// is a different credential for the same server.
-	const profileGap = cliProfile && !process.env.ORQ_API_KEY
-		? `orq profile "${cliProfile}" is in force but its key is not in the environment; using ${candidates[0]?.source ?? "no credential"} instead. Launch with \`orq orqi\` to use the profile.`
+	// Only when the file moved or the profile is keyless: `orq orqi` has already
+	// put the profile's key in ORQ_API_KEY, so that launch never gets here.
+	const profileGap = cliProfile && !profile && !process.env.ORQ_API_KEY
+		? `orq profile "${cliProfile}" is in force but ${credentialsFile()} has no key for it; using ${candidates[0]?.source ?? "no credential"} instead.`
 		: undefined;
 	return { candidates, failure, profileGap };
 }

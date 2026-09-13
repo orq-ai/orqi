@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { apiBaseUrl, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
+import { apiBaseUrl, credentialsFile, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -597,6 +597,22 @@ test("profileOf names the API-key profile the CLI resolved", () => {
 	expect(profileOf('{"profile":"achmea-aim-ithaka","server":"https://aim.orq.ai"}')).toBe("achmea-aim-ithaka");
 	expect(profileOf('{"profile":null}')).toBeUndefined();
 	expect(profileOf("you are not logged in")).toBeUndefined();
+});
+
+test("profileKey reads the profile's key out of the CLI's credentials file", () => {
+	// whoami names the profile but masks its key, so this one lookup is orqi's.
+	// Every step is optional: a moved file or a renamed field must warn, not throw.
+	const file = join(tmpdir(), `orqi-credentials-${process.pid}.json`);
+	writeFileSync(file, JSON.stringify({ profiles: { aim: { api_key: "sk-orq-abc", server: "https://aim.orq.ai" }, keyless: {} } }));
+	expect(profileKey("aim", file)).toBe("sk-orq-abc");
+	expect(profileKey("keyless", file)).toBeUndefined();
+	expect(profileKey("absent", file)).toBeUndefined();
+	expect(profileKey("aim", join(tmpdir(), "orqi-no-such-file.json"))).toBeUndefined();
+	rmSync(file, { force: true });
+
+	// The CLI's config dir is a setting, so the file follows it.
+	expect(credentialsFile({ ORQ_CONFIG_DIRECTORY: "/tmp/orq" })).toBe("/tmp/orq/credentials.json");
+	expect(credentialsFile({})).toEndWith("/.orq/credentials.json");
 });
 
 test("workspaceOfKey reads the workspace out of an orq API key", () => {
