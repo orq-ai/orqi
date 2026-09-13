@@ -557,8 +557,9 @@ test("the host follows the CLI, because an API-key profile carries its own serve
 	expect(apiBaseUrl({ ORQ_SERVER: "https://my.orq.ai" }, "https://aim.orq.ai")).toBe("https://aim.orq.ai");
 	expect(apiBaseUrl({ ORQ_SERVER: "https://my.orq.ai" }, undefined)).toBe("https://my.orq.ai");
 
-	// The legacy orqi-only override stays on top: the CLI cannot see it.
-	expect(apiBaseUrl({ ORQ_API_BASE_URL: "https://onprem.example" }, "https://aim.orq.ai")).toBe("https://onprem.example");
+	// ORQ_API_BASE_URL is the CLI's own variable for a different host and is
+	// not orqi's to reinterpret.
+	expect(apiBaseUrl({ ORQ_API_BASE_URL: "https://onprem.example" }, undefined)).toBe("https://api.orq.ai");
 
 	expect(apiBaseUrl({}, undefined)).toBe("https://api.orq.ai");
 	expect(serverOf('{"authenticated":false}')).toBeUndefined();

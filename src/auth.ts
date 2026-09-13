@@ -21,14 +21,15 @@ import { readFileSync } from "node:fs";
 let cliServer: string | undefined;
 
 /**
- * API base URL, best source first.
+ * API base URL: what the CLI resolved, then the environment, then the default.
  *
- * `ORQ_API_BASE_URL` is orqi's own legacy override and the CLI cannot see it,
- * so it stays on top as the escape hatch. `ORQ_SERVER` sits below whoami
- * rather than above it because whoami has already accounted for it.
+ * `ORQ_SERVER` sits below whoami rather than above it because whoami has
+ * already weighed it, and is only reached when the CLI could not answer at
+ * all. It is the one spelling either side understands - orqi used to also read
+ * `ORQ_API_BASE_URL`, which the CLI reads for something else entirely.
  */
 export function apiBaseUrl(env: NodeJS.ProcessEnv = process.env, server = cliServer): string {
-	return env.ORQ_API_BASE_URL ?? server ?? env.ORQ_SERVER ?? "https://api.orq.ai";
+	return server ?? env.ORQ_SERVER ?? "https://api.orq.ai";
 }
 
 export function mcpUrl(): string {

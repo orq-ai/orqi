@@ -55,7 +55,7 @@ allows and one orq credential covers both the LLM and the tools.
 | Variable | Purpose |
 |---|---|
 | `ORQ_API_KEY` | Credential; falls back to the `orq auth login` session when unset or rejected. Works on its own, no session file needed |
-| `ORQ_SERVER` | API base URL (default `https://api.orq.ai`), and so which login session the CLI resolves, since a browser login belongs to a server |
+| `ORQ_SERVER` | API base URL (default `https://api.orq.ai`), and so which login session the CLI resolves, since a browser login belongs to a server. The only host variable orqi reads |
 | `ORQ_PROFILE` | Which API-key profile the orq CLI authenticates with; a profile can carry its own server, and orqi follows whichever host the CLI resolves |
 | `ORQI_MODEL` | Router model (default `openai/gpt-5.6-terra`) |
 | `ORQI_TUI` | `regular` renders inline instead of fullscreen (fullscreen is upstream-experimental) |
@@ -65,7 +65,7 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_SKILLS_UPDATE` | Set to `0` to pin skills to whatever the binary shipped with, disabling the daily check |
 | `ORQI_UPDATE_CHECK` | Set to `0` to pin: no daily update check, no header notice. `orqi update` still works when run directly |
 | `ORQI_REFRESH_TOOLS`, `ORQI_REFRESH_MODELS`, `ORQI_REFRESH_SKILLS`, `ORQI_REFRESH_UPDATE` | Refresh the cached tool / model catalogues, force a skills check, or force an update check now, ignoring the 24 h TTL |
-| `ORQI_AGENT_DIR`, `ORQ_API_BASE_URL`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | Override the agent dir / endpoints (on-prem) |
+| `ORQI_AGENT_DIR`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | Override the agent dir / endpoints (on-prem) |
 | `ORQI_VERSION` | Pins the release tag: which one `install.sh` installs, and which one `orqi update` installs |
 | `ORQI_INSTALL_DIR` | Read by `install.sh` only: where the binary lands (default `~/.local/bin`) |
 | `CI` | A non-empty value suppresses the daily update check unless `ORQI_REFRESH_UPDATE=1` forces one |

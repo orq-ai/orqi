@@ -78,7 +78,7 @@ is in play follows `ORQ_SERVER`; `ORQ_PROFILE` selects an API-key profile instea
 The endpoint follows the CLI too. whoami reports the `server` it resolved, and orqi uses that, so a
 profile that carries its own server (`ORQ_PROFILE=…`) cannot leave the two talking to different
 hosts. `ORQ_SERVER` is an input the CLI has already weighed, so orqi only falls back to it when
-whoami cannot answer; `ORQ_API_BASE_URL` stays on top as the one override the CLI cannot see.
+whoami cannot answer. That is the only host variable orqi reads.
 
 [docs/credentials.md](docs/credentials.md) lays out the whole resolution - candidate order, env
 vars, the three-key token lookup and every failure message - as tables.

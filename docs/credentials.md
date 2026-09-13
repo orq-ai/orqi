@@ -27,10 +27,11 @@ same `whoami` payload orqi already reads. orqi takes that.
 
 | Order | Source | Why here |
 |---|---|---|
-| 1 | `ORQ_API_BASE_URL` | orqi's own legacy override; the CLI cannot see it, so nothing else can honour it |
-| 2 | `server` from `orq auth whoami -o json` | the CLI's resolved answer, which already accounts for `ORQ_SERVER` and for the profile |
-| 3 | `ORQ_SERVER` | only reached when whoami could not answer at all (no CLI, a stall, a dead session) |
-| 4 | `https://api.orq.ai` | the default |
+| 1 | `server` from `orq auth whoami -o json` | the CLI's resolved answer, which already accounts for `ORQ_SERVER` and for the profile |
+| 2 | `ORQ_SERVER` | only reached when whoami could not answer at all (no CLI, a stall, a dead session) |
+| 3 | `https://api.orq.ai` | the default |
+
+There is one spelling for the host, `ORQ_SERVER`, and both sides mean the same thing by it.
 
 Why it matters: an API-key profile carries its own server. `ORQ_PROFILE=achmea-aim-ithaka` puts the
 CLI on `https://aim.orq.ai` with no `ORQ_SERVER` in sight, and an env-only orqi would send that
@@ -40,7 +41,6 @@ profile's token to `api.orq.ai`.
 |---|---|---|
 | `ORQ_SERVER` | API base URL, and so which login session the CLI resolves | CLI; orqi only as a fallback |
 | `ORQ_PROFILE` | which **API-key profile** from `credentials.json` — not a browser login; may carry its own server | CLI; orqi sees the result via whoami |
-| `ORQ_API_BASE_URL` | orqi-only override, wins over everything | orqi |
 | `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | override the MCP and router endpoints for on-prem | orqi |
 
 `orq orqi` also exports the resolved server to the child process as `ORQ_SERVER`
