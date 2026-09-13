@@ -54,9 +54,9 @@ allows and one orq credential covers both the LLM and the tools.
 
 | Variable | Purpose |
 |---|---|
-| `ORQ_API_KEY` | Credential; falls back to the `orq auth login` session when unset or rejected. Works on its own, no session file needed |
+| `ORQ_API_KEY` | Credential; falls back to the `orq auth login` session when unset or rejected. Works on its own, no session file needed. A pinned profile outranks it |
 | `ORQ_SERVER` | API base URL (default `https://api.orq.ai`), and so which login session the CLI resolves, since a browser login belongs to a server. The only host variable orqi reads |
-| `ORQ_PROFILE` | Which API-key profile the orq CLI authenticates with; a profile can carry its own server, and orqi follows whichever host the CLI resolves |
+| `ORQ_PROFILE` | Which API-key profile the orq CLI authenticates with; orqi uses that profile's key and follows whichever host the CLI resolves from it |
 | `ORQI_MODEL` | Router model (default `openai/gpt-5.6-terra`) |
 | `ORQI_TUI` | `regular` renders inline instead of fullscreen (fullscreen is upstream-experimental) |
 | `ORQI_THEME` | `dark` selects the theme that keeps turquoise for success and red for errors; the default is one-hue amber. `/theme` switches mid-session |
@@ -69,6 +69,40 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_VERSION` | Pins the release tag: which one `install.sh` installs, and which one `orqi update` installs |
 | `ORQI_INSTALL_DIR` | Read by `install.sh` only: where the binary lands (default `~/.local/bin`) |
 | `CI` | A non-empty value suppresses the daily update check unless `ORQI_REFRESH_UPDATE=1` forces one |
+
+### Picking a credential
+
+Three candidates, best first: a pinned profile's key, then `ORQ_API_KEY`, then the `orq auth login`
+session. Each is tried on the real connection, so a rejected one falls through to the next. The
+profile wins over an exported key because it does for the orq CLI too.
+
+```bash
+# 1. Nothing set: the login session, on whatever host the CLI resolved.
+orq auth login
+orqi
+
+# 2. A key on its own. No CLI login needed, but keep the CLI on PATH.
+export ORQ_API_KEY=sk-orq-EXAMPLEKEY000000000000000
+orqi
+
+# 3. Another host. ORQ_SERVER picks the API base URL and the login session that belongs to it.
+export ORQ_SERVER=https://acme.example.orq.ai
+orq auth login
+orqi
+
+# 4. A profile, pinned for one command. Its own server comes with it, so this
+#    talks to whatever host `acme-staging` was created against.
+orq auth profile add acme-staging sk-orq-EXAMPLEKEY111111111111111   # once
+ORQ_PROFILE=acme-staging orqi "which agents are failing?"
+
+# 5. The same profile through the CLI wrapper, which installs orqi if it is missing
+#    and hands the key and the server down itself.
+orq --profile acme-staging orqi
+```
+
+In 4 and 5 the profile beats anything in `ORQ_API_KEY`, and orqi says which credential won on its
+startup line. The full resolution — candidate order, host precedence, every failure message — is in
+[docs/credentials.md](docs/credentials.md).
 
 The CLI keeps its own agent dir (`~/.orqi/agent`) and never touches `~/.pi`.
 
