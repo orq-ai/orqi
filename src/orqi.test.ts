@@ -8,7 +8,7 @@ import { apiBaseUrl, credentialsFile, profileKey, profileOf, serverOf, sessionFi
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
-import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { DENYLISTED_TOOLS, describe, isAuthError, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
@@ -590,6 +590,15 @@ test("sessionFileOf takes the session path from whoami, whatever the CLI names i
 	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe("/home/u/.orq/sessions/my.orq.ai.json");
 	expect(sessionFileOf('{"authenticated":true,"session_file":""}')).toBeUndefined();
 	expect(sessionFileOf("you are not logged in")).toBeUndefined();
+});
+
+test("isAuthError tells a rejected credential from a server that fell over", () => {
+	// It decides both whether to try the next candidate and whether main.ts prints
+	// the login hint instead of letting the MCP SDK's error escape as a stack trace.
+	expect(isAuthError(new Error('Error POSTing to endpoint: {"error":"invalid_token"}'))).toBe(true);
+	expect(isAuthError(new Error("HTTP 401 Unauthorized"))).toBe(true);
+	expect(isAuthError(new Error("Request timed out"))).toBe(false);
+	expect(isAuthError(new Error("HTTP 500 Internal Server Error"))).toBe(false);
 });
 
 test("profileOf names the API-key profile the CLI resolved", () => {

@@ -25,7 +25,7 @@ import {
 import { credentialCandidates, LOGIN_HINT, projectForCredential } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { orqCommands } from "./commands.ts";
-import { connectOrqTools } from "./mcp.ts";
+import { connectOrqTools, isAuthError } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
@@ -97,7 +97,15 @@ if (candidates.length === 0) {
 }
 if (profileGap) console.error(profileGap);
 
-const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json"));
+// Every candidate rejected is the same dead end as having none, and it is the
+// likelier one: an expired session or a stale key still produces a candidate.
+// Without this the MCP SDK's own 401 escapes as a stack trace out of node_modules.
+const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json")).catch((error: unknown) => {
+	if (!isAuthError(error)) throw error;
+	console.error(`Every orq credential was rejected (${candidates.map((c) => c.source).join(", ")}).`);
+	console.error(LOGIN_HINT);
+	process.exit(1);
+});
 const credential = orq.credential;
 const models = await createOrqModelRuntime(AGENT_DIR, credential.token);
 const modelRuntime = models.runtime;

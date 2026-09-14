@@ -96,6 +96,7 @@ the CLI's own stderr above the login hint.
 | whoami named no file | `orq auth whoami named no session file` |
 | the file is gone or corrupt | `session file unreadable: <path> (…)` |
 | session expired | the CLI's own message, e.g. `Error: Invalid refresh token!` |
+| every candidate rejected on the connection | `Every orq credential was rejected (…)`, naming the ones that were tried, then the login hint |
 | nothing above, just no credential | the login hint alone |
 
 The hint itself: *No orq credential accepted. Run `orq auth login` (or `/login` here), or export a

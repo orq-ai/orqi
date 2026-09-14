@@ -223,7 +223,8 @@ export function summarize(text: string): string {
 	}
 }
 
-function isAuthError(error: unknown): boolean {
+/** A rejected credential, as opposed to the server stalling or falling over. */
+export function isAuthError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return /401|403|invalid_token|Unauthorized|audience/i.test(message);
 }
