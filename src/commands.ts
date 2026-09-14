@@ -118,7 +118,7 @@ export function orqCommands(
 					return;
 				}
 				if (!report(ctx, runOrq(["workspace", "use", key]))) return;
-				// Workspace tokens are workspace-scoped, so the tools must be rebuilt.
+				// The session token is scoped to the workspace and project, so the tools must be rebuilt.
 				ctx.ui.notify(await reconnect());
 				// reconnect() refreshes header.workspace; mirror it into the footer.
 				showWorkspace(ctx);

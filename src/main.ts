@@ -25,7 +25,7 @@ import {
 import { credentialCandidates, LOGIN_HINT, projectForCredential } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { orqCommands } from "./commands.ts";
-import { connectOrqTools } from "./mcp.ts";
+import { connectOrqTools, isAuthError } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
@@ -89,13 +89,23 @@ const pkgDir = await assetDir();
 // neither of which applies to this binary. The header links orq's changelog.
 process.env.PI_SKIP_VERSION_CHECK ??= "1";
 
-const candidates = credentialCandidates();
+const { candidates, failure, profileGap } = credentialCandidates();
 if (candidates.length === 0) {
+	if (failure) console.error(failure);
 	console.error(LOGIN_HINT);
 	process.exit(1);
 }
+if (profileGap) console.error(profileGap);
 
-const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json"));
+// Every candidate rejected is the same dead end as having none, and it is the
+// likelier one: an expired session or a stale key still produces a candidate.
+// Without this the MCP SDK's own 401 escapes as a stack trace out of node_modules.
+const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json")).catch((error: unknown) => {
+	if (!isAuthError(error)) throw error;
+	console.error(`Every orq credential was rejected (${candidates.map((c) => c.source).join(", ")}).`);
+	console.error(LOGIN_HINT);
+	process.exit(1);
+});
 const credential = orq.credential;
 const models = await createOrqModelRuntime(AGENT_DIR, credential.token);
 const modelRuntime = models.runtime;
@@ -137,8 +147,9 @@ const services = await createAgentSessionServices({
 		extensionFactories: [
 			orqCommands(
 				async () => {
-					const next = credentialCandidates().at(-1); // the login session, freshly read
-					if (!next) return LOGIN_HINT;
+					const reread = credentialCandidates(); // the login session, freshly read
+					const next = reread.candidates.at(-1);
+					if (!next) return reread.failure ? `${reread.failure}\n${LOGIN_HINT}` : LOGIN_HINT;
 					process.env.ORQ_API_KEY = next.token;
 					const count = await orq.reconnect(next);
 						header.workspace = next.workspace;

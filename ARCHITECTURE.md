@@ -17,7 +17,7 @@ orqi
 │   │                            the rest shell out to the orq CLI  src/commands.ts
 │   └── startup header           session entry, not stdout        src/commands.ts
 ├── model            orq AI Router as a pi provider              src/model.ts
-├── credentials       ORQ_API_KEY or the orq CLI login session    src/auth.ts
+├── credentials       orq profile, ORQ_API_KEY or the login session  src/auth.ts
 └── self-update       `orqi update`, daily check, header note     src/update.ts
 ```
 
@@ -70,9 +70,25 @@ pi's built-in providers are filtered out by `onlyOrq()` in `src/model.ts` (see
 ## Auth and workspace
 
 Both are delegated to the [orq CLI](https://github.com/orq-ai/orq-cli) rather than reimplemented.
-`src/auth.ts` only reads the session the CLI leaves at `~/.orq/sessions/<profile>.json`.
+`src/auth.ts` only reads the session file the CLI names in `orq auth whoami -o json`. The CLI owns
+both the file's name under `~/.orq/sessions/` and its internal shape, and has changed each of them
+more than once, so orqi asks rather than guesses. A browser login belongs to a server, so which one
+is in play follows `ORQ_SERVER`; `ORQ_PROFILE` selects an API-key profile instead. There is no
+`ORQI_PROFILE`: orqi does not read either variable, it reads what the CLI made of them. A pinned
+profile works either way - `orq orqi` hands its key down as `ORQ_API_KEY`, and a direct launch reads
+it from `credentials.json` by the name whoami reports - and outranks an exported `ORQ_API_KEY`,
+exactly as it does for the CLI.
 
-Credentials are tried in order (`ORQ_API_KEY`, then the login session) on the real MCP connection: a
+The endpoint follows the CLI too. whoami reports the `server` it resolved, and orqi uses that, so a
+profile that carries its own server (`ORQ_PROFILE=…`) cannot leave the two talking to different
+hosts. `ORQ_SERVER` is an input the CLI has already weighed, so orqi only falls back to it when
+whoami cannot answer. That is the only host variable orqi reads.
+
+[docs/credentials.md](docs/credentials.md) lays out the whole resolution - candidate order, env
+vars, the three-key token lookup and every failure message - as tables.
+
+Credentials are tried in order (a pinned profile's key, then `ORQ_API_KEY`, then the login session)
+on the real MCP connection: a
 401 selects the next candidate, anything else is a real error (see [AGENTS.md](AGENTS.md) for why
 they are not pre-probed). The startup line always names the credential that won.
 

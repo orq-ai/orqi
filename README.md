@@ -54,8 +54,9 @@ allows and one orq credential covers both the LLM and the tools.
 
 | Variable | Purpose |
 |---|---|
-| `ORQ_API_KEY` | Credential; falls back to the `orq auth login` session when unset or rejected. Works on its own, no session file needed |
-| `ORQ_PROFILE` | Which `orq auth login` session to read (default `default`) |
+| `ORQ_API_KEY` | Credential; falls back to the `orq auth login` session when unset or rejected. Works on its own, no session file needed. A pinned profile outranks it |
+| `ORQ_SERVER` | API base URL (default `https://api.orq.ai`), and so which login session the CLI resolves, since a browser login belongs to a server. The only host variable orqi reads |
+| `ORQ_PROFILE` | Which API-key profile the orq CLI authenticates with; orqi uses that profile's key and follows whichever host the CLI resolves from it |
 | `ORQI_MODEL` | Router model (default `openai/gpt-5.6-terra`) |
 | `ORQI_TUI` | `regular` renders inline instead of fullscreen (fullscreen is upstream-experimental) |
 | `ORQI_THEME` | `dark` selects the theme that keeps turquoise for success and red for errors; the default is one-hue amber. `/theme` switches mid-session |
@@ -64,10 +65,44 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_SKILLS_UPDATE` | Set to `0` to pin skills to whatever the binary shipped with, disabling the daily check |
 | `ORQI_UPDATE_CHECK` | Set to `0` to pin: no daily update check, no header notice. `orqi update` still works when run directly |
 | `ORQI_REFRESH_TOOLS`, `ORQI_REFRESH_MODELS`, `ORQI_REFRESH_SKILLS`, `ORQI_REFRESH_UPDATE` | Refresh the cached tool / model catalogues, force a skills check, or force an update check now, ignoring the 24 h TTL |
-| `ORQI_AGENT_DIR`, `ORQ_API_BASE_URL`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | Override the agent dir / endpoints (on-prem) |
+| `ORQI_AGENT_DIR`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | Override the agent dir / endpoints (on-prem) |
 | `ORQI_VERSION` | Pins the release tag: which one `install.sh` installs, and which one `orqi update` installs |
 | `ORQI_INSTALL_DIR` | Read by `install.sh` only: where the binary lands (default `~/.local/bin`) |
 | `CI` | A non-empty value suppresses the daily update check unless `ORQI_REFRESH_UPDATE=1` forces one |
+
+### Picking a credential
+
+Three candidates, best first: a pinned profile's key, then `ORQ_API_KEY`, then the `orq auth login`
+session. Each is tried on the real connection, so a rejected one falls through to the next. The
+profile wins over an exported key because it does for the orq CLI too.
+
+```bash
+# 1. Nothing set: the login session, on whatever host the CLI resolved.
+orq auth login
+orqi
+
+# 2. A key on its own. No CLI login needed, but keep the CLI on PATH.
+export ORQ_API_KEY=sk-orq-EXAMPLEKEY000000000000000
+orqi
+
+# 3. Another host. ORQ_SERVER picks the API base URL and the login session that belongs to it.
+export ORQ_SERVER=https://acme.example.orq.ai
+orq auth login
+orqi
+
+# 4. A profile, pinned for one command. Its own server comes with it, so this
+#    talks to whatever host `acme-staging` was created against.
+orq auth profile add acme-staging sk-orq-EXAMPLEKEY111111111111111   # once
+ORQ_PROFILE=acme-staging orqi "which agents are failing?"
+
+# 5. The same profile through the CLI wrapper, which installs orqi if it is missing
+#    and hands the key and the server down itself.
+orq --profile acme-staging orqi
+```
+
+In 4 and 5 the profile beats anything in `ORQ_API_KEY`, and orqi says which credential won on its
+startup line. The full resolution — candidate order, host precedence, every failure message — is in
+[docs/credentials.md](docs/credentials.md).
 
 The CLI keeps its own agent dir (`~/.orqi/agent`) and never touches `~/.pi`.
 
@@ -85,6 +120,8 @@ Requires [Bun](https://bun.sh) and the [orq CLI](https://github.com/orq-ai/orq-c
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit, how tools and models are wired, known
   rough edges.
+- [docs/credentials.md](docs/credentials.md): which credential wins, which server it goes to, and
+  what every failure message means.
 - [AGENTS.md](AGENTS.md): working notes for changing the code, plus the release process.
 - [SECURITY.md](SECURITY.md): what orqi downloads and executes, including the daily unsigned
   skills update and how to pin it.

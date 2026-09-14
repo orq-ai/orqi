@@ -10,11 +10,44 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const API_BASE_URL = process.env.ORQ_API_BASE_URL ?? "https://api.orq.ai";
-export const MCP_URL = process.env.ORQ_MCP_URL ?? `${API_BASE_URL}/v2/mcp`;
-export const ROUTER_URL = process.env.ORQ_GATEWAY_URL ?? `${API_BASE_URL}/v3/router`;
+/**
+ * The server the CLI resolved for this environment, once whoami has answered.
+ *
+ * `ORQ_SERVER` is only one of the inputs the CLI weighs: an API-key profile
+ * carries its own server, so `ORQ_PROFILE=achmea-aim-ithaka` puts the CLI on
+ * `https://aim.orq.ai` with no `ORQ_SERVER` in sight. orqi reading only the
+ * environment would then send that profile's token to `api.orq.ai`. Reading
+ * the answer back off whoami keeps the two in step without orqi owning a
+ * second copy of the precedence rules.
+ */
+let cliServer: string | undefined;
 
-const SESSION_FILE = join(homedir(), ".orq", "sessions", `${process.env.ORQ_PROFILE ?? "default"}.json`);
+/** The API-key profile the CLI is using, once whoami has answered. */
+let cliProfile: string | undefined;
+
+/**
+ * API base URL: what the CLI resolved, then the environment, then the default.
+ *
+ * `ORQ_SERVER` sits below whoami rather than above it because whoami has
+ * already weighed it, and is only reached when the CLI could not answer at
+ * all. It is the one spelling either side understands - orqi used to also read
+ * `ORQ_API_BASE_URL`, which the CLI reads for something else entirely.
+ */
+export function apiBaseUrl(env: NodeJS.ProcessEnv = process.env, server = cliServer): string {
+	return server ?? env.ORQ_SERVER ?? "https://api.orq.ai";
+}
+
+export function mcpUrl(): string {
+	return process.env.ORQ_MCP_URL ?? `${apiBaseUrl()}/v2/mcp`;
+}
+
+export function routerUrl(): string {
+	return process.env.ORQ_GATEWAY_URL ?? `${apiBaseUrl()}/v3/router`;
+}
+
+// The CLI talks to the same backend the MCP server does, and that one stalls
+// (see AGENTS.md), so no orq call may block a boot indefinitely.
+const CLI_TIMEOUT_MS = 15_000;
 
 export interface OrqResult {
 	ok: boolean;
@@ -24,9 +57,21 @@ export interface OrqResult {
 
 /** Run the orq CLI. Never throws: a missing binary is just a failed result. */
 export function runOrq(args: string[]): OrqResult {
-	const res = spawnSync("orq", args, { encoding: "utf8" });
-	if (res.error) return { ok: false, stdout: "", stderr: `orq CLI not found on PATH (${res.error.message})` };
+	const res = spawnSync("orq", args, { encoding: "utf8", timeout: CLI_TIMEOUT_MS });
+	if (res.error) return { ok: false, stdout: "", stderr: spawnFailure(res.error) };
 	return { ok: res.status === 0, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+/**
+ * Why a spawn produced no exit status.
+ *
+ * A timeout also lands in `error`, and reporting it as a missing binary sends a
+ * user with a working install off to debug their PATH while the backend is
+ * merely slow.
+ */
+export function spawnFailure(error: Error & { code?: string }): string {
+	if (error.code === "ETIMEDOUT") return `orq CLI timed out after ${CLI_TIMEOUT_MS / 1000}s (the orq API may be slow)`;
+	return `orq CLI not found on PATH (${error.message})`;
 }
 
 export interface Credential {
@@ -41,7 +86,7 @@ interface Project { id?: string; name?: string; key?: string; default?: boolean;
 /** Resolve the project label from the authenticated Projects REST API. */
 export async function projectForCredential(token: string): Promise<string | undefined> {
 	try {
-		const response = await fetch(`${API_BASE_URL}/v2/projects?limit=200`, {
+		const response = await fetch(`${apiBaseUrl()}/v2/projects?limit=200`, {
 			headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
 		});
 		if (!response.ok) return undefined;
@@ -62,12 +107,123 @@ export async function projectForCredential(token: string): Promise<string | unde
 	}
 }
 
-function readSession(): { activeWorkspaceKey?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] } | undefined {
+interface Session { activeWorkspaceKey?: string; activeProjectId?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] }
+
+/**
+ * Token for the active workspace.
+ *
+ * CLI 5.x keyed `workspaceTokens` by workspace key; 6.x keys them
+ * `<workspaceKey>#<projectId>`, because a token is now project-scoped. An exact
+ * lookup on the workspace key therefore finds nothing on 6.x and orqi silently
+ * loses its login-session credential. Prefer the active project's entry, then
+ * the bare key, then any entry for that workspace.
+ */
+export function sessionToken(session: Session | undefined): string | undefined {
+	const workspace = session?.activeWorkspaceKey;
+	const tokens = session?.workspaceTokens;
+	if (!workspace || !tokens) return undefined;
+	const key = [`${workspace}#${session.activeProjectId}`, workspace].find((candidate) => tokens[candidate]?.token)
+		?? Object.keys(tokens).find((name) => name.startsWith(`${workspace}#`) && tokens[name]?.token);
+	const token = key ? tokens[key]?.token : undefined;
+	return typeof token === "string" && token ? token : undefined;
+}
+
+/**
+ * How to ask the CLI for machine-readable output.
+ *
+ * `--json` was an alias until orq-cli 8.4 dropped it (orq-cli#86); `-o json`
+ * has worked since 5.0, so it covers every CLI orqi can meet. A test fails if
+ * `--json` reappears in a `runOrq` call.
+ */
+export const WHOAMI_ARGS = ["auth", "whoami", "-o", "json"];
+
+/**
+ * Server the CLI resolved, from the same whoami payload as the session file.
+ *
+ * whoami answers in two shapes and names the host differently in each: a
+ * profile reports `server`, a browser login reports `urls.api_base_url` and no
+ * `server` at all. Reading only the first sent a `my.orq.ai` session token to
+ * `api.orq.ai`, which the MCP server answers with `invalid_token` - the same
+ * class of break as guessing the session file's name, and invisible to anyone
+ * whose login already sits on the default host.
+ */
+export function serverOf(whoamiJson: string): string | undefined {
 	try {
-		return JSON.parse(readFileSync(SESSION_FILE, "utf8"));
+		const whoami = JSON.parse(whoamiJson);
+		for (const value of [whoami?.server, whoami?.urls?.api_base_url]) {
+			if (typeof value === "string" && value) return value;
+		}
+		return undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+/** API-key profile the CLI resolved (`ORQ_PROFILE` or `orq auth profile use`). */
+export function profileOf(whoamiJson: string): string | undefined {
+	try {
+		const profile = JSON.parse(whoamiJson)?.profile;
+		return typeof profile === "string" && profile ? profile : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Session file named by `orq auth whoami`, or undefined when the output is not that. */
+export function sessionFileOf(whoamiJson: string): string | undefined {
+	try {
+		const file = JSON.parse(whoamiJson)?.session_file;
+		return typeof file === "string" && file ? file : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The orq CLI login session, freshly read.
+ *
+ * The file's name under `~/.orq/sessions/` and its internal shape are both the
+ * CLI's business, and both have already changed across releases (RES-1500), so
+ * ask `whoami` for the path rather than guessing. whoami also refreshes an
+ * expired token and proves the session is live.
+ */
+function readSession(): { session?: Session; failure?: string } {
+	const whoami = runOrq(WHOAMI_ARGS);
+	if (!whoami.ok) return { failure: whoami.stderr.trim() || "orq auth whoami failed" };
+	cliServer = serverOf(whoami.stdout);
+	cliProfile = profileOf(whoami.stdout);
+	const file = sessionFileOf(whoami.stdout);
+	if (!file) return { failure: "orq auth whoami named no session file" };
+	try {
+		return { session: JSON.parse(readFileSync(file, "utf8")) };
+	} catch (error) {
+		return { failure: `session file unreadable: ${file} (${(error as Error).message})` };
+	}
+}
+
+/**
+ * The API key behind a named profile.
+ *
+ * This is the one thing orqi reads out of the CLI's files without being told
+ * where it is: whoami names the profile in force but not the file it lives in,
+ * and every command that prints a profile masks its key (`eyJh****kIIo`), with
+ * no reveal flag. The file has already been through one layout migration
+ * (`auth.MigrateLayout` in the CLI, and the `credentials.json.bak.<date>` it
+ * leaves behind), so treat every step as optional and fall back to the warning
+ * rather than failing a boot on a shape that moved again.
+ */
+export function profileKey(name: string, file = credentialsFile()): string | undefined {
+	try {
+		const key = JSON.parse(readFileSync(file, "utf8"))?.profiles?.[name]?.api_key;
+		return typeof key === "string" && key ? key : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Where the CLI keeps profiles. `config-directory` is a bartolo setting, so ORQ_CONFIG_DIRECTORY moves it. */
+export function credentialsFile(env: NodeJS.ProcessEnv = process.env): string {
+	return join(env.ORQ_CONFIG_DIRECTORY ?? join(homedir(), ".orq"), "credentials.json");
 }
 
 /**
@@ -92,21 +248,6 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
 	}
 }
 
-/** Active-workspace token from the orq CLI login session, if there is one. */
-function sessionCredential(): Credential | undefined {
-	// whoami first: it refreshes an expired token and proves the session is live.
-	if (!runOrq(["auth", "whoami"]).ok) return undefined;
-	try {
-		const session = readSession();
-		const workspace = session?.activeWorkspaceKey;
-		const token = workspace ? session?.workspaceTokens?.[workspace]?.token : undefined;
-		if (typeof token !== "string" || !token) return undefined;
-		return { token, source: "orq login session", workspace };
-	} catch {
-		return undefined;
-	}
-}
-
 /**
  * Credentials to try, best first.
  *
@@ -115,16 +256,32 @@ function sessionCredential(): Credential | undefined {
  * the caller settles it on the real connection. Probing here would need a
  * second round-trip against a server that intermittently hangs, and a hang
  * would then be misread as a bad credential.
+ *
+ * `failure` carries why the login session produced nothing, because a broken
+ * CLI, a stalled backend and a genuinely logged-out machine otherwise all
+ * surface as the same empty list and the same "run orq auth login" hint.
  */
-export function credentialCandidates(): Credential[] {
+export function credentialCandidates(): { candidates: Credential[]; failure?: string; profileGap?: string } {
 	const candidates: Credential[] = [];
-	if (process.env.ORQ_API_KEY) {
+	const { session, failure } = readSession();
+	// A profile outranks an exported key, because it does for the CLI: it warns
+	// and uses the profile (applyProfileAPIKey), and orqi disagreeing would put
+	// the two on different credentials for the same command.
+	const profile = cliProfile ? profileKey(cliProfile) : undefined;
+	if (profile) candidates.push({ token: profile, source: `orq profile ${cliProfile}`, workspace: workspaceOfKey(profile, session) });
+	if (process.env.ORQ_API_KEY && process.env.ORQ_API_KEY !== profile) {
 		const token = process.env.ORQ_API_KEY;
-		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, readSession()) });
+		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
 	}
-	const session = sessionCredential();
-	if (session) candidates.push(session);
-	return candidates;
+	const workspace = session?.activeWorkspaceKey;
+	const token = sessionToken(session);
+	if (token) candidates.push({ token, source: "orq login session", workspace });
+	// Only when the file moved or the profile is keyless: `orq orqi` has already
+	// put the profile's key in ORQ_API_KEY, so that launch never gets here.
+	const profileGap = cliProfile && !profile && !process.env.ORQ_API_KEY
+		? `orq profile "${cliProfile}" is in force but ${credentialsFile()} has no key for it; using ${candidates[0]?.source ?? "no credential"} instead.`
+		: undefined;
+	return { candidates, failure, profileGap };
 }
 
 export const LOGIN_HINT = "No orq credential accepted. Run `orq auth login` (or /login here), or export a valid ORQ_API_KEY.";

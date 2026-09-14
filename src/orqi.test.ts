@@ -4,11 +4,11 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { workspaceOfKey } from "./auth.ts";
+import { apiBaseUrl, credentialsFile, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
-import { DENYLISTED_TOOLS, describe, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { DENYLISTED_TOOLS, describe, isAuthError, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
@@ -544,6 +544,96 @@ test("summarize collapses orq payloads to one line", () => {
 	expect(summarize("two\nlines")).toMatch(/^2 lines · \d+ B$/);
 });
 
+test("the host follows the CLI, because an API-key profile carries its own server", () => {
+	// `ORQ_PROFILE=achmea-aim-ithaka` puts the CLI on https://aim.orq.ai with no
+	// ORQ_SERVER set anywhere, so an env-only host would send that profile's
+	// token to api.orq.ai. whoami reports what the CLI resolved; orqi takes it.
+	const whoami = '{"authenticated":true,"server":"https://aim.orq.ai","session_file":"/h/.orq/sessions/aim.orq.ai.json"}';
+	expect(serverOf(whoami)).toBe("https://aim.orq.ai");
+	expect(apiBaseUrl({}, serverOf(whoami))).toBe("https://aim.orq.ai");
+
+	// ORQ_SERVER is an input the CLI already weighed, so it only matters when
+	// whoami could not answer at all.
+	expect(apiBaseUrl({ ORQ_SERVER: "https://my.orq.ai" }, "https://aim.orq.ai")).toBe("https://aim.orq.ai");
+	expect(apiBaseUrl({ ORQ_SERVER: "https://my.orq.ai" }, undefined)).toBe("https://my.orq.ai");
+
+	// ORQ_API_BASE_URL is the CLI's own variable for a different host and is
+	// not orqi's to reinterpret.
+	expect(apiBaseUrl({ ORQ_API_BASE_URL: "https://onprem.example" }, undefined)).toBe("https://api.orq.ai");
+
+	expect(apiBaseUrl({}, undefined)).toBe("https://api.orq.ai");
+	expect(serverOf('{"authenticated":false}')).toBeUndefined();
+	expect(serverOf("you are not logged in")).toBeUndefined();
+});
+
+test("no orq call asks for --json, which the CLI dropped in 8.4", () => {
+	// `--json` was an alias until orq-cli#86 removed it; `-o json` has worked
+	// since 5.0. A revert would only surface as "not logged in" at boot.
+	// orqi's own `update --json` is a different flag and stays untouched, so
+	// this scrapes the runOrq call sites rather than the whole file.
+	expect(WHOAMI_ARGS).toEqual(["auth", "whoami", "-o", "json"]);
+	for (const file of ["auth.ts", "commands.ts", "main.ts"]) {
+		const calls = [...readFileSync(join(import.meta.dir, file), "utf8").matchAll(/runOrq\(([^)]*)\)/g)].map((m) => m[1]);
+		for (const call of calls) expect(call).not.toContain("--json");
+	}
+});
+
+test("a timed-out orq call is not reported as a missing binary", () => {
+	// A stalled backend and an uninstalled CLI both surface as spawnSync's
+	// `error`; conflating them sends a working install off to debug its PATH.
+	expect(spawnFailure(Object.assign(new Error("spawnSync orq ETIMEDOUT"), { code: "ETIMEDOUT" }))).toMatch(/timed out after 15s/);
+	expect(spawnFailure(Object.assign(new Error("spawnSync orq ENOENT"), { code: "ENOENT" }))).toMatch(/not found on PATH/);
+});
+
+test("sessionFileOf takes the session path from whoami, whatever the CLI names it", () => {
+	// The CLI owns the file's name and shape, and both have changed across releases; orqi asks rather than guesses.
+	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe("/home/u/.orq/sessions/my.orq.ai.json");
+	expect(sessionFileOf('{"authenticated":true,"session_file":""}')).toBeUndefined();
+	expect(sessionFileOf("you are not logged in")).toBeUndefined();
+});
+
+test("isAuthError tells a rejected credential from a server that fell over", () => {
+	// It decides both whether to try the next candidate and whether main.ts prints
+	// the login hint instead of letting the MCP SDK's error escape as a stack trace.
+	expect(isAuthError(new Error('Error POSTing to endpoint: {"error":"invalid_token"}'))).toBe(true);
+	expect(isAuthError(new Error("HTTP 401 Unauthorized"))).toBe(true);
+	expect(isAuthError(new Error("Request timed out"))).toBe(false);
+	expect(isAuthError(new Error("HTTP 500 Internal Server Error"))).toBe(false);
+});
+
+test("serverOf reads the host out of either whoami shape", () => {
+	// A profile answers with `server`; a browser login answers with `urls.api_base_url`
+	// and no `server` at all. Reading only the first sends a my.orq.ai session token
+	// to api.orq.ai, which the MCP server rejects as invalid_token.
+	expect(serverOf('{"profile":"aim","server":"https://aim.orq.ai"}')).toBe("https://aim.orq.ai");
+	expect(serverOf('{"authenticated":true,"urls":{"api_base_url":"https://my.orq.ai"}}')).toBe("https://my.orq.ai");
+	expect(serverOf('{"authenticated":true,"urls":{}}')).toBeUndefined();
+	expect(serverOf("you are not logged in")).toBeUndefined();
+});
+
+test("profileOf names the API-key profile the CLI resolved", () => {
+	// ORQ_PROFILE pins a profile for the CLI; whoami is how orqi learns one is in force.
+	expect(profileOf('{"profile":"achmea-aim-ithaka","server":"https://aim.orq.ai"}')).toBe("achmea-aim-ithaka");
+	expect(profileOf('{"profile":null}')).toBeUndefined();
+	expect(profileOf("you are not logged in")).toBeUndefined();
+});
+
+test("profileKey reads the profile's key out of the CLI's credentials file", () => {
+	// whoami names the profile but masks its key, so this one lookup is orqi's.
+	// Every step is optional: a moved file or a renamed field must warn, not throw.
+	const file = join(tmpdir(), `orqi-credentials-${process.pid}.json`);
+	writeFileSync(file, JSON.stringify({ profiles: { aim: { api_key: "sk-orq-abc", server: "https://aim.orq.ai" }, keyless: {} } }));
+	expect(profileKey("aim", file)).toBe("sk-orq-abc");
+	expect(profileKey("keyless", file)).toBeUndefined();
+	expect(profileKey("absent", file)).toBeUndefined();
+	expect(profileKey("aim", join(tmpdir(), "orqi-no-such-file.json"))).toBeUndefined();
+	rmSync(file, { force: true });
+
+	// The CLI's config dir is a setting, so the file follows it.
+	expect(credentialsFile({ ORQ_CONFIG_DIRECTORY: "/tmp/orq" })).toBe("/tmp/orq/credentials.json");
+	expect(credentialsFile({})).toEndWith("/.orq/credentials.json");
+});
+
 test("workspaceOfKey reads the workspace out of an orq API key", () => {
 	// orq keys are sk-orq-<jwt> and the payload carries workspace_id, so a key
 	// identifies its own workspace even with no login session on the machine.
@@ -559,6 +649,30 @@ test("workspaceOfKey reads the workspace out of an orq API key", () => {
 
 	expect(workspaceOfKey("not-a-key", undefined)).toBeUndefined();
 	expect(workspaceOfKey("sk-orq-a.notbase64!!.c", undefined)).toBeUndefined();
+});
+
+test("sessionToken finds the workspace's token across CLI versions", () => {
+	// 6.x: tokens are project-scoped, keyed `<workspace>#<projectId>`.
+	expect(sessionToken({
+		activeWorkspaceKey: "orq-research", activeProjectId: "30365aee",
+		workspaceTokens: { "orq-research#30365aee": { token: "tok-6x" } },
+	})).toBe("tok-6x");
+
+	// 5.x: bare workspace key, no project in the mix at all.
+	expect(sessionToken({
+		activeWorkspaceKey: "orq-research",
+		workspaceTokens: { "orq-research": { token: "tok-5x" } },
+	})).toBe("tok-5x");
+
+	// activeProjectId missing or stale: fall back to any entry for the workspace.
+	expect(sessionToken({
+		activeWorkspaceKey: "orq-research",
+		workspaceTokens: { "orq-research#other-project": { token: "tok-fallback" } },
+	})).toBe("tok-fallback");
+
+	expect(sessionToken(undefined)).toBeUndefined();
+	expect(sessionToken({ activeWorkspaceKey: "orq-research", workspaceTokens: {} })).toBeUndefined();
+	expect(sessionToken({ workspaceTokens: { "orq-research": { token: "tok" } } })).toBeUndefined();
 });
 
 test("installMethod tells a brew-managed binary from a plain one", () => {
