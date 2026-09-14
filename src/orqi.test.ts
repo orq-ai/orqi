@@ -601,6 +601,16 @@ test("isAuthError tells a rejected credential from a server that fell over", () 
 	expect(isAuthError(new Error("HTTP 500 Internal Server Error"))).toBe(false);
 });
 
+test("serverOf reads the host out of either whoami shape", () => {
+	// A profile answers with `server`; a browser login answers with `urls.api_base_url`
+	// and no `server` at all. Reading only the first sends a my.orq.ai session token
+	// to api.orq.ai, which the MCP server rejects as invalid_token.
+	expect(serverOf('{"profile":"aim","server":"https://aim.orq.ai"}')).toBe("https://aim.orq.ai");
+	expect(serverOf('{"authenticated":true,"urls":{"api_base_url":"https://my.orq.ai"}}')).toBe("https://my.orq.ai");
+	expect(serverOf('{"authenticated":true,"urls":{}}')).toBeUndefined();
+	expect(serverOf("you are not logged in")).toBeUndefined();
+});
+
 test("profileOf names the API-key profile the CLI resolved", () => {
 	// ORQ_PROFILE pins a profile for the CLI; whoami is how orqi learns one is in force.
 	expect(profileOf('{"profile":"achmea-aim-ithaka","server":"https://aim.orq.ai"}')).toBe("achmea-aim-ithaka");

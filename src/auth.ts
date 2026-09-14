@@ -137,11 +137,23 @@ export function sessionToken(session: Session | undefined): string | undefined {
  */
 export const WHOAMI_ARGS = ["auth", "whoami", "-o", "json"];
 
-/** Server the CLI resolved, from the same whoami payload as the session file. */
+/**
+ * Server the CLI resolved, from the same whoami payload as the session file.
+ *
+ * whoami answers in two shapes and names the host differently in each: a
+ * profile reports `server`, a browser login reports `urls.api_base_url` and no
+ * `server` at all. Reading only the first sent a `my.orq.ai` session token to
+ * `api.orq.ai`, which the MCP server answers with `invalid_token` - the same
+ * class of break as guessing the session file's name, and invisible to anyone
+ * whose login already sits on the default host.
+ */
 export function serverOf(whoamiJson: string): string | undefined {
 	try {
-		const server = JSON.parse(whoamiJson)?.server;
-		return typeof server === "string" && server ? server : undefined;
+		const whoami = JSON.parse(whoamiJson);
+		for (const value of [whoami?.server, whoami?.urls?.api_base_url]) {
+			if (typeof value === "string" && value) return value;
+		}
+		return undefined;
 	} catch {
 		return undefined;
 	}
