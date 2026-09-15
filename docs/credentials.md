@@ -8,21 +8,24 @@ token refresh and the session file; orqi shells out to it and reads what it is t
 
 ## 1. Which credential
 
-Up to three candidates, best first. None is probed up front — they are tried on the real MCP
+Up to four candidates, best first. None is probed up front — they are tried on the real MCP
 connection, where a 401 selects the next one and any other error is a real error.
 
 | Order | Candidate | Present when | Comes from | Shown as |
 |---|---|---|---|---|
+| 0 | the key `/login orq` stored | pi's `/login` has been run in some session | `~/.orqi/agent/auth.json` | `/login key` |
 | 1 | the pinned profile's key | a profile is in force | `credentials.json`, by the name whoami reports (see [6](#6-pinning-a-profile)) | `orq profile <name>` |
-| 2 | `ORQ_API_KEY` | it is set, and differs from 1 | the environment, or pi's `/login` (which sets it for the session) | `ORQ_API_KEY` |
+| 2 | `ORQ_API_KEY` | it is set, and differs from 0 and 1 | the environment | `ORQ_API_KEY` |
 | 3 | the login session | there is one | `orq auth login`, read through the CLI | `orq login session` |
 
-The profile sits above `ORQ_API_KEY` because it does for the CLI, which warns and uses the profile
-(`applyProfileAPIKey`). orqi ranking them the other way would put the two on different credentials
-for the same command.
+The stored `/login` key comes first because pi's model runtime already prefers it over
+`ORQ_API_KEY`: ranking it lower would put the model and the tools on different credentials after a
+`/login`. The profile sits above `ORQ_API_KEY` because it does for the CLI, which warns and uses the
+profile (`applyProfileAPIKey`). orqi ranking them the other way would put the two on different
+credentials for the same command.
 
-The startup line always names the one that won. If they all fail, or there are none, orqi prints why
-(see [4](#4-when-nothing-works)) and exits.
+The startup line always names the one that won. If they all fail, orqi still opens and says why
+(see [4](#4-when-nothing-works)); if there are none, it exits.
 
 ## 2. Which server
 
@@ -96,11 +99,27 @@ the CLI's own stderr above the login hint.
 | whoami named no file | `orq auth whoami named no session file` |
 | the file is gone or corrupt | `session file unreadable: <path> (…)` |
 | session expired | the CLI's own message, e.g. `Error: Invalid refresh token!` |
-| every candidate rejected on the connection | `Every orq credential was rejected (…)`, naming the ones that were tried, then the login hint |
-| nothing above, just no credential | the login hint alone |
+| every candidate rejected on the connection | the session opens anyway, with a warning pinned above the editor naming each candidate tried and the server's reason (`ORQ_API_KEY (acme): API key is not valid for this workspace…`), then the hint. The footer reads `orq:not connected`. One-shot prints the same block and exits 1 |
+| the MCP server unreachable after three attempts | `Could not reach the orq MCP server at <url>: <reason>`, exit 1 |
+| nothing above, just no credential | the hint alone, exit 1 |
 
-The hint itself: *No orq credential accepted. Run `orq auth login` (or `/login` here), or export a
-valid `ORQ_API_KEY`.*
+The hint in-session: *Run `/login orq` and paste an API key for this workspace, or run
+`orq auth login` in another terminal. orqi reconnects on your next message.* One-shot: *Run
+`orq auth login`, or export an `ORQ_API_KEY` for this workspace.*
+
+### Recovering in-session
+
+pi fires no event when `/login` stores a key and its auth store has no listener, so orqi checks on
+the next message: `before_agent_start` re-reads the candidate list and, if it changed since the last
+try, reconnects with it. `/reconnect` does the same right away. Either path clears the pinned
+warning and puts the workspace back in the footer; a boot that had no cached tool catalogue fetches
+it now and registers the tools into the running session.
+
+| You did | Then |
+|---|---|
+| `/login orq`, pasted a key for the right workspace | send any message: `Connected to orq: 46 tools in acme (/login key).` |
+| `orq auth login` in another terminal | send any message, or `/reconnect` |
+| fixed `ORQ_API_KEY` | restart: the environment cannot change under a running process |
 
 ## 5. Which workspace is shown
 

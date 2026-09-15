@@ -52,6 +52,15 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   file has already been through a layout migration, every step of it is optional: a moved file or a
   keyless profile warns and falls through to the next candidate rather than failing the boot.
   Retire it the day the CLI can hand the key over.
+- **A rejected credential does not stop the boot.** The session opens with the tools wrapped from
+  the cached catalogue, whatever its age (stale tools beat none when the server cannot be asked),
+  or with none, and a warning pinned above the editor names each candidate and the server's
+  `error_description`: "not valid for this workspace" and "expired" need different fixes, and the
+  bare hint used to send both to `orq auth login`. Recovery runs on `before_agent_start` because
+  pi fires no event when `/login` stores a key and its auth store has no listener; the hook
+  compares the candidate tokens first so an unchanged set never re-knocks on the server. The
+  stored `/login` key is candidate #0 for the tools because pi's model runtime already prefers it.
+  Only one-shot exits, having no session to log in from.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
   backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit

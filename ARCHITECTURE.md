@@ -28,7 +28,7 @@ orqi
 | `src/mcp.ts` | orq MCP to pi tools, catalogue cache, result rendering |
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
-| `src/commands.ts` | The pi extension: startup header entry plus `/tools /whoami /workspace /doctor /whatsnew /update` |
+| `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, plus `/tools /whoami /workspace /reconnect /doctor /whatsnew /update` |
 | `src/update.ts` | `orqi update`: daily release check, header note, the binary swap |
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
@@ -98,9 +98,16 @@ resolves from the login session when there is one, and otherwise from the API ke
 are `sk-orq-<jwt>` whose payload carries `workspace_id`. That is a UUID, so with no session to map
 it against, the short id is shown rather than a guessed name.
 
-In-session, pi's built-in `/login` sets an orq API key directly; a stored credential takes
-precedence over the configured `ORQ_API_KEY`. Router wiring mirrors `orq launch pi`, ported to
-TypeScript in `src/model.ts`.
+In-session, pi's built-in `/login` stores an orq API key in `~/.orqi/agent/auth.json`; a stored
+credential takes precedence over the configured `ORQ_API_KEY` for the model, and it is candidate
+#0 for the tools for the same reason. Router wiring mirrors `orq launch pi`, ported to TypeScript
+in `src/model.ts`.
+
+A boot on which every credential is rejected still opens. The tools are wrapped from the cached
+catalogue (any age) or not at all, a warning naming each rejection is pinned above the editor, and
+the extension reconnects on the next message once `/login` or `orq auth login` has produced a
+credential the server accepts, registering the tools into the running session if the boot had none.
+Only the one-shot form exits, because it has no session to log in from.
 
 ## Known rough edges
 

@@ -4,11 +4,11 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { apiBaseUrl, credentialsFile, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey } from "./auth.ts";
+import { apiBaseUrl, credentialsFile, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
-import { groupTools, orqCommands } from "./commands.ts";
+import { authLines, groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
-import { DENYLISTED_TOOLS, describe, isAuthError, keptTools, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { authReason, CredentialsRejected, DENYLISTED_TOOLS, describe, isAuthError, keptTools, openFirstAccepted, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
@@ -45,6 +45,9 @@ import {
 // out loud there: a check that quietly passes on no data is worse than no check.
 const CATALOGUE_PATH = join(process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"), "tool-catalogue.json");
 const noCatalogue = !existsSync(CATALOGUE_PATH);
+
+/** A ReconnectFn for tests that never reach it. */
+const noReconnect = async () => ({ credential: { token: "", source: "" }, count: 0, added: [] });
 
 function writeVersionBinary(path: string, version: string): void {
 	writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' '${version}'\n`);
@@ -454,7 +457,7 @@ test("the header entry is appended on fresh sessions only", () => {
 		appendEntry: (customType: string) => appended.push(customType),
 	} as any;
 
-	orqCommands(async () => "", ["orq_list_traces"], {
+	orqCommands(noReconnect, ["orq_list_traces"], {
 		name: "orqi",
 		version: "v0",
 		workspace: "orq-research",
@@ -491,7 +494,7 @@ test("a stale pi handle after /new does not take the session down", () => {
 			throw new Error("This extension ctx is stale after session replacement or reload.");
 		},
 	} as any;
-	orqCommands(async () => "", ["orq_list_traces"], {
+	orqCommands(noReconnect, ["orq_list_traces"], {
 		name: "orqi",
 		version: "v0",
 		workspace: "orq-research",
@@ -524,7 +527,7 @@ test("our commands never collide with a pi built-in", () => {
 		on: () => {},
 		appendEntry: () => {},
 	} as any;
-	orqCommands(async () => "", ["orq_list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
+	orqCommands(noReconnect, ["orq_list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
 
 	expect(registered).toContain("whatsnew");
 	expect(registered.filter((name) => builtins.has(name))).toEqual([]);
@@ -599,6 +602,155 @@ test("isAuthError tells a rejected credential from a server that fell over", () 
 	expect(isAuthError(new Error("HTTP 401 Unauthorized"))).toBe(true);
 	expect(isAuthError(new Error("Request timed out"))).toBe(false);
 	expect(isAuthError(new Error("HTTP 500 Internal Server Error"))).toBe(false);
+});
+
+test("authReason pulls the server's reason out of the MCP SDK's wrapping", () => {
+	// "not valid for this workspace" and "expired" need different fixes; the
+	// bare hint used to send both to `orq auth login`.
+	const sdk = 'Streamable HTTP error: Error POSTing to endpoint: {"error":"invalid_token","error_description":"API key is not valid for this workspace. Ensure you are using the correct API key."}';
+	expect(authReason(new Error(sdk))).toBe("API key is not valid for this workspace. Ensure you are using the correct API key.");
+	expect(authReason(new Error('Error POSTing to endpoint: {"error":"invalid_token"}'))).toBe("invalid_token");
+	expect(authReason(new Error("HTTP 401 Unauthorized\nmore"))).toBe("HTTP 401 Unauthorized");
+	expect(authReason(new Error("Error POSTing to endpoint: {not json"))).toBe("Error POSTing to endpoint: {not json");
+});
+
+test("openFirstAccepted names every rejected candidate, and stops on a real error", async () => {
+	const rejected = new Error('Error POSTing to endpoint: {"error":"invalid_token","error_description":"API key is not valid for this workspace"}');
+	const candidates: Credential[] = [
+		{ token: "a", source: "ORQ_API_KEY", workspace: "acme" },
+		{ token: "b", source: "orq login session", workspace: "orq-dev" },
+	];
+	const tried: string[] = [];
+	const refuse = async (c: Credential) => {
+		tried.push(c.token);
+		throw rejected;
+	};
+	const error = await openFirstAccepted(candidates, refuse).catch((e) => e);
+	expect(error).toBeInstanceOf(CredentialsRejected);
+	expect((error as CredentialsRejected).rejections).toEqual([
+		{ source: "ORQ_API_KEY", workspace: "acme", reason: "API key is not valid for this workspace" },
+		{ source: "orq login session", workspace: "orq-dev", reason: "API key is not valid for this workspace" },
+	]);
+	expect(tried).toEqual(["a", "b"]);
+
+	// The second candidate wins: the first rejection is not reported.
+	const client = {} as any;
+	const second = await openFirstAccepted(candidates, async (c) => {
+		if (c.token === "a") throw rejected;
+		return client;
+	});
+	expect(second.credential.source).toBe("orq login session");
+
+	// A stall is the server's problem, not the credential's: no next candidate.
+	tried.length = 0;
+	const stalled = await openFirstAccepted(candidates, async (c) => {
+		tried.push(c.token);
+		throw new Error("Request timed out");
+	}).catch((e) => e);
+	expect(stalled).not.toBeInstanceOf(CredentialsRejected);
+	expect(tried).toEqual(["a"]);
+});
+
+test("loginKey reads the key pi's /login stored, and nothing else", () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-auth-"));
+	try {
+		const path = join(dir, "auth.json");
+		expect(loginKey(path)).toBeUndefined(); // no file yet
+		writeFileSync(path, JSON.stringify({ orq: { type: "api_key", key: "sk-orq-stored" } }));
+		expect(loginKey(path)).toBe("sk-orq-stored");
+		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "x", refresh: "y", expires: 0 } }));
+		expect(loginKey(path)).toBeUndefined();
+		writeFileSync(path, "{garbage");
+		expect(loginKey(path)).toBeUndefined();
+		expect(loginKey(undefined)).toBeUndefined();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("authLines says what was rejected, why, and the way out", () => {
+	const lines = authLines([
+		{ source: "ORQ_API_KEY", workspace: "acme", reason: "API key is not valid for this workspace." },
+		{ source: "orq login session", reason: "expired" },
+	]);
+	expect(lines).toEqual([
+		"orq is not connected: every credential was rejected.",
+		"  ORQ_API_KEY (acme): API key is not valid for this workspace.",
+		"  orq login session: expired",
+		LOGIN_HINT,
+	]);
+	expect(LOGIN_HINT).toContain("/login orq");
+});
+
+test("a rejected boot pins the warning, and the next message reconnects", async () => {
+	// pi fires nothing on /login, so the next submitted message is where the
+	// stored key is noticed. The reconnect must register tools the boot could
+	// not wrap, before the run snapshots its tool list.
+	const handlers = new Map<string, (event: any, ctx: any) => Promise<void> | void>();
+	const registered: string[] = [];
+	const pi = {
+		registerEntryRenderer: () => {},
+		registerCommand: () => {},
+		registerTool: (tool: { name: string }) => registered.push(tool.name),
+		on: (event: string, handler: (e: any, c: any) => any) => handlers.set(event, handler),
+		appendEntry: () => {},
+	} as any;
+	const widgets = new Map<string, string[] | undefined>();
+	const status = new Map<string, string | undefined>();
+	const notices: string[] = [];
+	const ctx = {
+		ui: {
+			setWidget: (k: string, v?: string[]) => widgets.set(k, v),
+			setStatus: (k: string, v?: string) => status.set(k, v),
+			notify: (m: string) => notices.push(m),
+		},
+	} as any;
+	const dir = mkdtempSync(join(tmpdir(), "orqi-agent-"));
+	const calls: Credential[][] = [];
+	const header = { name: "orqi", version: "v0", status: "not connected", cwd: "~" } as any;
+	try {
+		const reconnect = async (candidates: Credential[]) => {
+			calls.push(candidates);
+			const win = candidates.find((c) => c.token === "sk-orq-good");
+			if (!win) throw new CredentialsRejected(candidates.map((c) => ({ source: c.source, reason: "nope" })));
+			header.workspace = "acme";
+			return { credential: { ...win, workspace: "acme" }, count: 1, added: [{ name: "orq_list_traces" } as any] };
+		};
+		const toolNames: string[] = [];
+		const rejected = [{ source: "ORQ_API_KEY", reason: "API key is not valid for this workspace" }];
+		orqCommands(reconnect, toolNames, header, dir, rejected)(pi);
+
+		handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+		expect(widgets.get("orq-auth")).toEqual(authLines(rejected));
+		expect(status.get("orq-workspace")).toBe("orq:not connected");
+		expect(notices).toEqual(["orq is not connected: every credential was rejected."]);
+
+		// Nothing changed since boot: the turn does not knock on the server again.
+		process.env.ORQ_API_KEY = "sk-orq-bad";
+		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
+		expect(calls.length).toBe(1); // tried once, with the same bad key
+		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
+		expect(calls.length).toBe(1);
+		expect(widgets.get("orq-auth")).toBeDefined();
+
+		// /login orq stored a key: the next message picks it up, first in line.
+		writeFileSync(join(dir, "auth.json"), JSON.stringify({ orq: { type: "api_key", key: "sk-orq-good" } }));
+		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
+		expect(calls.length).toBe(2);
+		expect(calls[1]![0]).toMatchObject({ token: "sk-orq-good", source: "/login key" });
+		expect(widgets.get("orq-auth")).toBeUndefined();
+		expect(status.get("orq-workspace")).toBe("orq:acme");
+		expect(registered).toEqual(["orq_list_traces"]);
+		expect(toolNames).toEqual(["orq_list_traces"]);
+		expect(notices.at(-1)).toBe("Connected to orq: 1 tools in acme (/login key).");
+
+		// Connected: the hook is a no-op from here on.
+		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
+		expect(calls.length).toBe(2);
+	} finally {
+		delete process.env.ORQ_API_KEY;
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("serverOf reads the host out of either whoami shape", () => {
@@ -1069,7 +1221,7 @@ test("the `update` argv string and the /update command registration stay in sync
 		on: () => {},
 		appendEntry: () => {},
 	} as any;
-	orqCommands(async () => "", ["orq_list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
+	orqCommands(noReconnect, ["orq_list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
 	expect(registered).toContain("update");
 });
 

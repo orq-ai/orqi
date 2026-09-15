@@ -40,7 +40,7 @@ never runs automatically.
 | | |
 |---|---|
 | **orq AI Router** | The only model provider, so `/model` offers exactly the models the workspace has enabled |
-| **6 workspace commands** | `/tools`, `/whoami`, `/workspace [key]`, `/doctor`, `/whatsnew` (the orq.ai changelog), `/update` |
+| **7 workspace commands** | `/tools`, `/whoami`, `/workspace [key]`, `/reconnect`, `/doctor`, `/whatsnew` (the orq.ai changelog), `/update` |
 | **43 orq MCP tools** | Every tool the workspace's MCP server exposes today, minus three invocation surfaces ([why](ARCHITECTURE.md#tools)). Wrapped as native pi tools with an `orq_` prefix. Results render as a one-line summary (`23 items · 6.0 KB`); `ctrl+o` expands to pretty-printed JSON. The model always receives the full payload |
 | **22 skills** | 15 from [orq-ai/assistant-plugins](https://github.com/orq-ai/assistant-plugins) plus the 7 orqi skills, vendored in `skills/`. The upstream 15 refresh themselves: orqi checks once a day and picks up new ones without waiting for a release |
 | **3 subagents** | `investigator`, `analyst`, `docs`, in-process, each with a narrow orq tool subset |
@@ -72,9 +72,12 @@ allows and one orq credential covers both the LLM and the tools.
 
 ### Picking a credential
 
-Three candidates, best first: a pinned profile's key, then `ORQ_API_KEY`, then the `orq auth login`
-session. Each is tried on the real connection, so a rejected one falls through to the next. The
-profile wins over an exported key because it does for the orq CLI too.
+Four candidates, best first: the key `/login orq` stored, a pinned profile's key, then
+`ORQ_API_KEY`, then the `orq auth login` session. Each is tried on the real connection, so a
+rejected one falls through to the next. The profile wins over an exported key because it does for
+the orq CLI too. If every one is rejected, orqi still opens, pins a warning saying what the server
+said about each, and reconnects on your next message once `/login orq` or `orq auth login` has
+produced a key it accepts.
 
 ```bash
 # 1. Nothing set: the login session, on whatever host the CLI resolved.

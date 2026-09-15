@@ -22,10 +22,10 @@ import {
 	SessionManager,
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
-import { credentialCandidates, LOGIN_HINT, projectForCredential } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT_ONESHOT, mcpUrl, projectForCredential, type Credential } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
-import { orqCommands } from "./commands.ts";
-import { connectOrqTools, isAuthError } from "./mcp.ts";
+import { authLines, orqCommands } from "./commands.ts";
+import { connectOrqTools } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
@@ -89,25 +89,32 @@ const pkgDir = await assetDir();
 // neither of which applies to this binary. The header links orq's changelog.
 process.env.PI_SKIP_VERSION_CHECK ??= "1";
 
-const { candidates, failure, profileGap } = credentialCandidates();
+const AUTH_PATH = join(AGENT_DIR, "auth.json"); // where pi's /login stores the orq key
+const NOT_CONNECTED = "not connected"; // header status while every credential is rejected
+const { candidates, failure, profileGap } = credentialCandidates(AUTH_PATH);
 if (candidates.length === 0) {
 	if (failure) console.error(failure);
-	console.error(LOGIN_HINT);
+	console.error(LOGIN_HINT_ONESHOT);
 	process.exit(1);
 }
 if (profileGap) console.error(profileGap);
 
-// Every candidate rejected is the same dead end as having none, and it is the
-// likelier one: an expired session or a stale key still produces a candidate.
-// Without this the MCP SDK's own 401 escapes as a stack trace out of node_modules.
+// A rejected credential does not stop the boot: the session opens with a
+// pinned warning and reconnects once /login or `orq auth login` has produced
+// a credential the server takes. Only an unreachable server is fatal, and even
+// that is one line rather than the MCP SDK's stack trace out of node_modules.
 const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json")).catch((error: unknown) => {
-	if (!isAuthError(error)) throw error;
-	console.error(`Every orq credential was rejected (${candidates.map((c) => c.source).join(", ")}).`);
-	console.error(LOGIN_HINT);
+	console.error(`Could not reach the orq MCP server at ${mcpUrl()}: ${String((error as Error)?.message ?? error).split("\n")[0]}`);
 	process.exit(1);
 });
-const credential = orq.credential;
-const models = await createOrqModelRuntime(AGENT_DIR, credential.token);
+if (oneShot && !orq.credential) {
+	// No session to log in from: say what was rejected and why, then stop.
+	for (const line of authLines(orq.rejections, LOGIN_HINT_ONESHOT)) console.error(line);
+	process.exit(1);
+}
+// With nothing accepted the model runs on the best guess; a bad key only
+// degrades the model catalogue to its fallback, and /login replaces it.
+const models = await createOrqModelRuntime(AGENT_DIR, orq.credential?.token ?? candidates[0]!.token);
 const modelRuntime = models.runtime;
 const model = pickModel(models);
 const customTools = [
@@ -146,19 +153,19 @@ const services = await createAgentSessionServices({
 		additionalThemePaths: [join(pkgDir, "themes")],
 		extensionFactories: [
 			orqCommands(
-				async () => {
-					const reread = credentialCandidates(); // the login session, freshly read
-					const next = reread.candidates.at(-1);
-					if (!next) return reread.failure ? `${reread.failure}\n${LOGIN_HINT}` : LOGIN_HINT;
-					process.env.ORQ_API_KEY = next.token;
-					const count = await orq.reconnect(next);
-						header.workspace = next.workspace;
-						header.project = await projectForCredential(next.token);
-					return `Reconnected to orq: ${count} tools in ${next.workspace ?? "workspace"} (${next.source}).`;
+				async (next: Credential[]) => {
+					const result = await orq.reconnect(next);
+					// The model runtime reads $ORQ_API_KEY; keep it on the credential the tools use.
+					process.env.ORQ_API_KEY = result.credential.token;
+					header.workspace = result.credential.workspace;
+					header.project = await projectForCredential(result.credential.token);
+					header.status = header.status.replace(NOT_CONNECTED, `${result.count} tools`);
+					return result;
 				},
 				orq.tools.map((tool) => tool.name),
 				header,
 				AGENT_DIR,
+				orq.rejections,
 			),
 		],
 	},
@@ -181,11 +188,11 @@ services.settingsManager.setLastChangelogVersion("999.0.0");
 
 const skills = services.resourceLoader.getSkills().skills.length;
 const update = pendingUpdate(readCache(AGENT_DIR));
-header.workspace = credential.workspace;
-header.project = await projectForCredential(credential.token);
+header.workspace = orq.credential?.workspace;
+header.project = orq.credential ? await projectForCredential(orq.credential.token) : undefined;
 header.status = [
 	model?.id ?? "no model",
-	`${orq.tools.length} tools`,
+	orq.credential ? `${orq.tools.length} tools` : NOT_CONNECTED,
 	`${skills} skills`,
 	`${models.ids.length} models`,
 	orq.note,
@@ -196,7 +203,7 @@ header.status = [
 ]
 	.filter(Boolean)
 	.join(" · ");
-const startupLine = [header.name, header.workspace, header.status, credential.source].filter(Boolean).join(" · ");
+const startupLine = [header.name, header.workspace, header.status, orq.credential?.source].filter(Boolean).join(" · ");
 // The header's "update available" line is the only place a pending update is
 // announced: it used to also ride in the status list above, saying the same
 // thing twice in one screenful.

@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 
 /**
  * The server the CLI resolved for this environment, once whoami has answered.
@@ -248,6 +249,17 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
 	}
 }
 
+/** The API key pi's `/login orq` stored, if any. */
+export function loginKey(authPath: string | undefined): string | undefined {
+	if (!authPath) return undefined;
+	try {
+		const stored = readStoredCredential("orq", authPath);
+		return stored?.type === "api_key" && stored.key ? stored.key : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Credentials to try, best first.
  *
@@ -257,19 +269,27 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
  * second round-trip against a server that intermittently hangs, and a hang
  * would then be misread as a bad credential.
  *
+ * A key stored by pi's `/login orq` (in `<agentDir>/auth.json`) comes first,
+ * because pi's model runtime already prefers it over `$ORQ_API_KEY`: without
+ * this the model and the tools would run on different credentials after a
+ * `/login`, and the in-session recovery from a rejected key would have nothing
+ * to reconnect with.
+ *
  * `failure` carries why the login session produced nothing, because a broken
  * CLI, a stalled backend and a genuinely logged-out machine otherwise all
  * surface as the same empty list and the same "run orq auth login" hint.
  */
-export function credentialCandidates(): { candidates: Credential[]; failure?: string; profileGap?: string } {
+export function credentialCandidates(authPath?: string): { candidates: Credential[]; failure?: string; profileGap?: string } {
 	const candidates: Credential[] = [];
 	const { session, failure } = readSession();
+	const login = loginKey(authPath);
+	if (login) candidates.push({ token: login, source: "/login key", workspace: workspaceOfKey(login, session) });
 	// A profile outranks an exported key, because it does for the CLI: it warns
 	// and uses the profile (applyProfileAPIKey), and orqi disagreeing would put
 	// the two on different credentials for the same command.
 	const profile = cliProfile ? profileKey(cliProfile) : undefined;
-	if (profile) candidates.push({ token: profile, source: `orq profile ${cliProfile}`, workspace: workspaceOfKey(profile, session) });
-	if (process.env.ORQ_API_KEY && process.env.ORQ_API_KEY !== profile) {
+	if (profile && profile !== login) candidates.push({ token: profile, source: `orq profile ${cliProfile}`, workspace: workspaceOfKey(profile, session) });
+	if (process.env.ORQ_API_KEY && process.env.ORQ_API_KEY !== profile && process.env.ORQ_API_KEY !== login) {
 		const token = process.env.ORQ_API_KEY;
 		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
 	}
@@ -284,4 +304,8 @@ export function credentialCandidates(): { candidates: Credential[]; failure?: st
 	return { candidates, failure, profileGap };
 }
 
-export const LOGIN_HINT = "No orq credential accepted. Run `orq auth login` (or /login here), or export a valid ORQ_API_KEY.";
+/** In-session: pi's /login stores a key orqi picks up on the next message. */
+export const LOGIN_HINT =
+	"Run /login orq and paste an API key for this workspace, or run `orq auth login` in another terminal. orqi reconnects on your next message.";
+/** One-shot: there is no session to log in from. */
+export const LOGIN_HINT_ONESHOT = "Run `orq auth login`, or export an ORQ_API_KEY for this workspace.";
