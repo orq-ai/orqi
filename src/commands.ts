@@ -129,7 +129,8 @@ export function orqCommands(
 				pi.registerTool(tool);
 			}
 			showAuth(ctx);
-			return `${verb} orq: ${result.count} tools in ${result.credential.workspace ?? "workspace"} (${result.credential.source}).`;
+			const note = result.note ? ` ${result.note}.` : "";
+			return `${verb} orq: ${result.count} tools in ${result.credential.workspace ?? "workspace"} (${result.credential.source}).${note}`;
 		} catch (error) {
 			if (error instanceof CredentialsRejected) {
 				rejections = error.rejections;

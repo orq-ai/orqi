@@ -153,20 +153,32 @@ export interface Reconnected {
 	credential: Credential;
 	count: number;
 	added: ToolDefinition[];
+	/** Set when the catalogue refresh fell back to the cache. */
+	note?: string;
 }
 
+/**
+ * The boot's outcome plus the live client behind the tools.
+ *
+ * `credential`, `rejections` and `note` describe the boot and never change:
+ * the extension in `src/commands.ts` owns the live connection state, because
+ * it is the one that renders it. `reconnect` reports each attempt's outcome
+ * through its return value or its rejection, never through these fields.
+ */
 export interface OrqTools {
 	tools: ToolDefinition[];
-	/** The candidate the server accepted; undefined when every one was rejected. */
-	credential?: Credential;
-	/** Why there is no credential: one entry per candidate the server turned away. */
-	rejections: Rejection[];
-	/** Set when the catalogue came from cache because the server was unreachable. */
-	note?: string;
+	/** The candidate the boot's server accepted; undefined when every one was rejected. */
+	readonly credential?: Credential;
+	/** Why the boot has no credential: one entry per candidate the server turned away. */
+	readonly rejections: Rejection[];
+	/** Set when the boot's catalogue came from cache because the server was unreachable. */
+	readonly note?: string;
 	/**
 	 * Re-point the wrapped tools at the first accepted credential (login,
-	 * workspace switch, or recovery from a rejected boot). Rejects with
-	 * `CredentialsRejected` when none is; `rejections` is updated either way.
+	 * workspace switch, or recovery from a rejected boot), then re-run the
+	 * catalogue under its normal rules and wrap any tool the session lacks.
+	 * Rejects with `CredentialsRejected` when no candidate is accepted, and
+	 * with the stall itself when the server did not answer.
 	 */
 	reconnect: (candidates: Credential[]) => Promise<Reconnected>;
 	close: () => Promise<void>;
@@ -284,23 +296,33 @@ export function authReason(error: unknown): string {
 /**
  * Connect using the first credential the server actually accepts.
  *
- * Auth failures are immediate and explicit, so they select the next candidate;
- * anything else (the server's intermittent hangs) is a real error. `connect`
- * is injectable so the selection can be tested without a server.
+ * Auth failures are immediate and explicit, so they select the next candidate.
+ * A stall (the server's intermittent hangs, past `open`'s own retries) is the
+ * server's problem and no verdict on that key, so it moves on too: a good
+ * login session at candidate 3 must not be lost to a hang on candidate 2.
+ * When nothing is accepted, a stall anywhere is reported ahead of the
+ * rejections, because "every credential was rejected" would be a claim the
+ * server never made. `connect` is injectable so the selection can be tested
+ * without a server.
  */
 export async function openFirstAccepted(
 	candidates: Credential[],
 	connect: (credential: Credential) => Promise<Client> = open,
 ): Promise<{ client: Client; credential: Credential }> {
 	const rejections: Rejection[] = [];
+	let stall: unknown;
 	for (const candidate of candidates) {
 		try {
 			return { client: await connect(candidate), credential: candidate };
 		} catch (error) {
-			if (!isAuthError(error)) throw error;
-			rejections.push({ source: candidate.source, workspace: candidate.workspace, reason: authReason(error) });
+			if (isAuthError(error)) {
+				rejections.push({ source: candidate.source, workspace: candidate.workspace, reason: authReason(error) });
+			} else {
+				stall = error;
+			}
 		}
 	}
+	if (stall !== undefined) throw stall;
 	throw new CredentialsRejected(rejections);
 }
 
@@ -310,20 +332,25 @@ export async function openFirstAccepted(
  * A rejected credential is not a failed boot: the session still opens, with
  * the tools wrapped from the cached catalogue (any age: stale tools beat none
  * when the server cannot be asked) or none at all, and `reconnect` fills in
- * the rest once a credential is accepted. Only the server being unreachable
- * throws. The wrapped tools read `client` lazily, per call, so they need no
- * connection to exist.
+ * the rest once a credential is accepted, re-running the catalogue under its
+ * normal TTL so a stale cache taken at boot is refreshed then. Only the server
+ * being unreachable throws. The wrapped tools read `client` lazily, per call,
+ * so they need no connection to exist. `connect` is injectable for tests.
  */
-export async function connectOrqTools(candidates: Credential[], cachePath: string): Promise<OrqTools> {
+export async function connectOrqTools(
+	candidates: Credential[],
+	cachePath: string,
+	connect: (credential: Credential) => Promise<Client> = open,
+): Promise<OrqTools> {
 	let client: Client | undefined;
 	let credential: Credential | undefined;
 	let rejections: Rejection[] = [];
 	let note: string | undefined;
 	let tools: McpTool[] = [];
 	try {
-		const accepted = await openFirstAccepted(candidates);
+		const accepted = await openFirstAccepted(candidates, connect);
 		credential = accepted.credential;
-		const listed = await catalogue(accepted.client, cachePath, () => open(accepted.credential));
+		const listed = await catalogue(accepted.client, cachePath, () => connect(accepted.credential));
 		client = listed.client;
 		tools = listed.tools;
 		note = listed.note;
@@ -373,39 +400,34 @@ export async function connectOrqTools(candidates: Credential[], cachePath: strin
 	// subagent tool filters it per call, so tools pushed here reach both.
 	const wrapped = keptTools(tools).map(wrap);
 
-	const self: OrqTools = {
+	return {
 		tools: wrapped,
 		credential,
 		rejections,
 		note,
 		reconnect: async (next) => {
-			let accepted: { client: Client; credential: Credential };
-			try {
-				accepted = await openFirstAccepted(next);
-			} catch (error) {
-				if (error instanceof CredentialsRejected) self.rejections = error.rejections;
-				throw error;
-			}
+			const accepted = await openFirstAccepted(next, connect);
 			await client?.close().catch(() => {});
 			client = accepted.client;
-			credential = accepted.credential;
-			self.credential = credential;
-			self.rejections = [];
-			// A boot with no cache wrapped nothing; the first live connection fills it in.
-			// ponytail: assumes the catalogue is identical across workspaces, which
-			// it is today. Rebuild the session's tools if that ever stops holding.
-			let added: ToolDefinition[] = [];
-			if (wrapped.length === 0) {
-				const listed = await catalogue(client, cachePath, () => open(accepted.credential));
-				client = listed.client;
-				added = keptTools(listed.tools).map(wrap);
-				wrapped.push(...added);
-			}
-			return { credential, count: wrapped.length, added };
+			// The catalogue under its normal rules, now that the server can be
+			// asked: a fresh cache is reused, a stale one (or the any-age cache a
+			// rejected boot took) is refetched, and a stall keeps the cache with a
+			// note. Only names the session lacks are wrapped, and they are pushed
+			// into the one array pi and the subagents hold.
+			// ponytail: a tool that vanished from the server stays registered and
+			// fails at call time; a changed schema keeps the old one. Rebuild the
+			// session's tools if the catalogue ever varies per workspace.
+			const listed = await catalogue(client, cachePath, () => connect(accepted.credential));
+			client = listed.client;
+			const known = new Set(wrapped.map((tool) => tool.name));
+			const added = keptTools(listed.tools)
+				.filter((tool) => !known.has(`${TOOL_PREFIX}${tool.name}`))
+				.map(wrap);
+			wrapped.push(...added);
+			return { credential: accepted.credential, count: wrapped.length, added, note: listed.note };
 		},
 		close: async () => {
 			await client?.close();
 		},
 	};
-	return self;
 }

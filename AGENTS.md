@@ -53,8 +53,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   keyless profile warns and falls through to the next candidate rather than failing the boot.
   Retire it the day the CLI can hand the key over.
 - **A rejected credential does not stop the boot.** The session opens with the tools wrapped from
-  the cached catalogue, whatever its age (stale tools beat none when the server cannot be asked),
-  or with none, and a warning pinned above the editor names each candidate and the server's
+  the cached catalogue, whatever its age (stale tools beat none when the server cannot be asked;
+  the normal 24 h TTL applies again on reconnect, which wraps whatever the session lacks), or with
+  none, and a warning pinned above the editor names each candidate and the server's
   `error_description`: "not valid for this workspace" and "expired" need different fixes, and the
   bare hint used to send both to `orq auth login`. Recovery runs on the `input` event because
   pi fires no event when `/login` stores a key and its auth store has no listener, and `input`

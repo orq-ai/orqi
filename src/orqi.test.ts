@@ -1,14 +1,14 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { apiBaseUrl, credentialCandidates, credentialsFile, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { authLines, groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
-import { authReason, CredentialsRejected, DENYLISTED_TOOLS, describe, isAuthError, keptTools, openFirstAccepted, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { authReason, connectOrqTools, CredentialsRejected, DENYLISTED_TOOLS, describe, isAuthError, keptTools, openFirstAccepted, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
@@ -614,7 +614,7 @@ test("authReason pulls the server's reason out of the MCP SDK's wrapping", () =>
 	expect(authReason(new Error("Error POSTing to endpoint: {not json"))).toBe("Error POSTing to endpoint: {not json");
 });
 
-test("openFirstAccepted names every rejected candidate, and stops on a real error", async () => {
+test("openFirstAccepted names every rejected candidate, and a stall is not a verdict", async () => {
 	const rejected = new Error('Error POSTing to endpoint: {"error":"invalid_token","error_description":"API key is not valid for this workspace"}');
 	const candidates: Credential[] = [
 		{ token: "a", source: "ORQ_API_KEY", workspace: "acme" },
@@ -641,14 +641,78 @@ test("openFirstAccepted names every rejected candidate, and stops on a real erro
 	});
 	expect(second.credential.source).toBe("orq login session");
 
-	// A stall is the server's problem, not the credential's: no next candidate.
+	// A stall is the server's problem, not the credential's: the next candidate
+	// still gets its turn, and wins here.
 	tried.length = 0;
-	const stalled = await openFirstAccepted(candidates, async (c) => {
+	const afterStall = await openFirstAccepted(candidates, async (c) => {
 		tried.push(c.token);
-		throw new Error("Request timed out");
+		if (c.token === "a") throw new Error("Request timed out");
+		return client;
+	});
+	expect(afterStall.credential.token).toBe("b");
+	expect(tried).toEqual(["a", "b"]);
+
+	// Nothing accepted and one stall among the answers: the stall is reported,
+	// because "every credential was rejected" is not what the server said.
+	const mixed = await openFirstAccepted(candidates, async (c) => {
+		if (c.token === "a") throw new Error("Request timed out");
+		throw rejected;
 	}).catch((e) => e);
-	expect(stalled).not.toBeInstanceOf(CredentialsRejected);
-	expect(tried).toEqual(["a"]);
+	expect(mixed).not.toBeInstanceOf(CredentialsRejected);
+	expect((mixed as Error).message).toBe("Request timed out");
+});
+
+test("a reconnect re-runs the catalogue under its normal rules and wraps what the session lacks", async () => {
+	// A rejected boot takes the cache at any age. Once a credential is accepted
+	// the TTL applies again, so a stale cache is refreshed here, and only the
+	// names the session does not have yet are wrapped and pushed.
+	const dir = mkdtempSync(join(tmpdir(), "orqi-cat-"));
+	const cachePath = join(dir, "tool-catalogue.json");
+	const rejected = new Error('Error POSTing to endpoint: {"error":"invalid_token"}');
+	const serverTools = [
+		{ name: "list_traces", inputSchema: { type: "object" } },
+		{ name: "list_models", inputSchema: { type: "object" } },
+	];
+	let listed = 0;
+	const client = {
+		listTools: async () => {
+			listed += 1;
+			return { tools: serverTools };
+		},
+		close: async () => {},
+	} as any;
+	const connect = async (c: Credential) => {
+		if (c.token !== "good") throw rejected;
+		return client;
+	};
+	try {
+		// Stale cache with one tool, two days old.
+		writeFileSync(cachePath, JSON.stringify([serverTools[0]]));
+		const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+		utimesSync(cachePath, old, old);
+
+		const orq = await connectOrqTools([{ token: "bad", source: "ORQ_API_KEY" }], cachePath, connect);
+		expect(orq.credential).toBeUndefined();
+		expect(orq.rejections.map((r) => r.source)).toEqual(["ORQ_API_KEY"]);
+		expect(orq.tools.map((t) => t.name)).toEqual(["orq_list_traces"]); // stale beats none
+		expect(listed).toBe(0);
+
+		const first = await orq.reconnect([{ token: "good", source: "/login key" }]);
+		expect(listed).toBe(1); // stale, so refetched
+		expect(first.added.map((t) => t.name)).toEqual(["orq_list_models"]);
+		expect(first.count).toBe(2);
+		expect(orq.tools.map((t) => t.name)).toEqual(["orq_list_traces", "orq_list_models"]); // same array
+
+		const second = await orq.reconnect([{ token: "good", source: "/login key" }]);
+		expect(listed).toBe(1); // fresh now: reused
+		expect(second.added).toEqual([]);
+
+		// The boot snapshot is a snapshot: the extension owns the live state.
+		expect(orq.credential).toBeUndefined();
+		expect(orq.rejections.length).toBe(1);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("loginKey reads the key pi's /login stored, and nothing else", () => {

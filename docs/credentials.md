@@ -9,7 +9,10 @@ token refresh and the session file; orqi shells out to it and reads what it is t
 ## 1. Which credential
 
 Up to four candidates, best first. None is probed up front — they are tried on the real MCP
-connection, where a 401 selects the next one and any other error is a real error.
+connection, where a 401 selects the next one. A stall past the connect retries moves on too: it is
+the server's problem, not the key's, and a good login session at candidate 3 must not be lost to a
+hang on candidate 2. Only when nothing is accepted does the boot report, and a stall anywhere is
+reported ahead of the rejections.
 
 | Order | Candidate | Present when | Comes from | Shown as |
 |---|---|---|---|---|
