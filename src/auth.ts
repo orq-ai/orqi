@@ -279,6 +279,13 @@ export function loginKey(authPath: string | undefined): string | undefined {
  * CLI, a stalled backend and a genuinely logged-out machine otherwise all
  * surface as the same empty list and the same "run orq auth login" hint.
  */
+/**
+ * The login session's `source`. `/workspace` selects that candidate by it, so
+ * it is a lookup key and not only a label: an edit for readability would
+ * otherwise leave the switch silently re-pointing nothing.
+ */
+export const SESSION_SOURCE = "orq login session";
+
 export function credentialCandidates(authPath?: string): { candidates: Credential[]; failure?: string; profileGap?: string } {
 	const candidates: Credential[] = [];
 	const { session, failure } = readSession();
@@ -295,7 +302,7 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 	}
 	const workspace = session?.activeWorkspaceKey;
 	const token = sessionToken(session);
-	if (token) candidates.push({ token, source: "orq login session", workspace });
+	if (token) candidates.push({ token, source: SESSION_SOURCE, workspace });
 	// Only when the file moved or the profile is keyless: `orq orqi` has already
 	// put the profile's key in ORQ_API_KEY, so that launch never gets here.
 	const profileGap = cliProfile && !profile && !process.env.ORQ_API_KEY

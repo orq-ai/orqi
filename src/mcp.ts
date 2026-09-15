@@ -268,17 +268,17 @@ export function isAuthError(error: unknown): boolean {
  */
 export function authReason(error: unknown): string {
 	const message = (error instanceof Error ? error.message : String(error)).trim();
-	const body = message.slice(message.indexOf("{"));
-	if (message.includes("{")) {
+	const brace = message.indexOf("{");
+	if (brace >= 0) {
 		try {
-			const parsed = JSON.parse(body);
+			const parsed = JSON.parse(message.slice(brace));
 			const reason = parsed?.error_description ?? parsed?.error;
 			if (typeof reason === "string" && reason) return reason;
 		} catch {
 			// Not JSON: fall through to the prose.
 		}
 	}
-	return message.split("\n")[0] ?? message;
+	return message.split("\n")[0]!;
 }
 
 /**

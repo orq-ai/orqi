@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { apiBaseUrl, credentialsFile, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
+import { apiBaseUrl, credentialCandidates, credentialsFile, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { authLines, groupTools, orqCommands } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -708,6 +708,7 @@ test("a rejected boot pins the warning, and the next message reconnects", async 
 	const dir = mkdtempSync(join(tmpdir(), "orqi-agent-"));
 	const calls: Credential[][] = [];
 	const header = { name: "orqi", version: "v0", status: "not connected", cwd: "~" } as any;
+	const hadKey = process.env.ORQ_API_KEY;
 	try {
 		const reconnect = async (candidates: Credential[]) => {
 			calls.push(candidates);
@@ -718,26 +719,29 @@ test("a rejected boot pins the warning, and the next message reconnects", async 
 		};
 		const toolNames: string[] = [];
 		const rejected = [{ source: "ORQ_API_KEY", reason: "API key is not valid for this workspace" }];
-		orqCommands(reconnect, toolNames, header, dir, rejected)(pi);
+		// The boot's own candidate set, seeded the way main.ts seeds it.
+		process.env.ORQ_API_KEY = "sk-orq-bad";
+		const bootTokens = credentialCandidates(join(dir, "auth.json")).candidates.map((c) => c.token).join("\n");
+		orqCommands(reconnect, toolNames, header, dir, rejected, bootTokens)(pi);
 
 		handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 		expect(widgets.get("orq-auth")).toEqual(authLines(rejected));
 		expect(status.get("orq-workspace")).toBe("orq:not connected");
 		expect(notices).toEqual(["orq is not connected: every credential was rejected."]);
 
-		// Nothing changed since boot: the turn does not knock on the server again.
-		process.env.ORQ_API_KEY = "sk-orq-bad";
+		// Nothing changed since boot: the turn does not knock on the server again,
+		// not even on the first message.
 		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
-		expect(calls.length).toBe(1); // tried once, with the same bad key
+		expect(calls.length).toBe(0);
 		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
-		expect(calls.length).toBe(1);
+		expect(calls.length).toBe(0);
 		expect(widgets.get("orq-auth")).toBeDefined();
 
 		// /login orq stored a key: the next message picks it up, first in line.
 		writeFileSync(join(dir, "auth.json"), JSON.stringify({ orq: { type: "api_key", key: "sk-orq-good" } }));
 		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
-		expect(calls.length).toBe(2);
-		expect(calls[1]![0]).toMatchObject({ token: "sk-orq-good", source: "/login key" });
+		expect(calls.length).toBe(1);
+		expect(calls[0]![0]).toMatchObject({ token: "sk-orq-good", source: "/login key" });
 		expect(widgets.get("orq-auth")).toBeUndefined();
 		expect(status.get("orq-workspace")).toBe("orq:acme");
 		expect(registered).toEqual(["orq_list_traces"]);
@@ -746,9 +750,10 @@ test("a rejected boot pins the warning, and the next message reconnects", async 
 
 		// Connected: the hook is a no-op from here on.
 		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
-		expect(calls.length).toBe(2);
+		expect(calls.length).toBe(1);
 	} finally {
-		delete process.env.ORQ_API_KEY;
+		if (hadKey === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = hadKey;
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -1252,4 +1257,48 @@ test("releaseUrl builds the same two forms install.sh does, pinned or latest", (
 	expect(releaseUrl("orqi-linux-x64.tar.gz", "0.2.0")).toBe(
 		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
 	);
+});
+
+test("a stall during recovery is reported and does not end recovery", async () => {
+	// The server hangs on roughly one call in three. Rethrowing that out of the
+	// input handler put it in pi's extension diagnostics, where the user never
+	// saw it, while the memo still counted the keys as tried - so one stall
+	// silently ended recovery for the rest of the session.
+	const handlers = new Map<string, (event: any, ctx: any) => Promise<void> | void>();
+	const pi = {
+		registerEntryRenderer: () => {},
+		registerCommand: () => {},
+		registerTool: () => {},
+		on: (event: string, handler: (e: any, c: any) => any) => handlers.set(event, handler),
+		appendEntry: () => {},
+	} as any;
+	const notices: string[] = [];
+	const ctx = { ui: { setWidget: () => {}, setStatus: () => {}, notify: (m: string) => notices.push(m) } } as any;
+	const dir = mkdtempSync(join(tmpdir(), "orqi-agent-"));
+	const hadKey = process.env.ORQ_API_KEY;
+	const calls: Credential[][] = [];
+	try {
+		process.env.ORQ_API_KEY = "sk-orq-bad";
+		const reconnect = async (candidates: Credential[]) => {
+			calls.push(candidates);
+			throw new Error("Request timed out\n  at somewhere in node_modules");
+		};
+		const header = { name: "orqi", version: "v0", status: "not connected", cwd: "~" } as any;
+		const rejected = [{ source: "ORQ_API_KEY", reason: "nope" }];
+		orqCommands(reconnect, [], header, dir, rejected, "seeded-with-something-else")(pi);
+
+		writeFileSync(join(dir, "auth.json"), JSON.stringify({ orq: { type: "api_key", key: "sk-orq-good" } }));
+		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
+		expect(calls.length).toBe(1);
+		expect(notices.at(-1)).toBe("orq did not answer: Request timed out. Retrying on your next message, or run /reconnect.");
+
+		// The memo was cleared, so the same keys are tried again rather than
+		// being written off as refused.
+		await handlers.get("input")?.({ type: "input", text: "hi", source: "interactive" }, ctx);
+		expect(calls.length).toBe(2);
+	} finally {
+		if (hadKey === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = hadKey;
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

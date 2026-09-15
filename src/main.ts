@@ -159,13 +159,14 @@ const services = await createAgentSessionServices({
 					process.env.ORQ_API_KEY = result.credential.token;
 					header.workspace = result.credential.workspace;
 					header.project = await projectForCredential(result.credential.token);
-					header.status = header.status.replace(NOT_CONNECTED, `${result.count} tools`);
+					header.status = statusLine(`${result.count} tools`);
 					return result;
 				},
 				orq.tools.map((tool) => tool.name),
 				header,
 				AGENT_DIR,
 				orq.rejections,
+				candidates.map((c) => c.token).join("\n"),
 			),
 		],
 	},
@@ -186,23 +187,30 @@ services.settingsManager.setTuiMode(process.env.ORQI_TUI === "regular" ? "regula
 // changelog is linked from the header.
 services.settingsManager.setLastChangelogVersion("999.0.0");
 
+// One composition site for the status line: the reconnect closure above used to
+// patch the joined string by substring, which quietly did nothing whenever the
+// boot had in fact connected.
+function statusLine(connection: string): string {
+	return [
+		model?.id ?? "no model",
+		connection,
+		`${skills} skills`,
+		`${models.ids.length} models`,
+		orq.note,
+		models.note,
+		// Skills newer than the binary shipped with; silent drift would otherwise be
+		// invisible until someone diffed behaviour against a colleague's machine.
+		liveSkillsNote(AGENT_DIR),
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
 const skills = services.resourceLoader.getSkills().skills.length;
 const update = pendingUpdate(readCache(AGENT_DIR));
 header.workspace = orq.credential?.workspace;
 header.project = orq.credential ? await projectForCredential(orq.credential.token) : undefined;
-header.status = [
-	model?.id ?? "no model",
-	orq.credential ? `${orq.tools.length} tools` : NOT_CONNECTED,
-	`${skills} skills`,
-	`${models.ids.length} models`,
-	orq.note,
-	models.note,
-	// Skills newer than the binary shipped with; silent drift would otherwise be
-	// invisible until someone diffed behaviour against a colleague's machine.
-	liveSkillsNote(AGENT_DIR),
-]
-	.filter(Boolean)
-	.join(" · ");
+header.status = statusLine(orq.credential ? `${orq.tools.length} tools` : NOT_CONNECTED);
 const startupLine = [header.name, header.workspace, header.status, orq.credential?.source].filter(Boolean).join(" · ");
 // The header's "update available" line is the only place a pending update is
 // announced: it used to also ride in the status list above, saying the same

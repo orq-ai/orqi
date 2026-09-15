@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { credentialCandidates, LOGIN_HINT, runOrq, type Credential } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { CHANGELOG_URL, headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, type Reconnected, type Rejection } from "./mcp.ts";
 import { checkNow, isNewer } from "./update.ts";
@@ -70,12 +70,15 @@ export function orqCommands(
 	header: HeaderInfo,
 	agentDir = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"),
 	initialRejections: Rejection[] = [],
+	bootTokens = "",
 ) {
 	const authPath = join(agentDir, "auth.json");
 	let rejections = initialRejections;
 	// Tokens of the last set that was tried and rejected, so a turn does not
-	// re-knock on the server with the same keys it already refused.
-	let triedTokens = "";
+	// re-knock on the server with the same keys it already refused. Seeded with
+	// the boot's own set: unseeded, the first message after a rejected boot
+	// always re-knocks with keys the server refused seconds earlier.
+	let triedTokens = bootTokens;
 
 	const showWorkspace = (ctx: { ui: Pick<Ui, "setStatus"> }) =>
 		ctx.ui.setStatus(WORKSPACE_STATUS, header.workspace ? `orq:${header.workspace}` : undefined);
@@ -92,19 +95,32 @@ export function orqCommands(
 	/**
 	 * Try again with whatever credentials exist now: the key /login stored, the
 	 * profile, $ORQ_API_KEY, the login session. Returns what to tell the user.
+	 *
+	 * Every recovery path goes through here, `/workspace` included. Registering
+	 * the tools a first live connection produced is half of what a success
+	 * means, and a second copy of this block had already lost that half.
+	 *
+	 * `pick` narrows the re-read list, for a caller that must reconnect on one
+	 * specific credential rather than on the usual precedence.
 	 */
-	const recover = async (pi: ExtensionAPI, ctx: { ui: Ui }, force: boolean): Promise<string | undefined> => {
+	const recover = async (
+		pi: ExtensionAPI,
+		ctx: { ui: Ui },
+		options: { force?: boolean; pick?: (candidates: Credential[]) => Credential[]; verb?: string } = {},
+	): Promise<string | undefined> => {
+		const { force = false, pick, verb = "Connected to" } = options;
 		const reread = credentialCandidates(authPath);
 		const tokens = reread.candidates.map((c) => c.token).join("\n");
 		if (!force && tokens === triedTokens) return undefined;
 		triedTokens = tokens;
-		if (reread.candidates.length === 0) {
+		const candidates = pick ? pick(reread.candidates) : reread.candidates;
+		if (candidates.length === 0) {
 			rejections = [{ source: "no credential", reason: reread.failure ?? "nothing to try" }];
 			showAuth(ctx);
 			return `No orq credential found. ${LOGIN_HINT}`;
 		}
 		try {
-			const result = await reconnect(reread.candidates);
+			const result = await reconnect(candidates);
 			rejections = [];
 			// A boot with no cached catalogue wrapped no tools; register the ones the
 			// live connection produced so this session can call them.
@@ -113,12 +129,21 @@ export function orqCommands(
 				pi.registerTool(tool);
 			}
 			showAuth(ctx);
-			return `Connected to orq: ${result.count} tools in ${result.credential.workspace ?? "workspace"} (${result.credential.source}).`;
+			return `${verb} orq: ${result.count} tools in ${result.credential.workspace ?? "workspace"} (${result.credential.source}).`;
 		} catch (error) {
-			if (!(error instanceof CredentialsRejected)) throw error;
-			rejections = error.rejections;
-			showAuth(ctx);
-			return `orq still rejects every credential. ${LOGIN_HINT}`;
+			if (error instanceof CredentialsRejected) {
+				rejections = error.rejections;
+				showAuth(ctx);
+				return `orq still rejects every credential. ${LOGIN_HINT}`;
+			}
+			// A stall is the server's problem, so it is no verdict on these keys:
+			// clearing the memo lets the next message try them again. Rethrowing
+			// instead put the error in pi's extension diagnostics, where the user
+			// never saw it, while the memo still counted the keys as tried - so a
+			// single stall silently ended recovery for the rest of the session.
+			triedTokens = "";
+			const reason = String((error as Error)?.message ?? error).split("\n")[0];
+			return `orq did not answer: ${reason}. Retrying on your next message, or run /reconnect.`;
 		}
 	};
 
@@ -165,15 +190,19 @@ export function orqCommands(
 		// and only knocks on the server when the set changed since the last refusal.
 		pi.on("input", async (_event, ctx) => {
 			if (rejections.length === 0) return;
-			const outcome = await recover(pi, ctx, false);
+			const outcome = await recover(pi, ctx);
 			if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
 		});
 
 		pi.registerCommand("reconnect", {
 			description: "retry the orq connection with the current credentials",
 			handler: async (_args, ctx) => {
-				const outcome = await recover(pi, ctx, true);
-				ctx.ui.notify(outcome ?? "already connected", rejections.length ? "warning" : "info");
+				if (rejections.length === 0) {
+					ctx.ui.notify("already connected");
+					return;
+				}
+				const outcome = await recover(pi, ctx, { force: true });
+				if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
 			},
 		});
 
@@ -222,24 +251,19 @@ export function orqCommands(
 				if (!report(ctx, runOrq(["workspace", "use", key]))) return;
 				// The session token is scoped to the workspace and project, so the
 				// tools must be re-pointed at the freshly read one, and only it: a
-				// key from the environment does not follow a workspace switch.
-				const reread = credentialCandidates(authPath);
-				const next = reread.candidates.find((c) => c.source === "orq login session");
-				if (!next) {
-					ctx.ui.notify(reread.failure ? `${reread.failure}\n${LOGIN_HINT}` : LOGIN_HINT, "warning");
-					return;
-				}
-				try {
-					const result = await reconnect([next]);
-					rejections = [];
-					showAuth(ctx);
-					ctx.ui.notify(`Reconnected to orq: ${result.count} tools in ${next.workspace ?? "workspace"} (${next.source}).`);
-				} catch (error) {
-					if (!(error instanceof CredentialsRejected)) throw error;
-					rejections = error.rejections;
-					showAuth(ctx);
-					ctx.ui.notify(authLines(rejections).join("\n"), "warning");
-				}
+				// key from the environment does not follow a workspace switch. With
+				// no session the last candidate is the only one there is, and
+				// dropping it left an API-key user switched on the CLI side with the
+				// tools still on the old workspace.
+				const outcome = await recover(pi, ctx, {
+					force: true,
+					verb: "Reconnected to",
+					pick: (all) => {
+						const next = all.find((c) => c.source === SESSION_SOURCE) ?? all.at(-1);
+						return next ? [next] : [];
+					},
+				});
+				if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
 			},
 		});
 

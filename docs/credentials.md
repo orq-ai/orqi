@@ -117,7 +117,7 @@ it now and registers the tools into the running session.
 
 | You did | Then |
 |---|---|
-| `/login orq`, pasted a key for the right workspace | send any message: `Connected to orq: 46 tools in acme (/login key).` |
+| `/login orq`, pasted a key for the right workspace | send any message: `Connected to orq: <n> tools in acme (/login key).` |
 | `orq auth login` in another terminal | send any message, or `/reconnect` |
 | fixed `ORQ_API_KEY` | restart: the environment cannot change under a running process |
 
@@ -144,7 +144,7 @@ itself; the CLI does, and orqi learns which profile won from `whoami`'s `profile
 |---|---|---|
 | `orq orqi` with a profile in force | the profile's, via `ORQ_SERVER` in the child env | the profile's key, exported as `ORQ_API_KEY` by the CLI (`applyProfileAPIKey`) |
 | `orqi` direct, profile in force | the profile's, via whoami's `server` | the profile's key, read from `credentials.json` |
-| `orqi` direct, no profile | whoami's `server` | `ORQ_API_KEY`, then the login session |
+| `orqi` direct, no profile | whoami's `server` | the key `/login` stored, then `ORQ_API_KEY`, then the login session |
 
 A profile outranks an exported `ORQ_API_KEY`, because it does for the CLI — which warns and uses the
 profile. orqi disagreeing would put the two on different credentials for the same workspace.

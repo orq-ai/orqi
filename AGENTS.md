@@ -64,7 +64,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   steering and `turn_start` runs after the snapshot, both tried and rejected. The hook compares
   the candidate tokens first so an unchanged set never re-knocks on the server. The
   stored `/login` key is candidate #0 for the tools because pi's model runtime already prefers it.
-  Only one-shot exits, having no session to log in from.
+  Only one-shot exits, having no session to log in from - but a boot with no candidate at all
+  exits in either mode, there being nothing to try.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
   backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit

@@ -87,8 +87,8 @@ whoami cannot answer. That is the only host variable orqi reads.
 [docs/credentials.md](docs/credentials.md) lays out the whole resolution - candidate order, env
 vars, the three-key token lookup and every failure message - as tables.
 
-Credentials are tried in order (a pinned profile's key, then `ORQ_API_KEY`, then the login session)
-on the real MCP connection: a
+Credentials are tried in order (the key pi's `/login` stored, then a pinned profile's key, then
+`ORQ_API_KEY`, then the login session) on the real MCP connection: a
 401 selects the next candidate, anything else is a real error (see [AGENTS.md](AGENTS.md) for why
 they are not pre-probed). The startup line always names the credential that won.
 
@@ -107,7 +107,8 @@ A boot on which every credential is rejected still opens. The tools are wrapped 
 catalogue (any age) or not at all, a warning naming each rejection is pinned above the editor, and
 the extension reconnects on the next message once `/login` or `orq auth login` has produced a
 credential the server accepts, registering the tools into the running session if the boot had none.
-Only the one-shot form exits, because it has no session to log in from.
+Only the one-shot form exits once a candidate existed, because it has no session to log in from;
+a boot with no candidate at all exits in either mode, there being nothing to try.
 
 ## Known rough edges
 
