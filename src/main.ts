@@ -25,7 +25,7 @@ import {
 import { credentialCandidates, LOGIN_HINT_ONESHOT, mcpUrl, projectForCredential, type Credential } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { authLines, orqCommands } from "./commands.ts";
-import { connectOrqTools } from "./mcp.ts";
+import { connectOrqTools, firstLine } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
@@ -90,7 +90,6 @@ const pkgDir = await assetDir();
 process.env.PI_SKIP_VERSION_CHECK ??= "1";
 
 const AUTH_PATH = join(AGENT_DIR, "auth.json"); // where pi's /login stores the orq key
-const NOT_CONNECTED = "not connected"; // header status while every credential is rejected
 const { candidates, failure, profileGap } = credentialCandidates(AUTH_PATH);
 if (candidates.length === 0) {
 	if (failure) console.error(failure);
@@ -104,7 +103,7 @@ if (profileGap) console.error(profileGap);
 // a credential the server takes. Only an unreachable server is fatal, and even
 // that is one line rather than the MCP SDK's stack trace out of node_modules.
 const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json")).catch((error: unknown) => {
-	console.error(`Could not reach the orq MCP server at ${mcpUrl()}: ${String((error as Error)?.message ?? error).split("\n")[0]}`);
+	console.error(`Could not reach the orq MCP server at ${mcpUrl()}: ${firstLine(error)}`);
 	process.exit(1);
 });
 if (oneShot && !orq.credential) {
@@ -159,14 +158,13 @@ const services = await createAgentSessionServices({
 					process.env.ORQ_API_KEY = result.credential.token;
 					header.workspace = result.credential.workspace;
 					header.project = await projectForCredential(result.credential.token);
-					header.status = statusLine(`${result.count} tools`);
+					header.status = statusLine(`${orq.tools.length} tools`, result.note);
 					return result;
 				},
 				orq.tools.map((tool) => tool.name),
 				header,
 				AGENT_DIR,
-				orq.rejections,
-				candidates.map((c) => c.token).join("\n"),
+				{ rejections: orq.rejections, candidates },
 			),
 		],
 	},
@@ -190,13 +188,13 @@ services.settingsManager.setLastChangelogVersion("999.0.0");
 // One composition site for the status line: the reconnect closure above used to
 // patch the joined string by substring, which quietly did nothing whenever the
 // boot had in fact connected.
-function statusLine(connection: string): string {
+function statusLine(connection: string, note = orq.note): string {
 	return [
 		model?.id ?? "no model",
 		connection,
 		`${skills} skills`,
 		`${models.ids.length} models`,
-		orq.note,
+		note,
 		models.note,
 		// Skills newer than the binary shipped with; silent drift would otherwise be
 		// invisible until someone diffed behaviour against a colleague's machine.
@@ -210,7 +208,7 @@ const skills = services.resourceLoader.getSkills().skills.length;
 const update = pendingUpdate(readCache(AGENT_DIR));
 header.workspace = orq.credential?.workspace;
 header.project = orq.credential ? await projectForCredential(orq.credential.token) : undefined;
-header.status = statusLine(orq.credential ? `${orq.tools.length} tools` : NOT_CONNECTED);
+header.status = statusLine(orq.credential ? `${orq.tools.length} tools` : "not connected");
 const startupLine = [header.name, header.workspace, header.status, orq.credential?.source].filter(Boolean).join(" · ");
 // The header's "update available" line is the only place a pending update is
 // announced: it used to also ride in the status list above, saying the same

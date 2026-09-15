@@ -63,10 +63,16 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   there are callable on that same turn) and also fires for a message typed while the model is
   still working, which is delivered as steering and starts no run; `before_agent_start` misses
   steering and `turn_start` runs after the snapshot, both tried and rejected. The hook compares
-  the candidate tokens first so an unchanged set never re-knocks on the server. The
-  stored `/login` key is candidate #0 for the tools because pi's model runtime already prefers it.
-  Only one-shot exits, having no session to log in from - but a boot with no candidate at all
-  exits in either mode, there being nothing to try.
+  the candidate tokens first so a set the server refused never re-knocks; a stall clears that
+  memo, because it is no verdict and the notice promises a retry. Only the reconnect itself sits
+  inside the recovery's try: an error after the server answered (a stale pi handle after `/new`
+  refusing `registerTool`) is reported as what it is, with `/reload` as the fix, and the factory
+  re-registers late tools on every run for exactly that. A failed `/workspace` switch leaves the
+  old connection up (mcp.ts closes it only once a replacement is accepted), so the widget says
+  "still on the previous workspace" rather than "not connected" over tools that keep answering.
+  The stored `/login` key is candidate #0 for the tools because pi's model runtime already
+  prefers it. Only one-shot exits, having no session to log in from - but a boot with no
+  candidate at all exits in either mode, there being nothing to try.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
   backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit

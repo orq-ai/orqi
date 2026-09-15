@@ -60,6 +60,7 @@ async function catalogue(
 		} catch (error) {
 			if (attempt === ATTEMPTS) {
 				if (cached) return { tools: cached, client: active, note: "orq MCP unreachable; using cached tool catalogue" };
+				await active.close().catch(() => {});
 				throw error;
 			}
 			// A timed-out request leaves the stream wedged; start a fresh connection.
@@ -151,7 +152,6 @@ export class CredentialsRejected extends Error {
 /** What a reconnect produced: the credential that won, and tools wrapped for the first time. */
 export interface Reconnected {
 	credential: Credential;
-	count: number;
 	added: ToolDefinition[];
 	/** Set when the catalogue refresh fell back to the cache. */
 	note?: string;
@@ -290,7 +290,12 @@ export function authReason(error: unknown): string {
 			// Not JSON: fall through to the prose.
 		}
 	}
-	return message.split("\n")[0]!;
+	return firstLine(message);
+}
+
+/** An error's first line: what fits in a notice without the stack. */
+export function firstLine(error: unknown): string {
+	return String(error instanceof Error ? error.message : error).trim().split("\n")[0]!;
 }
 
 /**
@@ -408,7 +413,7 @@ export async function connectOrqTools(
 		reconnect: async (next) => {
 			const accepted = await openFirstAccepted(next, connect);
 			await client?.close().catch(() => {});
-			client = accepted.client;
+			client = undefined;
 			// The catalogue under its normal rules, now that the server can be
 			// asked: a fresh cache is reused, a stale one (or the any-age cache a
 			// rejected boot took) is refetched, and a stall keeps the cache with a
@@ -417,14 +422,17 @@ export async function connectOrqTools(
 			// ponytail: a tool that vanished from the server stays registered and
 			// fails at call time; a changed schema keeps the old one. Rebuild the
 			// session's tools if the catalogue ever varies per workspace.
-			const listed = await catalogue(client, cachePath, () => connect(accepted.credential));
+			// `client` is assigned once, after the catalogue: a failed fetch with no
+			// cache would otherwise leave it pointing at a connection the fetch
+			// already closed.
+			const listed = await catalogue(accepted.client, cachePath, () => connect(accepted.credential));
 			client = listed.client;
 			const known = new Set(wrapped.map((tool) => tool.name));
 			const added = keptTools(listed.tools)
 				.filter((tool) => !known.has(`${TOOL_PREFIX}${tool.name}`))
 				.map(wrap);
 			wrapped.push(...added);
-			return { credential: accepted.credential, count: wrapped.length, added, note: listed.note };
+			return { credential: accepted.credential, added, note: listed.note };
 		},
 		close: async () => {
 			await client?.close();

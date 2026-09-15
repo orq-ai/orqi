@@ -123,6 +123,11 @@ it now and registers the tools into the running session.
 | `/login orq`, pasted a key for the right workspace | send any message: `Connected to orq: <n> tools in acme (/login key).` |
 | `orq auth login` in another terminal | send any message, or `/reconnect` |
 | fixed `ORQ_API_KEY` | restart: the environment cannot change under a running process |
+| `/workspace <key>` and the new token was rejected or the server stalled | the old connection stays up and the widget says so: `orq is still on the previous workspace: the switch failed.` The footer reads `orq:<old> (switch failed)`. Fix the credential, or `/reconnect` |
+| ran `/new` before recovering on a boot that had no cached catalogue | the tools connect but pi's handle is stale; the notice says `run /reload`, which re-registers them |
+
+A stall clears the memo, so the next message retries even a set that was refused earlier; a
+rejection records the set, so the same keys are not sent again until something changes.
 
 ## 5. Which workspace is shown
 
