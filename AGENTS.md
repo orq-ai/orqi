@@ -52,6 +52,27 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   file has already been through a layout migration, every step of it is optional: a moved file or a
   keyless profile warns and falls through to the next candidate rather than failing the boot.
   Retire it the day the CLI can hand the key over.
+- **A rejected credential does not stop the boot.** The session opens with the tools wrapped from
+  the cached catalogue, whatever its age (stale tools beat none when the server cannot be asked;
+  the normal 24 h TTL applies again on reconnect, which wraps whatever the session lacks), or with
+  none, and a warning pinned above the editor names each candidate and the server's
+  `error_description`: "not valid for this workspace" and "expired" need different fixes, and the
+  bare hint used to send both to `orq auth login`. Recovery runs on the `input` event because
+  pi fires no event when `/login` stores a key and its auth store has no listener, and `input`
+  is the one hook that runs before the agent run snapshots its tool list (tools registered
+  there are callable on that same turn) and also fires for a message typed while the model is
+  still working, which is delivered as steering and starts no run; `before_agent_start` misses
+  steering and `turn_start` runs after the snapshot, both tried and rejected. The hook compares
+  the candidate tokens first so a set the server refused never re-knocks; a stall clears that
+  memo, because it is no verdict and the notice promises a retry. Only the reconnect itself sits
+  inside the recovery's try: an error after the server answered (a stale pi handle after `/new`
+  refusing `registerTool`) is reported as what it is, with `/reload` as the fix, and the factory
+  re-registers late tools on every run for exactly that. A failed `/workspace` switch leaves the
+  old connection up (mcp.ts closes it only once a replacement is accepted), so the widget says
+  "still on the previous workspace" rather than "not connected" over tools that keep answering.
+  The stored `/login` key is candidate #0 for the tools because pi's model runtime already
+  prefers it. Only one-shot exits, having no session to log in from - but a boot with no
+  candidate at all exits in either mode, there being nothing to try.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
   backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit

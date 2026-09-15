@@ -13,7 +13,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Type } from "typebox";
-import { mcpUrl, type Credential } from "./auth.ts";
+import { LOGIN_HINT, mcpUrl, type Credential } from "./auth.ts";
 import { VERSION } from "./branding.ts";
 
 // The orq MCP server answers tools/list in ~1s most of the time, but hangs
@@ -60,6 +60,7 @@ async function catalogue(
 		} catch (error) {
 			if (attempt === ATTEMPTS) {
 				if (cached) return { tools: cached, client: active, note: "orq MCP unreachable; using cached tool catalogue" };
+				await active.close().catch(() => {});
 				throw error;
 			}
 			// A timed-out request leaves the stream wedged; start a fresh connection.
@@ -134,14 +135,52 @@ export function keptTools<T extends { name: string }>(
 	return allowAll ? tools : tools.filter((tool) => !DENYLISTED_TOOLS.has(tool.name));
 }
 
+/** One credential the server turned away, and what it said. */
+export interface Rejection {
+	source: string;
+	workspace?: string;
+	reason: string;
+}
+
+/** Every candidate was rejected. Carries the server's reason for each. */
+export class CredentialsRejected extends Error {
+	constructor(readonly rejections: Rejection[]) {
+		super("every orq credential was rejected");
+	}
+}
+
+/** What a reconnect produced: the credential that won, and tools wrapped for the first time. */
+export interface Reconnected {
+	credential: Credential;
+	added: ToolDefinition[];
+	/** Set when the catalogue refresh fell back to the cache. */
+	note?: string;
+}
+
+/**
+ * The boot's outcome plus the live client behind the tools.
+ *
+ * `credential`, `rejections` and `note` describe the boot and never change:
+ * the extension in `src/commands.ts` owns the live connection state, because
+ * it is the one that renders it. `reconnect` reports each attempt's outcome
+ * through its return value or its rejection, never through these fields.
+ */
 export interface OrqTools {
 	tools: ToolDefinition[];
-	/** The candidate the server accepted. */
-	credential: Credential;
-	/** Set when the catalogue came from cache because the server was unreachable. */
-	note?: string;
-	/** Re-point the wrapped tools at a new credential (login / workspace switch). */
-	reconnect: (credential: Credential) => Promise<number>;
+	/** The candidate the boot's server accepted; undefined when every one was rejected. */
+	readonly credential?: Credential;
+	/** Why the boot has no credential: one entry per candidate the server turned away. */
+	readonly rejections: Rejection[];
+	/** Set when the boot's catalogue came from cache because the server was unreachable. */
+	readonly note?: string;
+	/**
+	 * Re-point the wrapped tools at the first accepted credential (login,
+	 * workspace switch, or recovery from a rejected boot), then re-run the
+	 * catalogue under its normal rules and wrap any tool the session lacks.
+	 * Rejects with `CredentialsRejected` when no candidate is accepted, and
+	 * with the stall itself when the server did not answer.
+	 */
+	reconnect: (candidates: Credential[]) => Promise<Reconnected>;
 	close: () => Promise<void>;
 }
 
@@ -230,33 +269,103 @@ export function isAuthError(error: unknown): boolean {
 }
 
 /**
- * Connect using the first credential the server actually accepts.
+ * What the server said about a rejected credential.
  *
- * Auth failures are immediate and explicit, so they select the next candidate;
- * anything else (the server's intermittent hangs) is a real error.
+ * The MCP SDK wraps the 401 body in its own prose
+ * (`Streamable HTTP error: Error POSTing to endpoint: {"error":"invalid_token",
+ * "error_description":"API key is not valid for this workspace…"}`), and the
+ * description is the only part that tells a wrong-workspace key from an
+ * expired one. Falls back to the message's first line when the body is not
+ * the JSON the orq server sends.
  */
-async function openFirstAccepted(candidates: Credential[]): Promise<{ client: Client; credential: Credential }> {
-	let lastError: unknown = new Error("no orq credential available");
-	for (const candidate of candidates) {
+export function authReason(error: unknown): string {
+	const message = (error instanceof Error ? error.message : String(error)).trim();
+	const brace = message.indexOf("{");
+	if (brace >= 0) {
 		try {
-			return { client: await open(candidate), credential: candidate };
-		} catch (error) {
-			lastError = error;
-			if (!isAuthError(error)) throw error;
+			const parsed = JSON.parse(message.slice(brace));
+			const reason = parsed?.error_description ?? parsed?.error;
+			if (typeof reason === "string" && reason) return reason;
+		} catch {
+			// Not JSON: fall through to the prose.
 		}
 	}
-	throw lastError;
+	return firstLine(message);
 }
 
-/** Connect to the orq MCP server and expose its tools as pi tools. */
-export async function connectOrqTools(candidates: Credential[], cachePath: string): Promise<OrqTools> {
-	const accepted = await openFirstAccepted(candidates);
-	const credential = accepted.credential;
-	let client = accepted.client;
+/** An error's first line: what fits in a notice without the stack. */
+export function firstLine(error: unknown): string {
+	return String(error instanceof Error ? error.message : error).trim().split("\n")[0]!;
+}
 
-	const listed = await catalogue(client, cachePath, () => open(credential));
-	client = listed.client;
-	const wrapped = keptTools(listed.tools).map((tool) =>
+/**
+ * Connect using the first credential the server actually accepts.
+ *
+ * Auth failures are immediate and explicit, so they select the next candidate.
+ * A stall (the server's intermittent hangs, past `open`'s own retries) is the
+ * server's problem and no verdict on that key, so it moves on too: a good
+ * login session at candidate 3 must not be lost to a hang on candidate 2.
+ * When nothing is accepted, a stall anywhere is reported ahead of the
+ * rejections, because "every credential was rejected" would be a claim the
+ * server never made. `connect` is injectable so the selection can be tested
+ * without a server.
+ */
+export async function openFirstAccepted(
+	candidates: Credential[],
+	connect: (credential: Credential) => Promise<Client> = open,
+): Promise<{ client: Client; credential: Credential }> {
+	const rejections: Rejection[] = [];
+	let stall: unknown;
+	for (const candidate of candidates) {
+		try {
+			return { client: await connect(candidate), credential: candidate };
+		} catch (error) {
+			if (isAuthError(error)) {
+				rejections.push({ source: candidate.source, workspace: candidate.workspace, reason: authReason(error) });
+			} else {
+				stall = error;
+			}
+		}
+	}
+	if (stall !== undefined) throw stall;
+	throw new CredentialsRejected(rejections);
+}
+
+/**
+ * Connect to the orq MCP server and expose its tools as pi tools.
+ *
+ * A rejected credential is not a failed boot: the session still opens, with
+ * the tools wrapped from the cached catalogue (any age: stale tools beat none
+ * when the server cannot be asked) or none at all, and `reconnect` fills in
+ * the rest once a credential is accepted, re-running the catalogue under its
+ * normal TTL so a stale cache taken at boot is refreshed then. Only the server
+ * being unreachable throws. The wrapped tools read `client` lazily, per call,
+ * so they need no connection to exist. `connect` is injectable for tests.
+ */
+export async function connectOrqTools(
+	candidates: Credential[],
+	cachePath: string,
+	connect: (credential: Credential) => Promise<Client> = open,
+): Promise<OrqTools> {
+	let client: Client | undefined;
+	let credential: Credential | undefined;
+	let rejections: Rejection[] = [];
+	let note: string | undefined;
+	let tools: McpTool[] = [];
+	try {
+		const accepted = await openFirstAccepted(candidates, connect);
+		credential = accepted.credential;
+		const listed = await catalogue(accepted.client, cachePath, () => connect(accepted.credential));
+		client = listed.client;
+		tools = listed.tools;
+		note = listed.note;
+	} catch (error) {
+		if (!(error instanceof CredentialsRejected)) throw error;
+		rejections = error.rejections;
+		tools = readCache(cachePath) ?? [];
+	}
+
+	const wrap = (tool: McpTool): ToolDefinition =>
 		defineTool({
 			name: `${TOOL_PREFIX}${tool.name}`,
 			label: tool.title ?? tool.name,
@@ -264,6 +373,14 @@ export async function connectOrqTools(candidates: Credential[], cachePath: strin
 			// The MCP schema is already JSON Schema; Unsafe passes it through untouched.
 			parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema as object),
 			execute: async (_id, params, signal) => {
+				if (!client) {
+					// Tell the model, so it tells the user, rather than retrying blindly.
+					return {
+						content: [{ type: "text" as const, text: `orq is not connected: every credential was rejected. ${LOGIN_HINT}` }],
+						details: { failed: true },
+						isError: true,
+					};
+				}
 				const result = await client.callTool({ name: tool.name, arguments: params as Record<string, unknown> }, undefined, {
 					signal,
 				});
@@ -283,21 +400,42 @@ export async function connectOrqTools(candidates: Credential[], cachePath: strin
 				const label = failed ? theme.fg("error", text.slice(0, 200)) : theme.fg("muted", summarize(text));
 				return new Text(label, 0, 0);
 			},
-		}),
-	);
+		});
+	// One array for the session's life: pi holds customTools by reference and the
+	// subagent tool filters it per call, so tools pushed here reach both.
+	const wrapped = keptTools(tools).map(wrap);
 
 	return {
 		tools: wrapped,
 		credential,
-		note: listed.note,
+		rejections,
+		note,
 		reconnect: async (next) => {
-			const replacement = await open(next);
-			await client.close().catch(() => {});
-			client = replacement;
-			// ponytail: assumes the catalogue is identical across workspaces, which
-			// it is today. Rebuild the session's tools if that ever stops holding.
-			return wrapped.length;
+			const accepted = await openFirstAccepted(next, connect);
+			await client?.close().catch(() => {});
+			client = undefined;
+			// The catalogue under its normal rules, now that the server can be
+			// asked: a fresh cache is reused, a stale one (or the any-age cache a
+			// rejected boot took) is refetched, and a stall keeps the cache with a
+			// note. Only names the session lacks are wrapped, and they are pushed
+			// into the one array pi and the subagents hold.
+			// ponytail: a tool that vanished from the server stays registered and
+			// fails at call time; a changed schema keeps the old one. Rebuild the
+			// session's tools if the catalogue ever varies per workspace.
+			// `client` is assigned once, after the catalogue: a failed fetch with no
+			// cache would otherwise leave it pointing at a connection the fetch
+			// already closed.
+			const listed = await catalogue(accepted.client, cachePath, () => connect(accepted.credential));
+			client = listed.client;
+			const known = new Set(wrapped.map((tool) => tool.name));
+			const added = keptTools(listed.tools)
+				.filter((tool) => !known.has(`${TOOL_PREFIX}${tool.name}`))
+				.map(wrap);
+			wrapped.push(...added);
+			return { credential: accepted.credential, added, note: listed.note };
 		},
-		close: () => client.close(),
+		close: async () => {
+			await client?.close();
+		},
 	};
 }

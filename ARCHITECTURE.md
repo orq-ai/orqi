@@ -28,7 +28,7 @@ orqi
 | `src/mcp.ts` | orq MCP to pi tools, catalogue cache, result rendering |
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
-| `src/commands.ts` | The pi extension: startup header entry plus `/tools /whoami /workspace /doctor /whatsnew /update` |
+| `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, plus `/tools /whoami /workspace /reconnect /doctor /whatsnew /update` |
 | `src/update.ts` | `orqi update`: daily release check, header note, the binary swap |
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
@@ -87,9 +87,10 @@ whoami cannot answer. That is the only host variable orqi reads.
 [docs/credentials.md](docs/credentials.md) lays out the whole resolution - candidate order, env
 vars, the three-key token lookup and every failure message - as tables.
 
-Credentials are tried in order (a pinned profile's key, then `ORQ_API_KEY`, then the login session)
-on the real MCP connection: a
-401 selects the next candidate, anything else is a real error (see [AGENTS.md](AGENTS.md) for why
+Credentials are tried in order (the key pi's `/login` stored, then a pinned profile's key, then
+`ORQ_API_KEY`, then the login session) on the real MCP connection: a
+401 selects the next candidate, and so does a stall, which is the server's problem and no verdict
+on that key; the boot only fails when nothing was accepted (see [AGENTS.md](AGENTS.md) for why
 they are not pre-probed). The startup line always names the credential that won.
 
 The active workspace is called out on the header line and pinned to the footer (`orq:<workspace>`),
@@ -98,9 +99,17 @@ resolves from the login session when there is one, and otherwise from the API ke
 are `sk-orq-<jwt>` whose payload carries `workspace_id`. That is a UUID, so with no session to map
 it against, the short id is shown rather than a guessed name.
 
-In-session, pi's built-in `/login` sets an orq API key directly; a stored credential takes
-precedence over the configured `ORQ_API_KEY`. Router wiring mirrors `orq launch pi`, ported to
-TypeScript in `src/model.ts`.
+In-session, pi's built-in `/login` stores an orq API key in `~/.orqi/agent/auth.json`; a stored
+credential takes precedence over the configured `ORQ_API_KEY` for the model, and it is candidate
+#0 for the tools for the same reason. Router wiring mirrors `orq launch pi`, ported to TypeScript
+in `src/model.ts`.
+
+A boot on which every credential is rejected still opens. The tools are wrapped from the cached
+catalogue (any age) or not at all, a warning naming each rejection is pinned above the editor, and
+the extension reconnects on the next message once `/login` or `orq auth login` has produced a
+credential the server accepts, registering the tools into the running session if the boot had none.
+Only the one-shot form exits once a candidate existed, because it has no session to log in from;
+a boot with no candidate at all exits in either mode, there being nothing to try.
 
 ## Known rough edges
 

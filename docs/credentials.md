@@ -8,21 +8,27 @@ token refresh and the session file; orqi shells out to it and reads what it is t
 
 ## 1. Which credential
 
-Up to three candidates, best first. None is probed up front — they are tried on the real MCP
-connection, where a 401 selects the next one and any other error is a real error.
+Up to four candidates, best first. None is probed up front — they are tried on the real MCP
+connection, where a 401 selects the next one. A stall past the connect retries moves on too: it is
+the server's problem, not the key's, and a good login session at candidate 3 must not be lost to a
+hang on candidate 2. Only when nothing is accepted does the boot report, and a stall anywhere is
+reported ahead of the rejections.
 
 | Order | Candidate | Present when | Comes from | Shown as |
 |---|---|---|---|---|
+| 0 | the key `/login orq` stored | pi's `/login` has been run in some session | `~/.orqi/agent/auth.json` | `/login key` |
 | 1 | the pinned profile's key | a profile is in force | `credentials.json`, by the name whoami reports (see [6](#6-pinning-a-profile)) | `orq profile <name>` |
-| 2 | `ORQ_API_KEY` | it is set, and differs from 1 | the environment, or pi's `/login` (which sets it for the session) | `ORQ_API_KEY` |
+| 2 | `ORQ_API_KEY` | it is set, and differs from 0 and 1 | the environment | `ORQ_API_KEY` |
 | 3 | the login session | there is one | `orq auth login`, read through the CLI | `orq login session` |
 
-The profile sits above `ORQ_API_KEY` because it does for the CLI, which warns and uses the profile
-(`applyProfileAPIKey`). orqi ranking them the other way would put the two on different credentials
-for the same command.
+The stored `/login` key comes first because pi's model runtime already prefers it over
+`ORQ_API_KEY`: ranking it lower would put the model and the tools on different credentials after a
+`/login`. The profile sits above `ORQ_API_KEY` because it does for the CLI, which warns and uses the
+profile (`applyProfileAPIKey`). orqi ranking them the other way would put the two on different
+credentials for the same command.
 
-The startup line always names the one that won. If they all fail, or there are none, orqi prints why
-(see [4](#4-when-nothing-works)) and exits.
+The startup line always names the one that won. If they all fail, orqi still opens and says why
+(see [4](#4-when-nothing-works)); if there are none, it exits.
 
 ## 2. Which server
 
@@ -96,11 +102,32 @@ the CLI's own stderr above the login hint.
 | whoami named no file | `orq auth whoami named no session file` |
 | the file is gone or corrupt | `session file unreadable: <path> (…)` |
 | session expired | the CLI's own message, e.g. `Error: Invalid refresh token!` |
-| every candidate rejected on the connection | `Every orq credential was rejected (…)`, naming the ones that were tried, then the login hint |
-| nothing above, just no credential | the login hint alone |
+| every candidate rejected on the connection | the session opens anyway, with a warning pinned above the editor naming each candidate tried and the server's reason (`ORQ_API_KEY (acme): API key is not valid for this workspace…`), then the hint. The footer reads `orq:not connected`. One-shot prints the same block and exits 1 |
+| the MCP server unreachable after three attempts | `Could not reach the orq MCP server at <url>: <reason>`, exit 1 |
+| nothing above, just no credential | the hint alone, exit 1 |
 
-The hint itself: *No orq credential accepted. Run `orq auth login` (or `/login` here), or export a
-valid `ORQ_API_KEY`.*
+The hint in-session: *Run `/login orq` and paste an API key for this workspace, or run
+`orq auth login` in another terminal. orqi reconnects on your next message.* One-shot: *Run
+`orq auth login`, or export an `ORQ_API_KEY` for this workspace.*
+
+### Recovering in-session
+
+pi fires no event when `/login` stores a key and its auth store has no listener, so orqi checks on
+the next message: the `input` event re-reads the candidate list and, if it changed since the last
+try, reconnects with it before the run starts, so the tools are callable on that same turn. `/reconnect` does the same right away. Either path clears the pinned
+warning and puts the workspace back in the footer; a boot that had no cached tool catalogue fetches
+it now and registers the tools into the running session.
+
+| You did | Then |
+|---|---|
+| `/login orq`, pasted a key for the right workspace | send any message: `Connected to orq: <n> tools in acme (/login key).` |
+| `orq auth login` in another terminal | send any message, or `/reconnect` |
+| fixed `ORQ_API_KEY` | restart: the environment cannot change under a running process |
+| `/workspace <key>` and the new token was rejected or the server stalled | the old connection stays up and the widget says so: `orq is still on the previous workspace: the switch failed.` The footer reads `orq:<old> (switch failed)`. Fix the credential, or `/reconnect` |
+| ran `/new` before recovering on a boot that had no cached catalogue | the tools connect but pi's handle is stale; the notice says `run /reload`, which re-registers them |
+
+A stall clears the memo, so the next message retries even a set that was refused earlier; a
+rejection records the set, so the same keys are not sent again until something changes.
 
 ## 5. Which workspace is shown
 
@@ -125,7 +152,7 @@ itself; the CLI does, and orqi learns which profile won from `whoami`'s `profile
 |---|---|---|
 | `orq orqi` with a profile in force | the profile's, via `ORQ_SERVER` in the child env | the profile's key, exported as `ORQ_API_KEY` by the CLI (`applyProfileAPIKey`) |
 | `orqi` direct, profile in force | the profile's, via whoami's `server` | the profile's key, read from `credentials.json` |
-| `orqi` direct, no profile | whoami's `server` | `ORQ_API_KEY`, then the login session |
+| `orqi` direct, no profile | whoami's `server` | the key `/login` stored, then `ORQ_API_KEY`, then the login session |
 
 A profile outranks an exported `ORQ_API_KEY`, because it does for the CLI — which warns and uses the
 profile. orqi disagreeing would put the two on different credentials for the same workspace.
