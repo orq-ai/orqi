@@ -110,8 +110,8 @@ The hint in-session: *Run `/login orq` and paste an API key for this workspace, 
 ### Recovering in-session
 
 pi fires no event when `/login` stores a key and its auth store has no listener, so orqi checks on
-the next message: `before_agent_start` re-reads the candidate list and, if it changed since the last
-try, reconnects with it. `/reconnect` does the same right away. Either path clears the pinned
+the next message: the `input` event re-reads the candidate list and, if it changed since the last
+try, reconnects with it before the run starts, so the tools are callable on that same turn. `/reconnect` does the same right away. Either path clears the pinned
 warning and puts the workspace back in the footer; a boot that had no cached tool catalogue fetches
 it now and registers the tools into the running session.
 

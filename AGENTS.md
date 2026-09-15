@@ -56,9 +56,13 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   the cached catalogue, whatever its age (stale tools beat none when the server cannot be asked),
   or with none, and a warning pinned above the editor names each candidate and the server's
   `error_description`: "not valid for this workspace" and "expired" need different fixes, and the
-  bare hint used to send both to `orq auth login`. Recovery runs on `before_agent_start` because
-  pi fires no event when `/login` stores a key and its auth store has no listener; the hook
-  compares the candidate tokens first so an unchanged set never re-knocks on the server. The
+  bare hint used to send both to `orq auth login`. Recovery runs on the `input` event because
+  pi fires no event when `/login` stores a key and its auth store has no listener, and `input`
+  is the one hook that runs before the agent run snapshots its tool list (tools registered
+  there are callable on that same turn) and also fires for a message typed while the model is
+  still working, which is delivered as steering and starts no run; `before_agent_start` misses
+  steering and `turn_start` runs after the snapshot, both tried and rejected. The hook compares
+  the candidate tokens first so an unchanged set never re-knocks on the server. The
   stored `/login` key is candidate #0 for the tools because pi's model runtime already prefers it.
   Only one-shot exits, having no session to log in from.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
