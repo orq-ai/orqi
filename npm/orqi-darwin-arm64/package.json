@@ -1,0 +1,23 @@
+{
+  "name": "@orq-ai/orqi-darwin-arm64",
+  "version": "0.0.0",
+  "description": "darwin-arm64 binary for @orq-ai/orqi",
+  "homepage": "https://github.com/orq-ai/orqi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orq-ai/orqi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/orq-ai/orqi/issues"
+  },
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/orqi"
+  ]
+}

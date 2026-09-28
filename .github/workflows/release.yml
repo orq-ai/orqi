@@ -55,3 +55,71 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes --verify-tag \
             || gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
+
+  # npm comes after the GitHub release and publishes from its tarballs, so the
+  # three packages carry the same bytes install.sh downloads. It lives in this
+  # file rather than a reusable workflow because npm trusted publishing checks
+  # the calling workflow's filename; a failed publish is retried with "Re-run
+  # failed jobs", and versions already on npm are skipped.
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Trusted publishing needs npm 11.5.1 or later, which Node 24 ships.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Stage packages from the release tarballs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" -p 'orqi-*.tar.gz' --dir /tmp/tarballs
+          node npm/stage.mjs "${GITHUB_REF_NAME#v}" /tmp/tarballs dist/npm
+          [ "$(dist/npm/orqi-linux-x64/bin/orqi --version)" = "${GITHUB_REF_NAME#v}" ]
+
+      # The wrapper goes last: its optionalDependencies must already exist.
+      - name: Publish packages that are not on npm yet
+        run: |
+          publish_if_missing() {
+            name=$(node -p "require('./$1/package.json').name")
+            version=$(node -p "require('./$1/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already published; skipping"
+              return
+            fi
+            (cd "$1" && npm publish --access public)
+          }
+          for pkg in dist/npm/orqi-*/; do
+            publish_if_missing "${pkg%/}"
+          done
+          publish_if_missing dist/npm/orqi
+
+  # Installs what was just published the way a user would, on each supported
+  # platform. The registry can lag a publish by a little, hence the retries.
+  verify-npm:
+    needs: publish-npm
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    permissions: {}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: npm i -g @orq-ai/orqi and check the version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for _ in 1 2 3 4 5; do
+            npm install -g "@orq-ai/orqi@$version" && break
+            sleep 30
+          done
+          [ "$(orqi --version)" = "$version" ]

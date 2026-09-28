@@ -22,42 +22,30 @@ every user download all three, so use the pattern esbuild and swc use:
   the one matching the host and silently skips the rest, which is exactly what
   `optionalDependencies` is for.
 
-The wrapper's `bin` entry is a launcher that resolves the platform package and
-execs the real binary:
-
-```js
-#!/usr/bin/env node
-// Resolve through require so npm's own layout rules find the package,
-// wherever it hoisted it to.
-const { spawnSync } = require("node:child_process");
-const pkg = `@orq-ai/orqi-${process.platform}-${process.arch}`;
-let binary;
-try {
-  binary = require.resolve(`${pkg}/orqi`);
-} catch {
-  // A clear message beats a MODULE_NOT_FOUND stack: this is what an unsupported
-  // platform looks like, and the tarball is the honest fallback.
-  console.error(`orqi: no prebuilt binary for ${process.platform}-${process.arch}.`);
-  console.error("Install from https://github.com/orq-ai/orqi/releases instead.");
-  process.exit(1);
-}
-process.exit(spawnSync(binary, process.argv.slice(2), { stdio: "inherit" }).status ?? 1);
-```
+The wrapper's `bin` entry, `npm/orqi/bin/orqi.js`, is a launcher that resolves the
+platform package and execs the real binary. An unsupported platform or a skipped
+optional dependency gets a readable message instead of a `MODULE_NOT_FOUND` stack.
 
 ## Publishing
 
-`release.yml` already builds the three tarballs. Add a job that, on the same
-tag, extracts each one into its platform package, sets the version from the tag,
-and publishes all four with `npm publish --access public`. The wrapper must be
-published **last**: it depends on the platform packages existing.
+The `publish-npm` job in `release.yml` runs after the GitHub release on the same
+tag. `npm/stage.mjs` extracts each tarball into its platform package and stamps
+the version from the tag, then the job publishes the platform packages and the
+wrapper last, since it depends on them existing. `verify-npm` then installs
+`@orq-ai/orqi` on each platform and checks `orqi --version`.
 
 Two things that bite:
 
 - **The exec bit.** `npm pack` preserves mode bits, but only if they are set
-  when the package is assembled. Extract from the tarball rather than copying a
-  file that lost `+x` somewhere.
-- **`@orq-ai` scope.** Needs an npm org and a publish token in repo secrets.
-  Scoped packages default to private, hence `--access public`.
+  when the package is assembled. `stage.mjs` extracts from the tarball rather
+  than copying, and fails if the extracted binary is not executable.
+- **Trusted publishing.** No token: npm checks the GitHub OIDC identity of the
+  calling workflow, which is why the job lives in `release.yml` rather than a
+  reusable workflow. npm only lets you configure this on a package that already
+  exists, so the first version of each of the four packages is published by
+  hand by an `@orq-ai` org member, who then adds `orq-ai/orqi` + `release.yml`
+  as its trusted publisher. `--access public` is still needed because scoped
+  packages default to private.
 
 ## Which to do first
 

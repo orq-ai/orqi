@@ -192,7 +192,12 @@ capture with `script` and `grep -c 1049h` (the alternate-screen sequence).
 Bump `version` in `package.json` first, then push the matching tag. CI does the rest:
 `.github/workflows/release.yml` checks the tag against `package.json`, runs the tests and the
 typecheck, builds the three tarballs, runs the linux one to prove it starts, and creates the GitHub
-Release that `install.sh` downloads from.
+Release that `install.sh` downloads from. It then publishes `@orq-ai/orqi` and its three platform
+packages to npm from those same tarballs (templates in `npm/`, staged by `npm/stage.mjs`), and
+installs the result on macOS arm64, macOS x64 and linux x64. Publishing uses npm trusted publishing,
+so there is no token: each of the four packages must list `release.yml` in this repo as its trusted
+publisher on npmjs.com. A failed npm job is retried with "Re-run failed jobs"; versions already on
+npm are skipped.
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0

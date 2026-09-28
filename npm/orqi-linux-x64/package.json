@@ -1,0 +1,23 @@
+{
+  "name": "@orq-ai/orqi-linux-x64",
+  "version": "0.0.0",
+  "description": "linux-x64 binary for @orq-ai/orqi",
+  "homepage": "https://github.com/orq-ai/orqi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orq-ai/orqi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/orq-ai/orqi/issues"
+  },
+  "license": "MIT",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/orqi"
+  ]
+}
