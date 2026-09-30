@@ -12,7 +12,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { credentialCandidates, LOGIN_HINT, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { CHANGELOG_URL, headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
-import { checkNow, isNewer } from "./update.ts";
+import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
 
 /**
  * Re-point the orq tools at the first of `candidates` the server accepts.
@@ -338,7 +338,7 @@ export function orqCommands(
 					return;
 				}
 				if (isNewer(latest, VERSION)) {
-					ctx.ui.notify(`orqi ${VERSION} → ${latest} · run: orqi update`);
+					ctx.ui.notify(`orqi ${VERSION} → ${latest} · run: ${currentUpdateCommand()}`);
 				} else {
 					ctx.ui.notify(`orqi ${VERSION} is already the latest version.`);
 				}

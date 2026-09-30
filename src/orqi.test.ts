@@ -37,6 +37,7 @@ import {
 	type SuccessfulUpdateCache,
 	type UpdateCache,
 	pendingUpdate,
+	updateCommand,
 	writeCache,
 } from "./update.ts";
 
@@ -438,11 +439,20 @@ test("the header shows an update line only when a newer release is cached", () =
 	const withoutUpdate = strip(headerLines(base, { cols: 100, rows: 40 }));
 	expect(withoutUpdate).not.toContain("update available");
 
-	const withUpdate = strip(headerLines({ ...base, updateAvailable: true }, { cols: 100, rows: 40 }));
+	const withUpdate = strip(headerLines({ ...base, updateCommand: "orqi update" }, { cols: 100, rows: 40 }));
 	expect(withUpdate).toContain("update available · run: orqi update");
 
 	const art = withUpdate.split("\n").filter((line) => /[█▀▄]/.test(line));
 	expect(art.length).toBe(6);
+});
+
+test("the update hint names the command that works for each install method", () => {
+	// `orqi update` refuses npm and Homebrew installs, so pointing those users at
+	// it sends them to a dead end.
+	expect(updateCommand("binary")).toBe("orqi update");
+	expect(updateCommand("npm")).toBe("npm install -g @orq-ai/orqi@latest");
+	expect(updateCommand("homebrew")).toBe("brew upgrade orq-ai/tap/orqi");
+	expect(updateCommand("source")).toBe("git pull");
 });
 
 test("the header entry is appended on fresh sessions only", () => {

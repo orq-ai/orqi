@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Stage the npm packages from release tarballs: node npm/stage.mjs <version> <tarball-dir> <out-dir>
 //
 // Copies each package template from npm/ into <out-dir>, stamps the version
@@ -8,18 +7,16 @@
 // The committed templates stay at 0.0.0.
 
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const NPM_DIR = dirname(fileURLToPath(import.meta.url));
+const LICENSE = join(NPM_DIR, '..', 'LICENSE');
 
-// npm platform suffix -> dist.ts tarball label.
-const PLATFORMS = {
-  'darwin-arm64': 'macos-arm64',
-  'darwin-x64': 'macos-x64',
-  'linux-x64': 'linux-x64',
-};
+// One package per npm/orqi-<platform> template; dist.ts names the matching
+// tarball with "macos" where npm says "darwin".
+const PLATFORMS = readdirSync(NPM_DIR).filter((name) => name.startsWith('orqi-'));
 
 const [version, tarballDir, outDir] = process.argv.slice(2);
 if (!version || !tarballDir || !outDir || !/^\d+\.\d+\.\d+$/.test(version)) {
@@ -35,19 +32,22 @@ function stamp(pkgDir, edit) {
   writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-rmSync(outDir, { recursive: true, force: true });
+if (existsSync(outDir) && readdirSync(outDir).length > 0) {
+  console.error(`${outDir} is not empty; stage into a fresh directory`);
+  process.exit(1);
+}
 mkdirSync(outDir, { recursive: true });
 
-for (const [suffix, label] of Object.entries(PLATFORMS)) {
-  const name = `orqi-${suffix}`;
-  const tarball = join(tarballDir, `orqi-${label}.tar.gz`);
+for (const name of PLATFORMS) {
+  const tarball = join(tarballDir, `${name.replace('darwin', 'macos')}.tar.gz`);
   if (!existsSync(tarball)) {
     console.error(`missing ${tarball}`);
     process.exit(1);
   }
   const pkgDir = join(outDir, name);
   cpSync(join(NPM_DIR, name), pkgDir, { recursive: true });
-  mkdirSync(join(pkgDir, 'bin'));
+  cpSync(LICENSE, join(pkgDir, 'LICENSE'));
+  mkdirSync(join(pkgDir, 'bin'), { recursive: true });
   execFileSync('tar', ['-xzf', tarball, '-C', join(pkgDir, 'bin'), 'orqi']);
   // src/update.ts identifies an npm install by a binary named exactly `orqi`
   // under node_modules, so the name here is load-bearing.
@@ -62,6 +62,7 @@ for (const [suffix, label] of Object.entries(PLATFORMS)) {
 
 const wrapperDir = join(outDir, 'orqi');
 cpSync(join(NPM_DIR, 'orqi'), wrapperDir, { recursive: true });
+cpSync(LICENSE, join(wrapperDir, 'LICENSE'));
 stamp(wrapperDir, (manifest) => {
   for (const dep of Object.keys(manifest.optionalDependencies)) {
     manifest.optionalDependencies[dep] = version;

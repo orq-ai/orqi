@@ -56,51 +56,104 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes --verify-tag \
             || gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
 
-  # npm comes after the GitHub release and publishes from its tarballs, so the
-  # three packages carry the same bytes install.sh downloads. It lives in this
-  # file rather than a reusable workflow because npm trusted publishing checks
-  # the calling workflow's filename; a failed publish is retried with "Re-run
-  # failed jobs", and versions already on npm are skipped.
-  publish-npm:
+  # npm comes after the GitHub release and packs its tarballs, so the three
+  # platform packages carry the same bytes install.sh downloads. npm versions
+  # cannot be republished, so the packed files are installed on every supported
+  # platform before anything reaches the registry, and publish-npm uploads
+  # exactly those files. Prerelease tags stop here: stage.mjs only takes x.y.z
+  # and nothing sets an npm dist-tag other than latest.
+  stage-npm:
     needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
-
-      # Trusted publishing needs npm 11.5.1 or later, which Node 24 ships.
-      - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          persist-credentials: false
 
-      - name: Stage packages from the release tarballs
+      - name: Stage and pack the npm packages from the release tarballs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release download "$GITHUB_REF_NAME" -p 'orqi-*.tar.gz' --dir /tmp/tarballs
-          node npm/stage.mjs "${GITHUB_REF_NAME#v}" /tmp/tarballs dist/npm
-          [ "$(dist/npm/orqi-linux-x64/bin/orqi --version)" = "${GITHUB_REF_NAME#v}" ]
+          node npm/stage.mjs "${GITHUB_REF_NAME#v}" /tmp/tarballs /tmp/npm
+          mkdir -p dist/packs
+          for pkg in /tmp/npm/*/; do
+            npm pack "$pkg" --pack-destination dist/packs
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packs
+          path: dist/packs
+          if-no-files-found: error
+
+  test-npm:
+    needs: stage-npm
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packs
+          path: packs
+
+      # The other platforms' packages are not on npm yet; npm skips the
+      # optional dependencies it cannot fetch, which is the point.
+      - name: Install the packed files and check the version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          platform=$(node -p 'process.platform + "-" + process.arch')
+          npm install -g "./packs/orq-ai-orqi-$platform-$version.tgz" "./packs/orq-ai-orqi-$version.tgz"
+          [ "$(orqi --version)" = "$version" ]
+
+  # Trusted publishing checks the workflow file the job runs in, so this stays
+  # in release.yml; a workflow_dispatch retry from another file would be
+  # refused. A failed publish is retried with "Re-run failed jobs", and
+  # versions already on npm are skipped. Never re-run the release job once npm
+  # has a version: it would rebuild tarballs that no longer match npm's bytes.
+  publish-npm:
+    needs: test-npm
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      # Trusted publishing needs npm 11.5.1 or later, which ships with Node
+      # 24.5 and up; check-latest keeps a cached older 24.x off the runner.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          check-latest: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packs
+          path: packs
 
       # The wrapper goes last: its optionalDependencies must already exist.
       - name: Publish packages that are not on npm yet
         run: |
+          version="${GITHUB_REF_NAME#v}"
           publish_if_missing() {
-            name=$(node -p "require('./$1/package.json').name")
-            version=$(node -p "require('./$1/package.json').version")
+            name=$(tar -xzOf "$1" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0)).name')
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version already published; skipping"
               return
             fi
-            (cd "$1" && npm publish --access public)
+            npm publish "$1" --access public
           }
-          for pkg in dist/npm/orqi-*/; do
-            publish_if_missing "${pkg%/}"
+          for pack in ./packs/orq-ai-orqi-*-"$version".tgz; do
+            publish_if_missing "$pack"
           done
-          publish_if_missing dist/npm/orqi
+          publish_if_missing "./packs/orq-ai-orqi-$version.tgz"
 
-  # Installs what was just published the way a user would, on each supported
+  # Installs from the registry the way a user would, on each supported
   # platform. The registry can lag a publish by a little, hence the retries.
   verify-npm:
     needs: publish-npm
@@ -111,15 +164,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions: {}
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
       - name: npm i -g @orq-ai/orqi and check the version
         run: |
           version="${GITHUB_REF_NAME#v}"
           for _ in 1 2 3 4 5; do
-            npm install -g "@orq-ai/orqi@$version" && break
+            if npm install -g "@orq-ai/orqi@$version" && [ "$(orqi --version)" = "$version" ]; then
+              exit 0
+            fi
             sleep 30
           done
-          [ "$(orqi --version)" = "$version" ]
+          echo "npm i -g @orq-ai/orqi@$version did not give an orqi printing $version" >&2
+          exit 1

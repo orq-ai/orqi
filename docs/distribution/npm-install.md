@@ -28,31 +28,33 @@ optional dependency gets a readable message instead of a `MODULE_NOT_FOUND` stac
 
 ## Publishing
 
-The `publish-npm` job in `release.yml` runs after the GitHub release on the same
-tag. `npm/stage.mjs` extracts each tarball into its platform package and stamps
-the version from the tag, then the job publishes the platform packages and the
-wrapper last, since it depends on them existing. `verify-npm` then installs
-`@orq-ai/orqi` on each platform and checks `orqi --version`.
+Tagged releases publish on their own; the release process is in `AGENTS.md`
+under "Releasing". Two things `npm/stage.mjs` and the workflow rely on:
 
-Two things that bite:
+- **The exec bit.** `npm pack` keeps mode bits, but only the ones set when the
+  package is assembled. `stage.mjs` extracts the binary from the release
+  tarball rather than copying it, and fails if it comes out without the bit.
+- **`--access public`.** Scoped packages default to private.
 
-- **The exec bit.** `npm pack` preserves mode bits, but only if they are set
-  when the package is assembled. `stage.mjs` extracts from the tarball rather
-  than copying, and fails if the extracted binary is not executable.
-- **Trusted publishing.** No token: npm checks the GitHub OIDC identity of the
-  calling workflow, which is why the job lives in `release.yml` rather than a
-  reusable workflow. npm only lets you configure this on a package that already
-  exists, so the first version of each of the four packages is published by
-  hand by an `@orq-ai` org member, who then adds `orq-ai/orqi` + `release.yml`
-  as its trusted publisher. `--access public` is still needed because scoped
-  packages default to private.
+## First publish (once, by hand)
 
-## Which to do first
+Trusted publishing is configured per package on npmjs.com, and only on a
+package that already exists. Until an `@orq-ai` npm org member does the steps
+below, every tag's `publish-npm` job fails, while the GitHub release itself
+still goes out.
 
-npm, if you only do one. It reaches more of this audience, and the release job
-is a natural extension of what already builds the tarballs. Homebrew is the
-smaller change but a narrower audience, and it needs a second repo
-(`orq-ai/homebrew-tap`) to exist first.
+```bash
+gh release download v0.1.1 -R orq-ai/orqi -p 'orqi-*.tar.gz' --dir /tmp/orqi-tarballs
+node npm/stage.mjs 0.1.1 /tmp/orqi-tarballs /tmp/orqi-npm
+npm login
+for pkg in orqi-darwin-arm64 orqi-darwin-x64 orqi-linux-x64 orqi; do
+  (cd "/tmp/orqi-npm/$pkg" && npm publish --access public)
+done
+```
 
-Neither replaces `install.sh`: it stays the zero-dependency path for anyone who
-has neither brew nor node.
+The wrapper goes last because its `optionalDependencies` must already exist.
+Then, for each of the four packages, open it on npmjs.com, go to Settings,
+Trusted Publishing, pick GitHub Actions and enter organization `orq-ai`,
+repository `orqi` and workflow filename `release.yml`.
+
+`install.sh` stays the zero-dependency path for anyone without Node.

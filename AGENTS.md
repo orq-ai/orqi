@@ -192,12 +192,15 @@ capture with `script` and `grep -c 1049h` (the alternate-screen sequence).
 Bump `version` in `package.json` first, then push the matching tag. CI does the rest:
 `.github/workflows/release.yml` checks the tag against `package.json`, runs the tests and the
 typecheck, builds the three tarballs, runs the linux one to prove it starts, and creates the GitHub
-Release that `install.sh` downloads from. It then publishes `@orq-ai/orqi` and its three platform
-packages to npm from those same tarballs (templates in `npm/`, staged by `npm/stage.mjs`), and
-installs the result on macOS arm64, macOS x64 and linux x64. Publishing uses npm trusted publishing,
-so there is no token: each of the four packages must list `release.yml` in this repo as its trusted
-publisher on npmjs.com. A failed npm job is retried with "Re-run failed jobs"; versions already on
-npm are skipped.
+Release that `install.sh` downloads from. It then packs `@orq-ai/orqi` and its three platform
+packages from those same tarballs (templates in `npm/`, staged by `npm/stage.mjs`), installs the
+packed files on macOS arm64, macOS x64 and linux x64, publishes them, and installs the published
+version on the same three platforms. Prerelease tags (anything with a `-`) skip npm. Publishing uses
+npm trusted publishing, so there is no token: each of the four packages must list `release.yml` in
+this repo as its trusted publisher on npmjs.com (first-time setup in
+`docs/distribution/npm-install.md`). A failed npm job is retried with "Re-run failed jobs", and
+versions already on npm are skipped. Do not re-run the `release` job once npm has the version: it
+rebuilds the tarballs, and npm cannot take new bytes under an existing version.
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0

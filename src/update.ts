@@ -243,15 +243,32 @@ export function formatStatus(status: UpdateStatus, json: boolean): string {
  */
 export function refusal(method: Exclude<InstallMethod, "binary">, execPath: string): string {
 	if (method === "homebrew") {
-		return `cannot update: this orqi came from Homebrew (found at ${execPath})\n  brew upgrade orq-ai/tap/orqi`;
+		return `cannot update: this orqi came from Homebrew (found at ${execPath})\n  ${updateCommand(method)}`;
 	}
 	if (method === "npm") {
-		return `cannot update: this orqi came from npm (found at ${execPath})\n  npm install -g @orq-ai/orqi@latest`;
+		return `cannot update: this orqi came from npm (found at ${execPath})\n  ${updateCommand(method)}`;
 	}
 	return (
 		`cannot update: this is a source checkout, not an installed binary (running under ${execPath})\n` +
 		"  git pull  (or: curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh)"
 	);
+}
+
+/**
+ * The command the header's "update available" line points at. It has to match
+ * how this orqi was installed: pointing an npm install at `orqi update` sends
+ * the user to a command that refuses.
+ */
+export function updateCommand(method: InstallMethod): string {
+	if (method === "homebrew") return "brew upgrade orq-ai/tap/orqi";
+	if (method === "npm") return "npm install -g @orq-ai/orqi@latest";
+	if (method === "source") return "git pull";
+	return "orqi update";
+}
+
+/** `updateCommand` for the running orqi. */
+export function currentUpdateCommand(): string {
+	return updateCommand(installMethod(realpathSync(process.execPath)));
 }
 
 const FETCH_TIMEOUT_MS = 10_000;

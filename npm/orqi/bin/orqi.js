@@ -7,7 +7,7 @@
 
 'use strict';
 
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 
 const platformPackages = {
@@ -31,7 +31,7 @@ try {
   // Resolved through package.json so npm's own layout rules find the package,
   // wherever it hoisted it to.
   binaryPath = path.join(path.dirname(require.resolve(`${pkg}/package.json`)), 'bin', 'orqi');
-} catch (err) {
+} catch {
   console.error(`@orq-ai/orqi: the platform package ${pkg} was not installed.`);
   console.error('This can happen if --no-optional / --omit=optional was passed to npm.');
   console.error('Reinstall with:');
@@ -39,19 +39,34 @@ try {
   process.exit(1);
 }
 
-const result = spawnSync(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
+const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
 
-if (result.error) {
-  if (result.error.code === 'ENOENT') {
-    console.error(`@orq-ai/orqi: binary not found at ${binaryPath}`);
-    process.exit(1);
-  }
-  throw result.error;
+// A terminal's Ctrl-C reaches the whole process group, but a signal sent to
+// this pid alone (kill, a supervisor, a closing terminal) would otherwise
+// leave the binary running without its parent.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => child.kill(signal));
 }
+
+child.on('error', (err) => {
+  if (err.code === 'ENOENT') {
+    console.error(`@orq-ai/orqi: binary not found at ${binaryPath}`);
+  } else if (err.code === 'EACCES') {
+    console.error(`@orq-ai/orqi: ${binaryPath} is not executable. Reinstall with:`);
+    console.error('  npm install -g @orq-ai/orqi');
+  } else {
+    console.error(`@orq-ai/orqi: could not start ${binaryPath}: ${err.message}`);
+  }
+  process.exit(1);
+});
 
 // A binary killed by a signal has no exit status; re-raise it so the caller
 // sees the same termination it would without the shim.
-if (result.signal) {
-  process.kill(process.pid, result.signal);
-}
-process.exit(result.status ?? 1);
+child.on('exit', (code, signal) => {
+  if (signal) {
+    process.removeAllListeners(signal);
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(code ?? 1);
+});
