@@ -104,20 +104,27 @@ jobs:
           name: npm-packs
           path: packs
 
-      # The other platforms' packages are not on npm yet; npm skips the
-      # optional dependencies it cannot fetch, which is the point.
+      # None of the platform packages are on npm yet, so npm skips the
+      # wrapper's optionalDependencies; the launcher finds the platform package
+      # installed next to it from the local file instead.
       - name: Install the packed files and check the version
         run: |
           version="${GITHUB_REF_NAME#v}"
           platform=$(node -p 'process.platform + "-" + process.arch')
           npm install -g "./packs/orq-ai-orqi-$platform-$version.tgz" "./packs/orq-ai-orqi-$version.tgz"
           [ "$(orqi --version)" = "$version" ]
+          # Refuses before any network call. Proves the real install path reads
+          # as npm and that a non-zero exit comes back through the launcher.
+          code=0
+          out=$(orqi update 2>&1) || code=$?
+          [ "$code" = 1 ] && grep -q "came from npm" <<<"$out"
 
   # Trusted publishing checks the workflow file the job runs in, so this stays
   # in release.yml; a workflow_dispatch retry from another file would be
   # refused. A failed publish is retried with "Re-run failed jobs", and
-  # versions already on npm are skipped. Never re-run the release job once npm
-  # has a version: it would rebuild tarballs that no longer match npm's bytes.
+  # versions already on npm are skipped. Never use "Re-run all jobs" once npm
+  # has a version: it re-runs release, which rebuilds tarballs that no longer
+  # match npm's bytes.
   publish-npm:
     needs: test-npm
     runs-on: ubuntu-latest
@@ -137,24 +144,27 @@ jobs:
           path: packs
 
       # The wrapper goes last: its optionalDependencies must already exist.
+      # Only a 404 means "not published yet"; any other npm view failure stops
+      # the job rather than turning into a misleading publish error.
       - name: Publish packages that are not on npm yet
         run: |
           version="${GITHUB_REF_NAME#v}"
-          publish_if_missing() {
-            name=$(tar -xzOf "$1" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0)).name')
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "$name@$version already published; skipping"
-              return
+          for pack in ./packs/orq-ai-orqi-*-"$version".tgz ./packs/orq-ai-orqi-"$version".tgz; do
+            pkg=${pack#./packs/orq-ai-}
+            pkg=${pkg%-"$version".tgz}
+            if out=$(npm view "@orq-ai/$pkg@$version" version 2>&1); then
+              echo "@orq-ai/$pkg@$version already published; skipping"
+            elif grep -q E404 <<<"$out"; then
+              npm publish "$pack" --access public
+            else
+              echo "$out" >&2
+              exit 1
             fi
-            npm publish "$1" --access public
-          }
-          for pack in ./packs/orq-ai-orqi-*-"$version".tgz; do
-            publish_if_missing "$pack"
           done
-          publish_if_missing "./packs/orq-ai-orqi-$version.tgz"
 
   # Installs from the registry the way a user would, on each supported
-  # platform. The registry can lag a publish by a little, hence the retries.
+  # platform. The registry caches metadata for up to five minutes, so the
+  # retries cover six.
   verify-npm:
     needs: publish-npm
     strategy:
@@ -167,7 +177,7 @@ jobs:
       - name: npm i -g @orq-ai/orqi and check the version
         run: |
           version="${GITHUB_REF_NAME#v}"
-          for _ in 1 2 3 4 5; do
+          for _ in $(seq 12); do
             if npm install -g "@orq-ai/orqi@$version" && [ "$(orqi --version)" = "$version" ]; then
               exit 0
             fi

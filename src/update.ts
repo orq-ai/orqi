@@ -250,14 +250,14 @@ export function refusal(method: Exclude<InstallMethod, "binary">, execPath: stri
 	}
 	return (
 		`cannot update: this is a source checkout, not an installed binary (running under ${execPath})\n` +
-		"  git pull  (or: curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh)"
+		`  ${updateCommand(method)}  (or: curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh)`
 	);
 }
 
 /**
- * The command the header's "update available" line points at. It has to match
- * how this orqi was installed: pointing an npm install at `orqi update` sends
- * the user to a command that refuses.
+ * The command that updates orqi for an install method, used by the header
+ * hint, /update and the refusal message. Pointing an npm install at
+ * `orqi update` sends the user to a command that refuses.
  */
 export function updateCommand(method: InstallMethod): string {
 	if (method === "homebrew") return "brew upgrade orq-ai/tap/orqi";
@@ -268,7 +268,12 @@ export function updateCommand(method: InstallMethod): string {
 
 /** `updateCommand` for the running orqi. */
 export function currentUpdateCommand(): string {
-	return updateCommand(installMethod(realpathSync(process.execPath)));
+	// Only renders a hint, so an unresolvable path must not break boot.
+	try {
+		return updateCommand(installMethod(realpathSync(process.execPath)));
+	} catch {
+		return updateCommand("binary");
+	}
 }
 
 const FETCH_TIMEOUT_MS = 10_000;

@@ -23,7 +23,7 @@ every user download all three, so use the pattern esbuild and swc use:
   `optionalDependencies` is for.
 
 The wrapper's `bin` entry, `npm/orqi/bin/orqi.js`, is a launcher that resolves the
-platform package and execs the real binary. An unsupported platform or a skipped
+platform package and runs the real binary as a child process. An unsupported platform or a skipped
 optional dependency gets a readable message instead of a `MODULE_NOT_FOUND` stack.
 
 ## Publishing
@@ -34,6 +34,8 @@ under "Releasing". Two things `npm/stage.mjs` and the workflow rely on:
 - **The exec bit.** `npm pack` keeps mode bits, but only the ones set when the
   package is assembled. `stage.mjs` extracts the binary from the release
   tarball rather than copying it, and fails if it comes out without the bit.
+  The platform packages have no `bin` entry, so npm never marks `bin/orqi`
+  executable on its own.
 - **`--access public`.** Scoped packages default to private.
 
 ## First publish (once, by hand)
@@ -43,9 +45,13 @@ package that already exists. Until an `@orq-ai` npm org member does the steps
 below, every tag's `publish-npm` job fails, while the GitHub release itself
 still goes out.
 
+Use a stable release tag built after npm support landed, so the first npm
+version already tells npm users how to update with npm.
+
 ```bash
-gh release download v0.1.1 -R orq-ai/orqi -p 'orqi-*.tar.gz' --dir /tmp/orqi-tarballs
-node npm/stage.mjs 0.1.1 /tmp/orqi-tarballs /tmp/orqi-npm
+version=<x.y.z>
+gh release download "v$version" -R orq-ai/orqi -p 'orqi-*.tar.gz' --dir /tmp/orqi-tarballs
+node npm/stage.mjs "$version" /tmp/orqi-tarballs /tmp/orqi-npm
 npm login
 for pkg in orqi-darwin-arm64 orqi-darwin-x64 orqi-linux-x64 orqi; do
   (cd "/tmp/orqi-npm/$pkg" && npm publish --access public)
@@ -54,7 +60,7 @@ done
 
 The wrapper goes last because its `optionalDependencies` must already exist.
 Then, for each of the four packages, open it on npmjs.com, go to Settings,
-Trusted Publishing, pick GitHub Actions and enter organization `orq-ai`,
+find the trusted publisher section, pick GitHub Actions and enter organization `orq-ai`,
 repository `orqi` and workflow filename `release.yml`.
 
 `install.sh` stays the zero-dependency path for anyone without Node.

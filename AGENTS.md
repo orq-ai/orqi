@@ -199,8 +199,8 @@ version on the same three platforms. Prerelease tags (anything with a `-`) skip 
 npm trusted publishing, so there is no token: each of the four packages must list `release.yml` in
 this repo as its trusted publisher on npmjs.com (first-time setup in
 `docs/distribution/npm-install.md`). A failed npm job is retried with "Re-run failed jobs", and
-versions already on npm are skipped. Do not re-run the `release` job once npm has the version: it
-rebuilds the tarballs, and npm cannot take new bytes under an existing version.
+versions already on npm are skipped. Never use "Re-run all jobs" once npm has the version: it re-runs
+`release`, which rebuilds the tarballs, and npm cannot take new bytes under an existing version.
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0

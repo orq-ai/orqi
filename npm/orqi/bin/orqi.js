@@ -2,8 +2,8 @@
 // @orq-ai/orqi launcher shim.
 //
 // Resolves the matching per-platform package installed as an optional
-// dependency and execs its binary with the same stdio, argv and exit code as
-// running the binary directly.
+// dependency and runs its binary as a child, passing through stdio, argv, the
+// exit code and a terminating signal.
 
 'use strict';
 
@@ -31,7 +31,8 @@ try {
   // Resolved through package.json so npm's own layout rules find the package,
   // wherever it hoisted it to.
   binaryPath = path.join(path.dirname(require.resolve(`${pkg}/package.json`)), 'bin', 'orqi');
-} catch {
+} catch (err) {
+  if (err.code !== 'MODULE_NOT_FOUND') throw err;
   console.error(`@orq-ai/orqi: the platform package ${pkg} was not installed.`);
   console.error('This can happen if --no-optional / --omit=optional was passed to npm.');
   console.error('Reinstall with:');
@@ -41,10 +42,11 @@ try {
 
 const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
 
-// A terminal's Ctrl-C reaches the whole process group, but a signal sent to
-// this pid alone (kill, a supervisor, a closing terminal) would otherwise
-// leave the binary running without its parent.
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+// A terminal's Ctrl-C already reaches the binary through the process group,
+// so the shim only has to outlive it. A signal sent to this pid alone (kill,
+// a supervisor, a closing terminal) would otherwise orphan the binary.
+process.on('SIGINT', () => {});
+for (const signal of ['SIGTERM', 'SIGHUP']) {
   process.on(signal, () => child.kill(signal));
 }
 
@@ -66,7 +68,9 @@ child.on('exit', (code, signal) => {
   if (signal) {
     process.removeAllListeners(signal);
     process.kill(process.pid, signal);
-    return;
+    // Node survives some signals it handles itself (SIGPIPE, SIGUSR1); exit
+    // the way a shell reports a signal death rather than falling through to 0.
+    process.exit(128 + (require('os').constants.signals[signal] ?? 0));
   }
   process.exit(code ?? 1);
 });

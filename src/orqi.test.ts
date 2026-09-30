@@ -37,6 +37,7 @@ import {
 	type SuccessfulUpdateCache,
 	type UpdateCache,
 	pendingUpdate,
+	currentUpdateCommand,
 	updateCommand,
 	writeCache,
 } from "./update.ts";
@@ -453,6 +454,39 @@ test("the update hint names the command that works for each install method", () 
 	expect(updateCommand("npm")).toBe("npm install -g @orq-ai/orqi@latest");
 	expect(updateCommand("homebrew")).toBe("brew upgrade orq-ai/tap/orqi");
 	expect(updateCommand("source")).toBe("git pull");
+	// Under bun test the running binary is bun itself, which reads as source.
+	expect(currentUpdateCommand()).toBe("git pull");
+});
+
+test("npm/stage.mjs builds publishable packages from release tarballs", () => {
+	// npm cannot take new bytes under a published version, so a staging bug
+	// (a pin left at 0.0.0, a lost exec bit) would ship for good.
+	const root = mkdtempSync(join(tmpdir(), "orqi-stage-"));
+	const tarballs = join(root, "tarballs");
+	mkdirSync(tarballs);
+	for (const label of ["macos-arm64", "macos-x64", "linux-x64"]) {
+		const fixture = join(root, label);
+		mkdirSync(fixture);
+		Bun.spawnSync(["cp", releaseFixture(fixture, "9.9.9"), join(tarballs, `orqi-${label}.tar.gz`)]);
+	}
+	const out = join(root, "out");
+	const stage = (dir: string) => Bun.spawnSync(["node", join(import.meta.dir, "..", "npm", "stage.mjs"), "9.9.9", tarballs, dir]);
+	expect(stage(out).exitCode).toBe(0);
+
+	const manifest = (name: string) => JSON.parse(readFileSync(join(out, name, "package.json"), "utf8"));
+	const platforms = readdirSync(out).filter((name) => name !== "orqi");
+	expect(platforms.sort()).toEqual(["orqi-darwin-arm64", "orqi-darwin-x64", "orqi-linux-x64"]);
+	for (const name of platforms) {
+		expect(manifest(name).version).toBe("9.9.9");
+		expect(statSync(join(out, name, "bin", "orqi")).mode & 0o111).not.toBe(0);
+		expect(existsSync(join(out, name, "LICENSE"))).toBe(true);
+	}
+	expect(manifest("orqi").version).toBe("9.9.9");
+	expect(manifest("orqi").optionalDependencies).toEqual(Object.fromEntries(platforms.map((name) => [`@orq-ai/${name}`, "9.9.9"])));
+
+	// Re-staging into the same directory refuses rather than mixing versions.
+	expect(stage(out).exitCode).toBe(1);
+	rmSync(root, { recursive: true, force: true });
 });
 
 test("the header entry is appended on fresh sessions only", () => {

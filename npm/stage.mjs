@@ -24,11 +24,13 @@ if (!version || !tarballDir || !outDir || !/^\d+\.\d+\.\d+$/.test(version)) {
   process.exit(1);
 }
 
-function stamp(pkgDir, edit) {
+function stamp(pkgDir) {
   const file = join(pkgDir, 'package.json');
   const manifest = JSON.parse(readFileSync(file, 'utf8'));
   manifest.version = version;
-  edit?.(manifest);
+  for (const dep of Object.keys(manifest.optionalDependencies ?? {})) {
+    manifest.optionalDependencies[dep] = version;
+  }
   writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
@@ -63,9 +65,13 @@ for (const name of PLATFORMS) {
 const wrapperDir = join(outDir, 'orqi');
 cpSync(join(NPM_DIR, 'orqi'), wrapperDir, { recursive: true });
 cpSync(LICENSE, join(wrapperDir, 'LICENSE'));
-stamp(wrapperDir, (manifest) => {
-  for (const dep of Object.keys(manifest.optionalDependencies)) {
-    manifest.optionalDependencies[dep] = version;
-  }
-});
+// A template without a wrapper entry would publish a package nobody installs;
+// an entry without a template would publish a wrapper pointing at nothing.
+const deps = Object.keys(JSON.parse(readFileSync(join(wrapperDir, 'package.json'), 'utf8')).optionalDependencies).sort();
+const expected = PLATFORMS.map((name) => `@orq-ai/${name}`).sort();
+if (deps.join() !== expected.join()) {
+  console.error(`npm/orqi optionalDependencies (${deps}) do not match the npm/orqi-* templates (${expected})`);
+  process.exit(1);
+}
+stamp(wrapperDir);
 console.log('staged orqi');
