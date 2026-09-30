@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { apiBaseUrl, credentialCandidates, credentialsFile, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { authLines, groupTools, NO_CREDENTIAL, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
@@ -448,10 +448,10 @@ test("the header shows an update line only when a newer release is cached", () =
 });
 
 test("the update hint names the command that works for each install method", () => {
-	// `orqi update` refuses npm and Homebrew installs, so pointing those users at
-	// it sends them to a dead end.
+	// `orqi update` refuses Homebrew and source installs, so pointing those users
+	// at it sends them to a dead end.
 	expect(updateCommand("binary")).toBe("orqi update");
-	expect(updateCommand("npm")).toBe("npm install -g @orq-ai/orqi@latest");
+	expect(updateCommand("npm")).toBe("orqi update");
 	expect(updateCommand("homebrew")).toBe("brew upgrade orq-ai/tap/orqi");
 	expect(updateCommand("source")).toBe("git pull");
 	// Under bun test the running binary is bun itself, which reads as source.
@@ -1528,14 +1528,56 @@ test("the `update` argv string and the /update command registration stay in sync
 	expect(registered).toContain("update");
 });
 
+async function updateWithFakeNpm(npmScript: string): Promise<{ code: number; npmArgs: string; errors: string }> {
+	const root = mkdtempSync(join(tmpdir(), "orqi-npm-update-"));
+	const fakeBin = join(root, "fake-bin");
+	mkdirSync(fakeBin);
+	writeFileSync(join(fakeBin, "npm"), `#!/bin/sh\nprintf '%s' "$*" > "${root}/npm-args"\n${npmScript}\n`);
+	chmodSync(join(fakeBin, "npm"), 0o755);
+	const execPath = join(root, "lib", "node_modules", "@orq-ai", "orqi-darwin-arm64", "bin", "orqi");
+	mkdirSync(dirname(execPath), { recursive: true });
+	writeVersionBinary(execPath, "0.0.1");
+
+	const prior = { path: process.env.PATH, version: process.env.ORQI_VERSION, error: console.error, log: console.log };
+	const errors: string[] = [];
+	process.env.PATH = `${fakeBin}:${prior.path}`;
+	process.env.ORQI_VERSION = "9.9.9";
+	console.error = (...args) => errors.push(args.join(" "));
+	console.log = () => {};
+	try {
+		const code = await runUpdate([], join(root, "agent"), { execPath });
+		const argsFile = join(root, "npm-args");
+		return { code, npmArgs: existsSync(argsFile) ? readFileSync(argsFile, "utf8") : "", errors: errors.join("\n") };
+	} finally {
+		process.env.PATH = prior.path;
+		if (prior.version === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior.version;
+		console.error = prior.error;
+		console.log = prior.log;
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+test("runUpdate hands an npm install to npm, at the exact version it reports", async () => {
+	// Writing into node_modules behind npm's back would leave a global install
+	// npm can no longer repair, so npm has to do the update.
+	const result = await updateWithFakeNpm("exit 0");
+	expect(result.code).toBe(0);
+	expect(result.npmArgs).toBe("install -g @orq-ai/orqi@9.9.9");
+});
+
+test("runUpdate prints the npm command when npm cannot update", async () => {
+	// The usual cause is a global prefix that needs sudo: npm's own error is the
+	// explanation, and the command is what the user runs next.
+	const result = await updateWithFakeNpm("echo 'npm error code EACCES' >&2; exit 243");
+	expect(result.code).toBe(1);
+	expect(result.errors).toContain("npm install -g @orq-ai/orqi@9.9.9");
+});
+
 test("refusal names both the method and the found path for every channel orqi does not own", () => {
 	const path = "/opt/homebrew/Cellar/orqi/0.1.0/bin/orqi";
 	expect(refusal("homebrew", path)).toContain(path);
 	expect(refusal("homebrew", path)).toContain("brew upgrade orq-ai/tap/orqi");
-
-	const npmPath = "/proj/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi";
-	expect(refusal("npm", npmPath)).toContain(npmPath);
-	expect(refusal("npm", npmPath)).toContain("npm install -g @orq-ai/orqi@latest");
 
 	const srcPath = "/Users/x/.bun/bin/bun";
 	expect(refusal("source", srcPath)).toContain(srcPath);

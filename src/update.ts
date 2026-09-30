@@ -236,17 +236,14 @@ export function formatStatus(status: UpdateStatus, json: boolean): string {
 }
 
 /**
- * "binary" is excluded from the type, not checked at runtime: there is
- * nothing to refuse for a method that can self-update, and the single call
- * site is already gated by `if (method !== "binary")`, so the impossible
- * case is now a compile error instead of a thrown-and-caught one.
+ * "binary" and "npm" are excluded from the type, not checked at runtime:
+ * both can update (npm through npm itself), and the single call site is
+ * gated to Homebrew and source, so the impossible case is a compile error
+ * instead of a thrown-and-caught one.
  */
-export function refusal(method: Exclude<InstallMethod, "binary">, execPath: string): string {
+export function refusal(method: Exclude<InstallMethod, "binary" | "npm">, execPath: string): string {
 	if (method === "homebrew") {
 		return `cannot update: this orqi came from Homebrew (found at ${execPath})\n  ${updateCommand(method)}`;
-	}
-	if (method === "npm") {
-		return `cannot update: this orqi came from npm (found at ${execPath})\n  ${updateCommand(method)}`;
 	}
 	return (
 		`cannot update: this is a source checkout, not an installed binary (running under ${execPath})\n` +
@@ -254,14 +251,15 @@ export function refusal(method: Exclude<InstallMethod, "binary">, execPath: stri
 	);
 }
 
+const NPM_PACKAGE = "@orq-ai/orqi";
+
 /**
  * The command that updates orqi for an install method, used by the header
- * hint, /update and the refusal message. Pointing an npm install at
- * `orqi update` sends the user to a command that refuses.
+ * hint, /update and the refusal message. `orqi update` refuses Homebrew and
+ * source installs, so pointing those at it sends the user to a dead end.
  */
 export function updateCommand(method: InstallMethod): string {
 	if (method === "homebrew") return "brew upgrade orq-ai/tap/orqi";
-	if (method === "npm") return "npm install -g @orq-ai/orqi@latest";
 	if (method === "source") return "git pull";
 	return "orqi update";
 }
@@ -431,7 +429,7 @@ export async function runUpdate(args: string[], agentDir: string, options: RunUp
 		return latest ? 0 : 1;
 	}
 
-	if (method !== "binary") {
+	if (method === "homebrew" || method === "source") {
 		console.error(refusal(method, target));
 		return 1;
 	}
@@ -446,6 +444,8 @@ export async function runUpdate(args: string[], agentDir: string, options: RunUp
 		console.log(`orqi ${VERSION} is already the latest version.`);
 		return 0;
 	}
+
+	if (method === "npm") return updateViaNpm(version);
 
 	const asset = assetName();
 	if (!asset) {
@@ -572,4 +572,33 @@ export async function runUpdate(args: string[], agentDir: string, options: RunUp
 		// no-op, even with force: true.
 		if (staging) rmSync(staging, { recursive: true, force: true });
 	}
+}
+
+/**
+ * npm owns the files of an npm install; writing into node_modules behind its
+ * back is how a global install becomes unrepairable, so npm does the update.
+ * The exact version is installed rather than "latest", so what lands is what
+ * was reported. When npm cannot do it (not on PATH, no write access to its
+ * prefix), the command is printed for the user to run.
+ */
+function updateViaNpm(version: string): number {
+	const command = `npm install -g ${NPM_PACKAGE}@${version}`;
+	const npm = Bun.which("npm", { PATH: process.env.PATH });
+	if (!npm) {
+		console.error(`cannot update: this orqi came from npm, but npm is not on PATH. Run:\n  ${command}`);
+		return 1;
+	}
+	console.error(`Updating orqi ${VERSION} -> ${version} (npm)`);
+	// Captured and replayed only on failure: npm's success chatter adds nothing
+	// to the two lines below, but its E404 or EACCES is the whole explanation.
+	const result = Bun.spawnSync([npm, "install", "-g", `${NPM_PACKAGE}@${version}`]);
+	if (result.exitCode !== 0) {
+		process.stderr.write(result.stdout);
+		process.stderr.write(result.stderr);
+		console.error(`cannot update: npm install failed. A global install needs write access to npm's prefix; run it yourself, with sudo if that is how your npm is set up:\n  ${command}`);
+		return 1;
+	}
+	console.log(`Updated orqi ${VERSION} -> ${version} (npm)`);
+	console.log(`  Release notes: https://github.com/${REPO}/releases/tag/v${version}`);
+	return 0;
 }
