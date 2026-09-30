@@ -1,8 +1,8 @@
 /**
  * Self-update: `orqi update`, aligned with the `orq` CLI's `update` command.
  *
- * orqi ships as a single binary with no package manager watching it, so
- * nothing tells the user a newer release exists unless orqi checks itself.
+ * orqi usually ships as a single binary with no package manager watching it,
+ * so nothing tells the user a newer release exists unless orqi checks itself.
  * Once a day (same cadence and same silence-on-failure contract as
  * src/skills.ts) the CLI asks GitHub's releases API for the latest tag and
  * caches the answer; the header surfaces it as a one-line note. The check
@@ -10,7 +10,10 @@
  * costs nothing because the worst acceptable outcome is "the notice is a day
  * stale", never a slow or broken startup.
  *
- * The swap itself replaces the binary with `renameSync`, never by
+ * How the update lands depends on the install: npm installs are handed to
+ * npm (`updateViaNpm`), Homebrew and source checkouts are refused with the
+ * command that does work, and a plain binary is swapped in place. That swap
+ * replaces the binary with `renameSync`, never by
  * extracting a tarball over the running executable: GNU tar truncates rather
  * than unlinking, so overwriting a busy file is ETXTBSY on Linux while bsdtar
  * on macOS unlinks first and quietly succeeds. A rename lands the new file
@@ -265,10 +268,10 @@ export function updateCommand(method: InstallMethod): string {
 }
 
 /** `updateCommand` for the running orqi. */
-export function currentUpdateCommand(): string {
+export function currentUpdateCommand(execPath: string = process.execPath): string {
 	// Only renders a hint, so an unresolvable path must not break boot.
 	try {
-		return updateCommand(installMethod(realpathSync(process.execPath)));
+		return updateCommand(installMethod(realpathSync(execPath)));
 	} catch {
 		return updateCommand("binary");
 	}
@@ -343,9 +346,9 @@ export async function maybeCheckUpdate(agentDir: string): Promise<void> {
 	}
 }
 
-const USAGE = `orqi update - replace this binary with the latest published release
+const USAGE = `orqi update - update orqi to the latest published release
 
-  orqi update                  download and install the latest release
+  orqi update                  install the latest release (through npm for an npm install)
   orqi update --check          report what is available, change nothing
   orqi update --check --json   machine-readable output (requires --check)
 
@@ -445,7 +448,7 @@ export async function runUpdate(args: string[], agentDir: string, options: RunUp
 		return 0;
 	}
 
-	if (method === "npm") return updateViaNpm(version);
+	if (method === "npm") return updateViaNpm(version, target);
 
 	const asset = assetName();
 	if (!asset) {
@@ -578,27 +581,60 @@ export async function runUpdate(args: string[], agentDir: string, options: RunUp
  * npm owns the files of an npm install; writing into node_modules behind its
  * back is how a global install becomes unrepairable, so npm does the update.
  * The exact version is installed rather than "latest", so what lands is what
- * was reported. When npm cannot do it (not on PATH, no write access to its
- * prefix), the command is printed for the user to run.
+ * was reported.
+ *
+ * Only a copy inside the global root of the `npm` on PATH is updated this way.
+ * A project-local install, the npx cache, a bun or pnpm global, or a global
+ * under another Node all sit in some `node_modules` too, and `npm install -g`
+ * there would put a second copy elsewhere and report success over a running
+ * orqi that never changed. Those, and any npm failure, get the command
+ * printed instead.
  */
-function updateViaNpm(version: string): number {
-	const command = `npm install -g ${NPM_PACKAGE}@${version}`;
+function updateViaNpm(version: string, target: string): number {
+	const args = ["install", "-g", `${NPM_PACKAGE}@${version}`];
+	const command = `npm ${args.join(" ")}`;
 	const npm = Bun.which("npm", { PATH: process.env.PATH });
 	if (!npm) {
 		console.error(`cannot update: this orqi came from npm, but npm is not on PATH. Run:\n  ${command}`);
 		return 1;
 	}
+	let root: string;
+	try {
+		root = realpathSync(Bun.spawnSync([npm, "root", "-g"], { timeout: 30_000 }).stdout.toString().trim());
+	} catch {
+		root = "";
+	}
+	if (!root || !target.startsWith(root + sep)) {
+		console.error(
+			`cannot update: this orqi (${target}) is not in the global npm root${root ? ` (${root})` : ""}. ` +
+				`Update it with the tool that installed it, or run:\n  ${command}`,
+		);
+		return 1;
+	}
 	console.error(`Updating orqi ${VERSION} -> ${version} (npm)`);
 	// Captured and replayed only on failure: npm's success chatter adds nothing
-	// to the two lines below, but its E404 or EACCES is the whole explanation.
-	const result = Bun.spawnSync([npm, "install", "-g", `${NPM_PACKAGE}@${version}`]);
+	// to the two lines below, and its error code picks the advice. The timeout
+	// bounds npm's network retries, which otherwise stall with nothing on screen.
+	const result = Bun.spawnSync([npm, ...args], { timeout: 300_000 });
 	if (result.exitCode !== 0) {
 		process.stderr.write(result.stdout);
 		process.stderr.write(result.stderr);
-		console.error(`cannot update: npm install failed. A global install needs write access to npm's prefix; run it yourself, with sudo if that is how your npm is set up:\n  ${command}`);
+		console.error(`cannot update: ${npmFailure(result.stderr.toString(), version, result.exitCode === null)}. Run it yourself:\n  ${command}`);
 		return 1;
 	}
 	console.log(`Updated orqi ${VERSION} -> ${version} (npm)`);
 	console.log(`  Release notes: https://github.com/${REPO}/releases/tag/v${version}`);
 	return 0;
+}
+
+/**
+ * The version comes from GitHub's latest release, which goes out minutes
+ * before npm has it, so "not on npm yet" is a normal failure and must not be
+ * read as a permissions problem.
+ */
+export function npmFailure(stderr: string, version: string, timedOut = false): string {
+	if (timedOut) return "npm did not finish within 5 minutes";
+	if (/\b(E404|ETARGET)\b/.test(stderr)) return `v${version} is released on GitHub but not on npm yet; try again in a few minutes`;
+	if (/\b(EACCES|EPERM)\b/.test(stderr)) return "npm has no write access to its global prefix; use sudo if that is how your npm is set up";
+	return "npm install failed (see npm's output above)";
 }

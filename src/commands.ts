@@ -325,7 +325,7 @@ export function orqCommands(
 		// Check-only, deliberately: swapping the binary here would succeed while
 		// this process keeps running the old code, so the session would tell the
 		// user they are updated when the running binary is not. `orqi update`
-		// outside the session (a fresh process) does the actual swap.
+		// outside the session (a fresh process) does the actual update.
 		pi.registerCommand("update", {
 			description: "check for a newer orqi release",
 			handler: async (_args, ctx) => {

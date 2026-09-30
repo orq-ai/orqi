@@ -18,11 +18,6 @@
     "bin/orqi.js",
     "README.md"
   ],
-  "optionalDependencies": {
-    "@orq-ai/orqi-darwin-arm64": "0.0.0",
-    "@orq-ai/orqi-darwin-x64": "0.0.0",
-    "@orq-ai/orqi-linux-x64": "0.0.0"
-  },
   "engines": {
     "node": ">=14"
   },

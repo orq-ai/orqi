@@ -5,10 +5,10 @@ on what it installs, so this sidesteps Gatekeeper without a Developer ID
 certificate. Unlike Homebrew it also reaches people who have Node but not brew,
 which for a platform CLI is most of the audience.
 
-## The shape that works
+## Package layout
 
-The binaries are 25 to 36 MB each. Publishing all three in one package makes
-every user download all three, so use the pattern esbuild and swc use:
+The binaries are 25 to 36 MB each. Publishing all three in one package would
+make every user download all three, so orqi uses the pattern esbuild and swc use:
 
 - `@orq-ai/orqi` is a tiny wrapper with **no binary at all**.
 - `@orq-ai/orqi-darwin-arm64`, `-darwin-x64`, `-linux-x64` each carry one
@@ -22,7 +22,9 @@ every user download all three, so use the pattern esbuild and swc use:
   the one matching the host and silently skips the rest, which is exactly what
   `optionalDependencies` is for.
 
-The wrapper's `bin` entry, `npm/orqi/bin/orqi.js`, is a launcher that resolves the
+Only the wrapper is committed, in `npm/orqi`; `npm/stage.mjs` writes the three
+platform packages and the wrapper's `optionalDependencies` from its one platform
+list. The wrapper's `bin` entry, `npm/orqi/bin/orqi.js`, is a launcher that resolves the
 platform package and runs the real binary as a child process. An unsupported platform or a skipped
 optional dependency gets a readable message instead of a `MODULE_NOT_FOUND` stack.
 
@@ -53,12 +55,16 @@ version=<x.y.z>
 gh release download "v$version" -R orq-ai/orqi -p 'orqi-*.tar.gz' --dir /tmp/orqi-tarballs
 node npm/stage.mjs "$version" /tmp/orqi-tarballs /tmp/orqi-npm
 npm login
-for pkg in orqi-darwin-arm64 orqi-darwin-x64 orqi-linux-x64 orqi; do
-  (cd "/tmp/orqi-npm/$pkg" && npm publish --access public)
+mkdir -p /tmp/orqi-packs
+for pkg in /tmp/orqi-npm/*/; do npm pack "$pkg" --pack-destination /tmp/orqi-packs; done
+for pack in /tmp/orqi-packs/orq-ai-orqi-*-"$version".tgz /tmp/orqi-packs/orq-ai-orqi-"$version".tgz; do
+  npm publish "$pack" --access public
 done
 ```
 
-The wrapper goes last because its `optionalDependencies` must already exist.
+This publishes the packed `.tgz` files, the same form `publish-npm` uses, so the
+first manual publish also proves npm accepts it. The wrapper goes last because
+its `optionalDependencies` must already exist.
 Then, for each of the four packages, open it on npmjs.com, go to Settings,
 find the trusted publisher section, pick GitHub Actions and enter organization `orq-ai`,
 repository `orqi` and workflow filename `release.yml`.

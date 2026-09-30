@@ -56,42 +56,32 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes --verify-tag \
             || gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
 
-  # npm comes after the GitHub release and packs its tarballs, so the three
-  # platform packages carry the same bytes install.sh downloads. npm versions
-  # cannot be republished, so the packed files are installed on every supported
-  # platform before anything reaches the registry, and publish-npm uploads
-  # exactly those files. Prerelease tags stop here: stage.mjs only takes x.y.z
-  # and nothing sets an npm dist-tag other than latest.
-  stage-npm:
-    needs: release
-    if: ${{ !contains(github.ref_name, '-') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Stage and pack the npm packages from the release tarballs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # npm packs the tarballs just uploaded, so the three platform packages
+      # carry the same bytes install.sh downloads. npm versions cannot be
+      # republished, so the packed files are installed on every supported
+      # platform (test-npm) before anything reaches the registry, and
+      # publish-npm uploads exactly those files. Prerelease tags stop here:
+      # stage.mjs only takes x.y.z and nothing sets an npm dist-tag other than
+      # latest.
+      - name: Stage and pack the npm packages
+        if: ${{ !contains(github.ref_name, '-') }}
         run: |
-          gh release download "$GITHUB_REF_NAME" -p 'orqi-*.tar.gz' --dir /tmp/tarballs
-          node npm/stage.mjs "${GITHUB_REF_NAME#v}" /tmp/tarballs /tmp/npm
+          node npm/stage.mjs "${GITHUB_REF_NAME#v}" dist /tmp/npm
           mkdir -p dist/packs
           for pkg in /tmp/npm/*/; do
             npm pack "$pkg" --pack-destination dist/packs
           done
 
       - uses: actions/upload-artifact@v4
+        if: ${{ !contains(github.ref_name, '-') }}
         with:
           name: npm-packs
           path: dist/packs
           if-no-files-found: error
 
   test-npm:
-    needs: stage-npm
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
     strategy:
       fail-fast: false
       matrix:
@@ -104,8 +94,8 @@ jobs:
           name: npm-packs
           path: packs
 
-      # None of the platform packages are on npm yet, so npm skips the
-      # wrapper's optionalDependencies; the launcher finds the platform package
+      # This version of the platform packages is not on npm yet, so npm skips
+      # the wrapper's optionalDependencies; the launcher finds the platform package
       # installed next to it from the local file instead.
       - name: Install the packed files and check the version
         run: |
@@ -127,9 +117,10 @@ jobs:
   # Trusted publishing checks the workflow file the job runs in, so this stays
   # in release.yml; a workflow_dispatch retry from another file would be
   # refused. A failed publish is retried with "Re-run failed jobs", and
-  # versions already on npm are skipped. Never use "Re-run all jobs" once npm
-  # has a version: it re-runs release, which rebuilds tarballs that no longer
-  # match npm's bytes.
+  # versions already on npm with identical files are skipped. Never use
+  # "Re-run all jobs" once npm has a version: it re-runs release, which
+  # rebuilds and clobbers the GitHub tarballs, and the file comparison below
+  # then fails with GitHub and npm shipping different binaries.
   publish-npm:
     needs: test-npm
     runs-on: ubuntu-latest

@@ -10,18 +10,17 @@
 const { spawn } = require('child_process');
 const path = require('path');
 
-const platformPackages = {
-  'darwin-arm64': '@orq-ai/orqi-darwin-arm64',
-  'darwin-x64':   '@orq-ai/orqi-darwin-x64',
-  'linux-x64':    '@orq-ai/orqi-linux-x64',
-};
+// npm/stage.mjs writes one optionalDependency per published platform, so the
+// manifest is the list of what exists.
+const platformPackages = Object.keys(require('../package.json').optionalDependencies || {});
 
 const key = `${process.platform}-${process.arch}`;
-const pkg = platformPackages[key];
+const pkg = `@orq-ai/orqi-${key}`;
+const reinstall = () => console.error('Reinstall with:\n  npm install -g @orq-ai/orqi');
 
-if (!pkg) {
+if (!platformPackages.includes(pkg)) {
   console.error(`@orq-ai/orqi: no prebuilt binary for ${key}.`);
-  console.error(`Supported platforms: ${Object.keys(platformPackages).join(', ')}.`);
+  console.error(`Supported platforms: ${platformPackages.map((name) => name.replace('@orq-ai/orqi-', '')).join(', ')}.`);
   console.error('Open an issue at https://github.com/orq-ai/orqi/issues');
   process.exit(1);
 }
@@ -35,8 +34,7 @@ try {
   if (err.code !== 'MODULE_NOT_FOUND') throw err;
   console.error(`@orq-ai/orqi: the platform package ${pkg} was not installed.`);
   console.error('This can happen if --no-optional / --omit=optional was passed to npm.');
-  console.error('Reinstall with:');
-  console.error('  npm install -g @orq-ai/orqi');
+  reinstall();
   process.exit(1);
 }
 
@@ -44,21 +42,18 @@ const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
 
 // A terminal's Ctrl-C already reaches the binary through the process group,
 // so the shim only has to outlive it. A signal sent to this pid alone (kill,
-// a supervisor, a closing terminal) would otherwise orphan the binary.
+// a supervisor, a closing terminal) would otherwise orphan the binary. A
+// SIGINT sent to this pid alone is dropped on purpose: forwarding it would
+// deliver every terminal Ctrl-C to the binary twice.
 process.on('SIGINT', () => {});
 for (const signal of ['SIGTERM', 'SIGHUP']) {
   process.on(signal, () => child.kill(signal));
 }
 
+// A missing or non-executable binary means a damaged install either way.
 child.on('error', (err) => {
-  if (err.code === 'ENOENT') {
-    console.error(`@orq-ai/orqi: binary not found at ${binaryPath}`);
-  } else if (err.code === 'EACCES') {
-    console.error(`@orq-ai/orqi: ${binaryPath} is not executable. Reinstall with:`);
-    console.error('  npm install -g @orq-ai/orqi');
-  } else {
-    console.error(`@orq-ai/orqi: could not start ${binaryPath}: ${err.message}`);
-  }
+  console.error(`@orq-ai/orqi: could not start ${binaryPath}: ${err.message}`);
+  reinstall();
   process.exit(1);
 });
 

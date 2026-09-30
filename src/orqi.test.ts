@@ -1,7 +1,7 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { apiBaseUrl, credentialCandidates, credentialsFile, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
@@ -38,6 +38,7 @@ import {
 	type UpdateCache,
 	pendingUpdate,
 	currentUpdateCommand,
+	npmFailure,
 	updateCommand,
 	writeCache,
 } from "./update.ts";
@@ -456,29 +457,54 @@ test("the update hint names the command that works for each install method", () 
 	expect(updateCommand("source")).toBe("git pull");
 	// Under bun test the running binary is bun itself, which reads as source.
 	expect(currentUpdateCommand()).toBe("git pull");
+	// The running path is realpath'd first: a Homebrew symlink resolves into its Cellar.
+	const root = mkdtempSync(join(tmpdir(), "orqi-hint-"));
+	const cellar = join(root, "Cellar", "orqi", "0.1.0", "bin", "orqi");
+	mkdirSync(dirname(cellar), { recursive: true });
+	writeVersionBinary(cellar, "0.1.0");
+	symlinkSync(cellar, join(root, "orqi"));
+	expect(currentUpdateCommand(join(root, "orqi"))).toBe("brew upgrade orq-ai/tap/orqi");
+	// A path that cannot resolve is a hint, not a boot failure.
+	expect(currentUpdateCommand(join(root, "missing", "orqi"))).toBe("orqi update");
+	rmSync(root, { recursive: true, force: true });
 });
+
+const STAGE = join(import.meta.dir, "..", "npm", "stage.mjs");
+const DIST_LABELS = [...readFileSync(join(import.meta.dir, "..", "dist.ts"), "utf8").matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
+
+/** One release tarball per dist.ts label, each binary printing its own label. */
+function stageTarballs(root: string, mode = 0o755): string {
+	const tarballs = join(root, "tarballs");
+	mkdirSync(tarballs, { recursive: true });
+	for (const label of DIST_LABELS) {
+		const payload = join(root, label);
+		mkdirSync(payload);
+		writeVersionBinary(join(payload, "orqi"), label);
+		chmodSync(join(payload, "orqi"), mode);
+		Bun.spawnSync(["tar", "-czf", join(tarballs, `orqi-${label}.tar.gz`), "-C", payload, "orqi"]);
+	}
+	return tarballs;
+}
 
 test("npm/stage.mjs builds publishable packages from release tarballs", () => {
 	// npm cannot take new bytes under a published version, so a staging bug
-	// (a pin left at 0.0.0, a lost exec bit) would ship for good.
+	// (a pin left at 0.0.0, a lost exec bit, a binary in the wrong platform's
+	// package) would ship for good.
 	const root = mkdtempSync(join(tmpdir(), "orqi-stage-"));
-	const tarballs = join(root, "tarballs");
-	mkdirSync(tarballs);
-	for (const label of ["macos-arm64", "macos-x64", "linux-x64"]) {
-		const fixture = join(root, label);
-		mkdirSync(fixture);
-		Bun.spawnSync(["cp", releaseFixture(fixture, "9.9.9"), join(tarballs, `orqi-${label}.tar.gz`)]);
-	}
+	const tarballs = stageTarballs(root);
 	const out = join(root, "out");
-	const stage = (dir: string) => Bun.spawnSync(["node", join(import.meta.dir, "..", "npm", "stage.mjs"), "9.9.9", tarballs, dir]);
+	const stage = (dir: string) => Bun.spawnSync(["node", STAGE, "9.9.9", tarballs, dir]);
 	expect(stage(out).exitCode).toBe(0);
 
 	const manifest = (name: string) => JSON.parse(readFileSync(join(out, name, "package.json"), "utf8"));
-	const platforms = readdirSync(out).filter((name) => name !== "orqi");
-	expect(platforms.sort()).toEqual(["orqi-darwin-arm64", "orqi-darwin-x64", "orqi-linux-x64"]);
+	const platforms = readdirSync(out).filter((name) => name !== "orqi").sort();
+	expect(platforms).toEqual(["orqi-darwin-arm64", "orqi-darwin-x64", "orqi-linux-x64"]);
 	for (const name of platforms) {
-		expect(manifest(name).version).toBe("9.9.9");
-		expect(statSync(join(out, name, "bin", "orqi")).mode & 0o111).not.toBe(0);
+		const [, os, cpu] = name.split("-");
+		expect(manifest(name)).toMatchObject({ name: `@orq-ai/${name}`, version: "9.9.9", os: [os], cpu: [cpu] });
+		const binary = join(out, name, "bin", "orqi");
+		expect(statSync(binary).mode & 0o111).not.toBe(0);
+		expect(Bun.spawnSync([binary]).stdout.toString().trim()).toBe(`${os.replace("darwin", "macos")}-${cpu}`);
 		expect(existsSync(join(out, name, "LICENSE"))).toBe(true);
 	}
 	expect(manifest("orqi").version).toBe("9.9.9");
@@ -486,6 +512,73 @@ test("npm/stage.mjs builds publishable packages from release tarballs", () => {
 
 	// Re-staging into the same directory refuses rather than mixing versions.
 	expect(stage(out).exitCode).toBe(1);
+	rmSync(root, { recursive: true, force: true });
+});
+
+test("npm/stage.mjs refuses a prerelease version and a binary without the exec bit", () => {
+	// release.yml relies on the first to keep prerelease tags off npm, and the
+	// platform packages have no bin entry, so npm would never restore the second.
+	const root = mkdtempSync(join(tmpdir(), "orqi-stage-refuse-"));
+	for (const bad of ["1.2.3-rc.1", "v1.2.3"]) {
+		expect(Bun.spawnSync(["node", STAGE, bad, stageTarballs(join(root, bad)), join(root, bad, "out")]).exitCode).toBe(1);
+	}
+	const plain = Bun.spawnSync(["node", STAGE, "9.9.9", stageTarballs(join(root, "plain"), 0o644), join(root, "plain", "out")]);
+	expect(plain.exitCode).toBe(1);
+	expect(plain.stderr.toString()).toContain("without the exec bit");
+	rmSync(root, { recursive: true, force: true });
+});
+
+test("npm/stage.mjs publishes exactly the platforms dist.ts builds", () => {
+	// A tarball with no npm package leaves those users on install.sh; a package
+	// with no tarball fails every release at staging.
+	const stage = readFileSync(STAGE, "utf8");
+	expect([...stage.matchAll(/label: '([^']+)'/g)].map((m) => m[1]).sort()).toEqual([...DIST_LABELS].sort());
+});
+
+/** A staged wrapper plus this machine's platform package, laid out as npm installs them. */
+function launcherFixture(root: string, binaryScript?: string): string {
+	const modules = join(root, "node_modules", "@orq-ai");
+	const wrapper = join(modules, "orqi");
+	mkdirSync(join(wrapper, "bin"), { recursive: true });
+	writeFileSync(join(wrapper, "bin", "orqi.js"), readFileSync(join(import.meta.dir, "..", "npm", "orqi", "bin", "orqi.js")));
+	const platform = `orqi-${process.platform}-${process.arch}`;
+	writeFileSync(join(wrapper, "package.json"), JSON.stringify({ name: "@orq-ai/orqi", optionalDependencies: { [`@orq-ai/${platform}`]: "9.9.9" } }));
+	if (binaryScript !== undefined) {
+		mkdirSync(join(modules, platform, "bin"), { recursive: true });
+		writeFileSync(join(modules, platform, "package.json"), JSON.stringify({ name: `@orq-ai/${platform}` }));
+		writeFileSync(join(modules, platform, "bin", "orqi"), `#!/bin/sh\n${binaryScript}\n`);
+		chmodSync(join(modules, platform, "bin", "orqi"), 0o755);
+	}
+	return join(wrapper, "bin", "orqi.js");
+}
+
+test("the npm launcher passes the binary's exit code and signal death through", () => {
+	// Scripts and the shell read orqi's status through the launcher, so a
+	// swallowed code or a signal death reported as 0 would lie to them.
+	const root = mkdtempSync(join(tmpdir(), "orqi-launcher-"));
+	const exits = Bun.spawnSync(["node", launcherFixture(join(root, "a"), 'echo "$@"; exit 7'), "--flag", "arg"]);
+	expect(exits.exitCode).toBe(7);
+	expect(exits.stdout.toString().trim()).toBe("--flag arg");
+
+	const killed = Bun.spawnSync(["node", launcherFixture(join(root, "b"), "kill -TERM $$")]);
+	expect(killed.signalCode).toBe("SIGTERM");
+
+	const missing = Bun.spawnSync(["node", launcherFixture(join(root, "c"))]);
+	expect(missing.exitCode).toBe(1);
+	expect(missing.stderr.toString()).toContain("was not installed");
+	expect(missing.stderr.toString()).toContain("npm install -g @orq-ai/orqi");
+	rmSync(root, { recursive: true, force: true });
+});
+
+test("the npm launcher forwards SIGTERM so a killed launcher does not orphan orqi", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-launcher-term-"));
+	const marker = join(root, "got-term");
+	const launcher = launcherFixture(root, `trap 'touch "${marker}"; exit 0' TERM\necho ready\nwhile :; do sleep 0.1; done`);
+	const proc = Bun.spawn(["node", launcher], { stdout: "pipe" });
+	await proc.stdout.getReader().read(); // "ready": the trap is installed
+	proc.kill("SIGTERM");
+	await proc.exited;
+	expect(existsSync(marker)).toBe(true);
 	rmSync(root, { recursive: true, force: true });
 });
 
@@ -1137,7 +1230,9 @@ test("installMethod tells a brew-managed binary from a plain one", () => {
 	expect(installMethod("/opt/homebrew/Cellar/orqi/0.1.0/bin/orqi")).toBe("homebrew");
 	expect(installMethod("/opt/homebrew/bin/orqi")).toBe("binary");
 	expect(installMethod("/opt/homebrew-backup/bin/orqi")).toBe("binary");
-	expect(installMethod("/Users/x/proj/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi")).toBe("npm");
+	// Any node_modules path reads as npm; whether npm may update it is
+	// updateViaNpm's call, against `npm root -g`.
+	expect(installMethod("/usr/local/lib/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi")).toBe("npm");
 	expect(installMethod("/Users/x/.bun/bin/bun")).toBe("source"); // basename isn't "orqi"
 });
 
@@ -1528,32 +1623,50 @@ test("the `update` argv string and the /update command registration stay in sync
 	expect(registered).toContain("update");
 });
 
-async function updateWithFakeNpm(npmScript: string): Promise<{ code: number; npmArgs: string; errors: string }> {
-	const root = mkdtempSync(join(tmpdir(), "orqi-npm-update-"));
+/**
+ * runUpdate on an npm install with a fake npm. `npmScript` handles the
+ * install call (null means no npm on PATH at all); `npm root -g` answers
+ * `globalRoot`, which by default holds the install.
+ */
+async function updateWithFakeNpm(
+	npmScript: string | null,
+	globalRoot?: string,
+): Promise<{ code: number; npmArgs: string; errors: string; logs: string }> {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "orqi-npm-update-")));
 	const fakeBin = join(root, "fake-bin");
 	mkdirSync(fakeBin);
-	writeFileSync(join(fakeBin, "npm"), `#!/bin/sh\nprintf '%s' "$*" > "${root}/npm-args"\n${npmScript}\n`);
-	chmodSync(join(fakeBin, "npm"), 0o755);
-	const execPath = join(root, "lib", "node_modules", "@orq-ai", "orqi-darwin-arm64", "bin", "orqi");
+	const npmRoot = join(root, "lib", "node_modules");
+	mkdirSync(npmRoot, { recursive: true });
+	if (npmScript !== null) {
+		writeFileSync(
+			join(fakeBin, "npm"),
+			`#!/bin/sh\nif [ "$1" = root ]; then echo "${globalRoot ?? npmRoot}"; exit 0; fi\nprintf '%s' "$*" > "${root}/npm-args"\n${npmScript}\n`,
+		);
+		chmodSync(join(fakeBin, "npm"), 0o755);
+	}
+	const execPath = join(npmRoot, "@orq-ai", "orqi-darwin-arm64", "bin", "orqi");
 	mkdirSync(dirname(execPath), { recursive: true });
 	writeVersionBinary(execPath, "0.0.1");
 
-	const prior = { path: process.env.PATH, version: process.env.ORQI_VERSION, error: console.error, log: console.log };
+	const prior = { path: process.env.PATH, version: process.env.ORQI_VERSION, error: console.error, log: console.log, write: process.stderr.write };
 	const errors: string[] = [];
-	process.env.PATH = `${fakeBin}:${prior.path}`;
+	const logs: string[] = [];
+	process.env.PATH = npmScript === null ? fakeBin : `${fakeBin}:${prior.path}`;
 	process.env.ORQI_VERSION = "9.9.9";
 	console.error = (...args) => errors.push(args.join(" "));
-	console.log = () => {};
+	console.log = (...args) => logs.push(args.join(" "));
+	process.stderr.write = ((chunk: string | Uint8Array) => (errors.push(chunk.toString()), true)) as typeof process.stderr.write;
 	try {
 		const code = await runUpdate([], join(root, "agent"), { execPath });
 		const argsFile = join(root, "npm-args");
-		return { code, npmArgs: existsSync(argsFile) ? readFileSync(argsFile, "utf8") : "", errors: errors.join("\n") };
+		return { code, npmArgs: existsSync(argsFile) ? readFileSync(argsFile, "utf8") : "", errors: errors.join("\n"), logs: logs.join("\n") };
 	} finally {
 		process.env.PATH = prior.path;
 		if (prior.version === undefined) delete process.env.ORQI_VERSION;
 		else process.env.ORQI_VERSION = prior.version;
 		console.error = prior.error;
 		console.log = prior.log;
+		process.stderr.write = prior.write;
 		rmSync(root, { recursive: true, force: true });
 	}
 }
@@ -1564,14 +1677,40 @@ test("runUpdate hands an npm install to npm, at the exact version it reports", a
 	const result = await updateWithFakeNpm("exit 0");
 	expect(result.code).toBe(0);
 	expect(result.npmArgs).toBe("install -g @orq-ai/orqi@9.9.9");
+	expect(result.logs).toContain("Updated orqi");
 });
 
-test("runUpdate prints the npm command when npm cannot update", async () => {
-	// The usual cause is a global prefix that needs sudo: npm's own error is the
-	// explanation, and the command is what the user runs next.
+test("runUpdate replays npm's error and prints the command when npm cannot update", async () => {
 	const result = await updateWithFakeNpm("echo 'npm error code EACCES' >&2; exit 243");
 	expect(result.code).toBe(1);
+	expect(result.npmArgs).toBe("install -g @orq-ai/orqi@9.9.9");
+	expect(result.errors).toContain("npm error code EACCES");
+	expect(result.errors).toContain("no write access");
 	expect(result.errors).toContain("npm install -g @orq-ai/orqi@9.9.9");
+});
+
+test("runUpdate leaves an npm-looking install alone when it is not in npm's global root", async () => {
+	// A project-local copy, the npx cache or a bun/pnpm global: npm install -g
+	// would add a second copy elsewhere and report success over this one.
+	const elsewhere = await updateWithFakeNpm("exit 0", homedir());
+	expect(elsewhere.code).toBe(1);
+	expect(elsewhere.npmArgs).toBe("");
+	expect(elsewhere.errors).toContain("not in the global npm root");
+	expect(elsewhere.errors).toContain("npm install -g @orq-ai/orqi@9.9.9");
+
+	const noNpm = await updateWithFakeNpm(null);
+	expect(noNpm.code).toBe(1);
+	expect(noNpm.errors).toContain("npm is not on PATH");
+});
+
+test("npmFailure tells a version npm does not have yet from a permissions problem", () => {
+	// GitHub announces a release minutes before npm has it; sending those users
+	// to sudo would not help.
+	expect(npmFailure("npm error code ETARGET", "9.9.9")).toContain("not on npm yet");
+	expect(npmFailure("npm error code E404", "9.9.9")).toContain("not on npm yet");
+	expect(npmFailure("npm error code EACCES", "9.9.9")).toContain("no write access");
+	expect(npmFailure("npm error code ENOTFOUND", "9.9.9")).toBe("npm install failed (see npm's output above)");
+	expect(npmFailure("", "9.9.9", true)).toContain("did not finish");
 });
 
 test("refusal names both the method and the found path for every channel orqi does not own", () => {
