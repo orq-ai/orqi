@@ -5,10 +5,10 @@ on what it installs, so this sidesteps Gatekeeper without a Developer ID
 certificate. Unlike Homebrew it also reaches people who have Node but not brew,
 which for a platform CLI is most of the audience.
 
-## The shape that works
+## Package layout
 
-The binaries are 25 to 36 MB each. Publishing all three in one package makes
-every user download all three, so use the pattern esbuild and swc use:
+The binaries are 25 to 36 MB each. Publishing all three in one package would
+make every user download all three, so orqi uses the pattern esbuild and swc use:
 
 - `@orq-ai/orqi` is a tiny wrapper with **no binary at all**.
 - `@orq-ai/orqi-darwin-arm64`, `-darwin-x64`, `-linux-x64` each carry one
@@ -22,49 +22,51 @@ every user download all three, so use the pattern esbuild and swc use:
   the one matching the host and silently skips the rest, which is exactly what
   `optionalDependencies` is for.
 
-The wrapper's `bin` entry is a launcher that resolves the platform package and
-execs the real binary:
-
-```js
-#!/usr/bin/env node
-// Resolve through require so npm's own layout rules find the package,
-// wherever it hoisted it to.
-const { spawnSync } = require("node:child_process");
-const pkg = `@orq-ai/orqi-${process.platform}-${process.arch}`;
-let binary;
-try {
-  binary = require.resolve(`${pkg}/orqi`);
-} catch {
-  // A clear message beats a MODULE_NOT_FOUND stack: this is what an unsupported
-  // platform looks like, and the tarball is the honest fallback.
-  console.error(`orqi: no prebuilt binary for ${process.platform}-${process.arch}.`);
-  console.error("Install from https://github.com/orq-ai/orqi/releases instead.");
-  process.exit(1);
-}
-process.exit(spawnSync(binary, process.argv.slice(2), { stdio: "inherit" }).status ?? 1);
-```
+Only the wrapper is committed, in `npm/orqi`; `npm/stage.mjs` writes the three
+platform packages and the wrapper's `optionalDependencies` from its one platform
+list. The wrapper's `bin` entry, `npm/orqi/bin/orqi.js`, is a launcher that resolves the
+platform package and runs the real binary as a child process. An unsupported platform or a skipped
+optional dependency gets a readable message instead of a `MODULE_NOT_FOUND` stack.
 
 ## Publishing
 
-`release.yml` already builds the three tarballs. Add a job that, on the same
-tag, extracts each one into its platform package, sets the version from the tag,
-and publishes all four with `npm publish --access public`. The wrapper must be
-published **last**: it depends on the platform packages existing.
+Tagged releases publish on their own; the release process is in `AGENTS.md`
+under "Releasing". Two things `npm/stage.mjs` and the workflow rely on:
 
-Two things that bite:
+- **The exec bit.** `npm pack` keeps mode bits, but only the ones set when the
+  package is assembled. `stage.mjs` extracts the binary from the release
+  tarball rather than copying it, and fails if it comes out without the bit.
+  The platform packages have no `bin` entry, so npm never marks `bin/orqi`
+  executable on its own.
+- **`--access public`.** Scoped packages default to private.
 
-- **The exec bit.** `npm pack` preserves mode bits, but only if they are set
-  when the package is assembled. Extract from the tarball rather than copying a
-  file that lost `+x` somewhere.
-- **`@orq-ai` scope.** Needs an npm org and a publish token in repo secrets.
-  Scoped packages default to private, hence `--access public`.
+## First publish (once, by hand)
 
-## Which to do first
+Trusted publishing is configured per package on npmjs.com, and only on a
+package that already exists. Until an `@orq-ai` npm org member does the steps
+below, every tag's `publish-npm` job fails, while the GitHub release itself
+still goes out.
 
-npm, if you only do one. It reaches more of this audience, and the release job
-is a natural extension of what already builds the tarballs. Homebrew is the
-smaller change but a narrower audience, and it needs a second repo
-(`orq-ai/homebrew-tap`) to exist first.
+Use a stable release tag built after npm support landed, so the first npm
+version already tells npm users how to update with npm.
 
-Neither replaces `install.sh`: it stays the zero-dependency path for anyone who
-has neither brew nor node.
+```bash
+version=<x.y.z>
+gh release download "v$version" -R orq-ai/orqi -p 'orqi-*.tar.gz' --dir /tmp/orqi-tarballs
+node npm/stage.mjs "$version" /tmp/orqi-tarballs /tmp/orqi-npm
+npm login
+mkdir -p /tmp/orqi-packs
+for pkg in /tmp/orqi-npm/*/; do npm pack "$pkg" --pack-destination /tmp/orqi-packs; done
+for pack in /tmp/orqi-packs/orq-ai-orqi-*-"$version".tgz /tmp/orqi-packs/orq-ai-orqi-"$version".tgz; do
+  npm publish "$pack" --access public
+done
+```
+
+This publishes the packed `.tgz` files, the same form `publish-npm` uses, so the
+first manual publish also proves npm accepts it. The wrapper goes last because
+its `optionalDependencies` must already exist.
+Then, for each of the four packages, open it on npmjs.com, go to Settings,
+find the trusted publisher section, pick GitHub Actions and enter organization `orq-ai`,
+repository `orqi` and workflow filename `release.yml`.
+
+`install.sh` stays the zero-dependency path for anyone without Node.

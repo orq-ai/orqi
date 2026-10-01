@@ -29,7 +29,7 @@ import { connectOrqTools, firstLine } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { createSubagentTool } from "./subagent.ts";
-import { maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
+import { currentUpdateCommand, maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
 
 const oneShot = process.argv[2];
 const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent");
@@ -213,7 +213,7 @@ const startupLine = [header.name, header.workspace, header.status, orq.credentia
 // The header's "update available" line is the only place a pending update is
 // announced: it used to also ride in the status list above, saying the same
 // thing twice in one screenful.
-header.updateAvailable = update !== undefined;
+header.updateCommand = update === undefined ? undefined : currentUpdateCommand();
 
 // Daily skills update and update-availability check, after the session is
 // wired: boot must never wait on GitHub, and a failure in either costs

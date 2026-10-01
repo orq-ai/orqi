@@ -22,14 +22,21 @@ orqi "why did my agent fail today?"    # one-shot, prints and exits
 curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh
 ```
 
-Pulls the latest release binary, no clone, no Bun.
+Pulls the latest release binary, no clone, no Bun. With Node installed, npm works too:
+
+```bash
+npm install -g @orq-ai/orqi
+```
+
+npm installs only the binary for your platform (macOS arm64, macOS x64, linux x64). `orqi update`
+works for both: an npm install is updated through npm.
 
 Then authenticate once with either the [orq CLI](https://github.com/orq-ai/orq-cli)
 (`orq auth login`) or a valid `ORQ_API_KEY`. Keep the orq CLI on `PATH` either way: `/whoami`,
 `/workspace` and `/doctor` shell out to it.
 
 ```bash
-orqi update             # replace this binary with the latest release
+orqi update             # update to the latest release (through npm for an npm install)
 ```
 
 orqi checks once a day and surfaces a header note when a newer release exists; `orqi update` itself

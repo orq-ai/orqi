@@ -29,9 +29,10 @@ orqi
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
 | `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, plus `/tools /whoami /workspace /reconnect /doctor /whatsnew /update` |
-| `src/update.ts` | `orqi update`: daily release check, header note, the binary swap |
+| `src/update.ts` | `orqi update`: daily release check, header note, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
+| `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
 
 `skillResources` in `src/skills.ts` owns both halves of the live-skills wiring, so the path order
 and the diagnostic fold cannot name different directories. It passes the daily-updated

@@ -55,3 +55,139 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes --verify-tag \
             || gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
+
+      # npm packs the tarballs just uploaded, so the three platform packages
+      # carry the same bytes install.sh downloads. npm versions cannot be
+      # republished, so the packed files are installed on every supported
+      # platform (test-npm) before anything reaches the registry, and
+      # publish-npm uploads exactly those files. Prerelease tags stop here:
+      # stage.mjs only takes x.y.z and nothing sets an npm dist-tag other than
+      # latest.
+      - name: Stage and pack the npm packages
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          node npm/stage.mjs "${GITHUB_REF_NAME#v}" dist /tmp/npm
+          mkdir -p dist/packs
+          for pkg in /tmp/npm/*/; do
+            npm pack "$pkg" --pack-destination dist/packs
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !contains(github.ref_name, '-') }}
+        with:
+          name: npm-packs
+          path: dist/packs
+          if-no-files-found: error
+
+  test-npm:
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packs
+          path: packs
+
+      # This version of the platform packages is not on npm yet, so npm skips
+      # the wrapper's optionalDependencies; the launcher finds the platform package
+      # installed next to it from the local file instead.
+      - name: Install the packed files and check the version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          platform=$(node -p 'process.platform + "-" + process.arch')
+          npm install -g "./packs/orq-ai-orqi-$platform-$version.tgz" "./packs/orq-ai-orqi-$version.tgz"
+          [ "$(orqi --version)" = "$version" ]
+          # The real install path has to read as npm, or `orqi update` would
+          # overwrite a file inside node_modules. The install method prints even
+          # when the GitHub check itself fails, so its exit code is ignored.
+          out=$(orqi update --check 2>&1) || true
+          grep -q "install_method: npm" <<<"$out"
+          # An unknown flag exits 1 before any work: a non-zero exit has to come
+          # back through the launcher.
+          code=0
+          orqi update --bogus 2>/dev/null || code=$?
+          [ "$code" = 1 ]
+
+  # Trusted publishing checks the workflow file the job runs in, so this stays
+  # in release.yml; a workflow_dispatch retry from another file would be
+  # refused. A failed publish is retried with "Re-run failed jobs", and
+  # versions already on npm with identical files are skipped. Never use
+  # "Re-run all jobs" once npm has a version: it re-runs release, which
+  # rebuilds and clobbers the GitHub tarballs, and the file comparison below
+  # then fails with GitHub and npm shipping different binaries.
+  publish-npm:
+    needs: test-npm
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      # Trusted publishing needs npm 11.5.1 or later, which ships with Node
+      # 24.5 and up; check-latest keeps a cached older 24.x off the runner.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          check-latest: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packs
+          path: packs
+
+      # The wrapper goes last: its optionalDependencies must already exist.
+      # Only a 404 means "not published yet"; any other npm view failure stops
+      # the job rather than turning into a misleading publish error. A version
+      # already on npm must hold the same files as this build, or npm and the
+      # GitHub release would ship different binaries; the files are compared,
+      # not the .tgz, since npm versions can compress the same files differently.
+      - name: Publish packages that are not on npm yet
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for pack in ./packs/orq-ai-orqi-*-"$version".tgz ./packs/orq-ai-orqi-"$version".tgz; do
+            pkg=${pack#./packs/orq-ai-}
+            pkg=${pkg%-"$version".tgz}
+            if out=$(npm view "@orq-ai/$pkg@$version" version 2>&1); then
+              mkdir -p "/tmp/compare/$pkg/npm" "/tmp/compare/$pkg/ours"
+              (cd "/tmp/compare/$pkg/npm" && npm pack "@orq-ai/$pkg@$version" >/dev/null && tar -xzf ./*.tgz)
+              tar -xzf "$pack" -C "/tmp/compare/$pkg/ours"
+              if ! diff -r "/tmp/compare/$pkg/npm/package" "/tmp/compare/$pkg/ours/package"; then
+                echo "::error::@orq-ai/$pkg@$version is already on npm with different files than this build"
+                exit 1
+              fi
+              echo "@orq-ai/$pkg@$version already published with the same files; skipping"
+            elif grep -q E404 <<<"$out"; then
+              npm publish "$pack" --access public
+            else
+              echo "$out" >&2
+              exit 1
+            fi
+          done
+
+  # Installs from the registry the way a user would, on each supported
+  # platform. The registry caches metadata for up to five minutes, so the
+  # retries cover six.
+  verify-npm:
+    needs: publish-npm
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    permissions: {}
+    steps:
+      - name: npm i -g @orq-ai/orqi and check the version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for _ in $(seq 12); do
+            if npm install -g "@orq-ai/orqi@$version" && [ "$(orqi --version)" = "$version" ]; then
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "npm i -g @orq-ai/orqi@$version did not give an orqi printing $version" >&2
+          exit 1

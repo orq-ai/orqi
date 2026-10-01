@@ -1,0 +1,31 @@
+{
+  "name": "@orq-ai/orqi",
+  "version": "0.0.0",
+  "description": "orqi - the orq.ai helper agent CLI",
+  "homepage": "https://github.com/orq-ai/orqi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orq-ai/orqi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/orq-ai/orqi/issues"
+  },
+  "license": "MIT",
+  "bin": {
+    "orqi": "bin/orqi.js"
+  },
+  "files": [
+    "bin/orqi.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "keywords": [
+    "orq",
+    "orq-ai",
+    "cli",
+    "agent",
+    "llm"
+  ]
+}
