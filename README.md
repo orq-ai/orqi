@@ -9,7 +9,7 @@ with your workspace's own tools, models and skills already wired in. No setup, n
 It embeds the [pi coding agent](https://github.com/earendil-works/pi) in-process and boots with the
 orq MCP tools, the orq skills and the orqi system prompt already wired in.
 
-![orqi in the terminal](docs/screenshot-tools.png)
+![orqi answering with orq/auto routing, the inspector beside the transcript: trajectory, signals, context and a teach card](docs/screenshot.png)
 
 ```
 orqi                                   # interactive TUI
