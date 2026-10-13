@@ -8,7 +8,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
-import { brandTitle, contextRows, contextSplit, costLines, repoOf, repriced, topModel } from "./harness.ts";
+import { brandTitle, contextRows, contextSplit, costLines, exitSummary, repoOf, repriced, topModel } from "./harness.ts";
 import { contextLines, minimapRow, minimapRows, minimapSummary, peekLines, sectionLines, signalLines, type ContextSplit } from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
@@ -667,4 +667,28 @@ test("the gate asks before a one-way call, remembers 'this turn' until the answe
 	expect(oneShot?.reason).toContain("rerun orqi interactively");
 	// Not an orq tool: not the gate's business.
 	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: {} }, ui(undefined))).toBeUndefined();
+});
+
+test("the exit summary: who, how long, what it cost, what it changed, where to find it", () => {
+	const trajectory = new Trajectory((_provider, id) => (id.includes("terra") ? 272_000 : 1_050_000));
+	trajectory.fromMessages(session());
+	trajectory.toolStart("g1", "mcp__orq__delete_dataset", { dataset_id: "01M4" });
+	trajectory.gate("g1", "one_way", "allowed");
+	trajectory.toolEnd("g1", false);
+	trajectory.toolStart("g2", "mcp__orq__update_agent", { key: "qa-val-agent" });
+	trajectory.gate("g2", "two_way");
+	trajectory.toolEnd("g2", false);
+	trajectory.toolStart("g3", "mcp__orq__delete_skill", { key: "old" });
+	trajectory.gate("g3", "one_way", "denied");
+	trajectory.toolEnd("g3", true);
+	const lines = exitSummary(trajectory, { workspace: "acme", startedAt: 0, now: 18 * 60_000, thread: "https://my.orq.ai/acme/traces/threads?id=7c1e" });
+	expect(lines).toEqual([
+		"orqi · acme · 18 min · 1 turn · $0.049",
+		"  models    gpt-5.6-terra ×2  $0.045  ·  gpt-5.6-luna ×2  $0.004",
+		"  tools     4 calls · orq_list_traces ×1, delete_dataset ×1 (allowed), update_agent ×1, delete_skill ×1 (denied)",
+		"  changes   1 one-way  delete_dataset dataset_id=01M4  ·  1 two-way  update_agent key=qa-val-agent",
+		"  context   peak 12k of 272k · cache hit 0%",
+		"  thread    https://my.orq.ai/acme/traces/threads?id=7c1e",
+	]);
+	expect(exitSummary(new Trajectory(), { startedAt: 0, now: 1, thread: "7c1e" })).toEqual(["orqi · <1 min · 0 turns · $0", "  tools     none", "  changes   none", "  thread    7c1e"]);
 });

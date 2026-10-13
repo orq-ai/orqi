@@ -23,7 +23,7 @@ import { bareName, hintsSection, schemaLines, TOOL_HINTS, TOOL_PREFIX } from "./
 import { readSkill, skillOrigin } from "./skills.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
-import { shortTool, signals, toAtif, Trajectory, type Step, type StepUsage } from "./trajectory.ts";
+import { argSummary, shortTool, signals, toAtif, Trajectory, type Step, type StepUsage } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
@@ -261,6 +261,46 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 	];
 }
 
+/**
+ * What a session did, printed after the alternate screen closes:
+ *
+ *   orqi · acme · 18 min · 4 turns · $0.047
+ *     models    gpt-5.6-luna ×3  $0.011  ·  gpt-5.6-sol ×1  $0.036  ·  jev-latest ×4  $0.00008
+ *     tools     9 calls · list_traces ×2, get_span ×3, delete_dataset ×1 (allowed)
+ *     changes   1 one-way  delete_dataset dataset_id=01M4  ·  1 two-way  update_agent key=qa
+ *     context   peak 29k of 1.1M · cache hit 94%
+ *     thread    https://my.orq.ai/acme/traces/threads?id=…
+ */
+export function exitSummary(trajectory: Trajectory, meta: { workspace?: string; startedAt: number; now?: number; thread: string }): string[] {
+	const minutes = Math.round(((meta.now ?? Date.now()) - meta.startedAt) / 60_000);
+	const turns = `${trajectory.turn} turn${trajectory.turn === 1 ? "" : "s"}`;
+	const head = ["orqi", meta.workspace, minutes < 1 ? "<1 min" : `${minutes} min`, turns, dollars(trajectory.totals().cost)].filter(Boolean).join(" · ");
+	const rows = [...trajectory.byModel()].sort((a, b) => b[1].cost - a[1].cost);
+	const tools = trajectory.steps.filter((step) => step.role === "tool");
+	const byTool = new Map<string, { n: number; verdicts: Set<string> }>();
+	for (const step of tools) {
+		const entry = byTool.get(step.label) ?? { n: 0, verdicts: new Set<string>() };
+		entry.n++;
+		if (step.door === "one_way" && (step.gate === "allowed" || step.gate === "denied")) entry.verdicts.add(step.gate);
+		byTool.set(step.label, entry);
+	}
+	const change = (step: Step) => `${step.label}${argSummary(step.args, 1) ? ` ${argSummary(step.args, 1)}` : ""}`;
+	const oneWay = tools.filter((step) => step.door === "one_way" && step.gate === "allowed" && step.status === "ok");
+	const twoWay = tools.filter((step) => step.door === "two_way" && step.status === "ok");
+	const peak = trajectory.samples.reduce<(typeof trajectory.samples)[number] | undefined>((max, sample) => (!max || sample.used > max.used ? sample : max), undefined);
+	const totals = trajectory.totals();
+	const cache = totals.input + totals.cacheRead ? Math.round((totals.cacheRead / (totals.input + totals.cacheRead)) * 100) : undefined;
+	const row = (name: string, text: string) => `  ${name.padEnd(10)}${text}`;
+	return [
+		head,
+		...(rows.length ? [row("models", rows.map(([model, usage]) => `${shortModel(model)} ×${usage.calls}  ${dollars(usage.cost)}`).join("  ·  "))] : []),
+		row("tools", tools.length ? `${tools.length} call${tools.length === 1 ? "" : "s"} · ${[...byTool].map(([name, { n, verdicts }]) => `${name} ×${n}${verdicts.size ? ` (${[...verdicts].join(", ")})` : ""}`).join(", ")}` : "none"),
+		row("changes", oneWay.length || twoWay.length ? [oneWay.length ? `${oneWay.length} one-way  ${oneWay.map(change).join(", ")}` : "", twoWay.length ? `${twoWay.length} two-way  ${twoWay.map(change).join(", ")}` : ""].filter(Boolean).join("  ·  ") : "none"),
+		...(peak ? [row("context", `peak ${tokens(peak.used)} of ${tokens(peak.window)}${cache !== undefined ? ` · cache hit ${cache}%` : ""}`)] : []),
+		row("thread", meta.thread),
+	];
+}
+
 export function orqHarness(deps: HarnessDeps) {
 	return (pi: ExtensionAPI) => {
 		let ctxRef: ExtensionContext | undefined;
@@ -286,6 +326,7 @@ export function orqHarness(deps: HarnessDeps) {
 		const shownConcepts = new Set<string>();
 		/** The last step id a previous run reached: steering advances `turn` more than once per run. */
 		let runFrom = 0;
+		let startedAt = Date.now();
 		/** Read on session start, after each run and on a model switch: never in a render, where a handle may be stale. */
 		const measure = (ctx: ExtensionContext) => {
 			try {
@@ -591,13 +632,26 @@ export function orqHarness(deps: HarnessDeps) {
 			measure(ctx);
 			card = undefined;
 			shownConcepts.clear();
+			startedAt = Date.now();
 			runFrom = trajectory.steps.at(-1)?.id ?? 0;
 			if (ctx.mode !== "tui") return;
 			installFooter(ctx);
 			ctx.ui.setWorkingIndicator({ frames: SPINNER.map((f) => ctx.ui.theme.fg("accent", f)), intervalMs: 80 });
 		});
 		// This handle dies with its session: stop everything that would outlive it.
-		pi.on("session_shutdown", () => {
+		pi.on("session_shutdown", (event, ctx) => {
+			// On quit pi has left the alternate screen by now and prints "To resume" next,
+			// so these lines land just above it. Never studio() here: it fetches.
+			if (event.reason === "quit" && ctx.mode === "tui" && trajectory.turn > 0) {
+				try {
+					const workspace = process.env.ORQI_WORKSPACE ?? resolvedWorkspace ?? deps.workspace();
+					const id = ctx.sessionManager.getSessionId();
+					const thread = looksLikeKey(workspace) ? threadUrl(studioHost(apiBaseUrl()), workspace, id) : id;
+					process.stdout.write(`\n${exitSummary(trajectory, { workspace, startedAt, thread }).join("\n")}\n\n`);
+				} catch {
+					// A summary is never worth a failed exit.
+				}
+			}
 			if (spinTimer) clearInterval(spinTimer);
 			spinTimer = undefined;
 			releaseKeys?.();
