@@ -124,7 +124,7 @@ export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
 	});
 	return [
 		...logo,
-		`  ${color(info.name.toUpperCase(), TEXT)} ${color(info.version, MUTED)}`,
+		`  ${color(`${info.name} (aka TonyBot)`, TEXT)} ${color(info.version, MUTED)}`,
 		"",
 		...detail.map((line) => (line ? `${indent}${line}` : "")),
 		...footer,

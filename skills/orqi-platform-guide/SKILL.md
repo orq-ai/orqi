@@ -1,5 +1,5 @@
 ---
-name: platform-guide
+name: orqi-platform-guide
 description: >
   Answer any question about orq.ai features, concepts, API patterns, and best
   practices. Always grounded in live documentation via search_docs. Covers agents,
@@ -47,9 +47,9 @@ This skill doesn't have a rigid checklist — it's conversational. But follow th
 
 ## When NOT to use
 
-- **Want to build something?** → use `build-agent`, `build-evaluator`, etc.
-- **Want to debug something?** → use `investigate-root-cause`, `debug-conversation`
-- **Want analytics?** → use `workspace-health-check`
+- **Want to build something?** → use `orq-build-agent`, `orq-build-evaluator`, etc.
+- **Want to debug something?** → use `orqi-investigate-root-cause`, `orqi-debug-conversation`
+- **Want analytics?** → use `orqi-workspace-health-check`
 
 ## Core Concepts Reference
 
@@ -141,7 +141,7 @@ Use `search_docs` to get current details. This reference helps you know WHAT to 
 ## Companion Skills
 
 After answering, bridge to action:
-- "Want to set up tracing?" → `setup-observability`
-- "Want to build an agent?" → `build-agent`
-- "Want to create an evaluator?" → `build-evaluator`
-- "Want to see how your workspace is doing?" → `workspace-health-check`
+- "Want to set up tracing?" → `orq-setup-observability`
+- "Want to build an agent?" → `orq-build-agent`
+- "Want to create an evaluator?" → `orq-build-evaluator`
+- "Want to see how your workspace is doing?" → `orqi-workspace-health-check`

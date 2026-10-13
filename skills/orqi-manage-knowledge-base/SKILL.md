@@ -1,5 +1,5 @@
 ---
-name: manage-knowledge-base
+name: orqi-manage-knowledge-base
 description: >
   Guide users through knowledge base creation, document upload, chunking strategy
   selection (token/sentence/recursive/semantic/agentic), and retrieval quality
@@ -53,8 +53,8 @@ Knowledge Base Setup:
 
 ## When NOT to use
 
-- **Building the agent itself?** → use `build-agent`
-- **Debugging tool calls?** → use `investigate-root-cause`
+- **Building the agent itself?** → use `orq-build-agent`
+- **Debugging tool calls?** → use `orqi-investigate-root-cause`
 - **Memory (not documents)?** → different — memory stores are for conversation state
 
 ## Chunking Strategies
@@ -166,7 +166,7 @@ Is the document structured (markdown/HTML with headers)?
 
 ## Companion Skills
 
-- KB attached, need to test quality → `run-experiment`
-- Agent not using KB correctly → `investigate-root-cause`
-- Need to build the agent → `build-agent`
-- Retrieval quality bad → iterate on chunking, or `optimize-prompt` for query reformulation
+- KB attached, need to test quality → `orq-run-experiment`
+- Agent not using KB correctly → `orqi-investigate-root-cause`
+- Need to build the agent → `orq-build-agent`
+- Retrieval quality bad → iterate on chunking, or `orq-improve-agent` for query reformulation

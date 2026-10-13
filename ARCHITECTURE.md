@@ -89,9 +89,9 @@ whoami cannot answer. That is the only host variable orqi reads.
 vars, the three-key token lookup and every failure message - as tables.
 
 Credentials are tried in order (the key pi's `/login` stored, then a pinned profile's key, then
-`ORQ_API_KEY`, then the login session) on the real MCP connection: a
-401 selects the next candidate, and so does a stall, which is the server's problem and no verdict
-on that key; the boot only fails when nothing was accepted (see [AGENTS.md](AGENTS.md) for why
+`ORQ_API_KEY`, then the key `orq auth login --api-key` stored, then the login session) on the
+real MCP connection: a 401 selects the next candidate, and so does a stall, which is the server's
+problem and no verdict on that key; the boot only fails when nothing was accepted (see [AGENTS.md](AGENTS.md) for why
 they are not pre-probed). The startup line always names the credential that won.
 
 The active workspace is called out on the header line and pinned to the footer (`orq:<workspace>`),

@@ -48,15 +48,15 @@ When the user says "create a Skill" without context, ask which one they mean. Th
 - **Build the agent itself?** → `orq-build-agent`
 - **Invoke a deployment or agent?** → `orq-invoke-deployment`
 - **Evaluate an agent that uses the Skill?** → `orq-run-experiment`
-- **Improve the prose inside `instructions`?** → `orq-optimize-prompt` is tuned for system prompts; reuse its clarity heuristics but apply judgment — Skill `instructions` are typically shorter and more capability-scoped.
-- **Debug why a referenced Skill isn't rendering?** → `orq-analyze-trace-failures`
+- **Improve the prose inside `instructions`?** → `orq-improve-agent` is tuned for system prompts; reuse its clarity heuristics but apply judgment — Skill `instructions` are typically shorter and more capability-scoped.
+- **Debug why a referenced Skill isn't rendering?** → `orq-analyze-traces`
 
 ## Companion Skills
 
 - `orq-build-agent` — author the agents whose instructions reference these Skills via `{{skill.<key>}}`
-- `orq-optimize-prompt` — review prose quality for `instructions`
+- `orq-improve-agent` — review prose quality for `instructions`
 - `orq-run-experiment` — verify a Skill change improves downstream behavior
-- `orq-analyze-trace-failures` — diagnose Skills that aren't producing the expected output in production
+- `orq-analyze-traces` — diagnose Skills that aren't producing the expected output in production
 - `orq-cli` — the same Skills CRUD from a shell (`orq skills list|get|create|update|delete`), for scripting or bulk audits. See its "MCP tools or the CLI?" table before choosing.
 
 ## Constraints
@@ -106,7 +106,7 @@ all_skills = []
 while True:
     page = list_skills(limit=200, starting_after=cursor)
     all_skills.extend(page.data)
-    if not page.has_more:
+    if not page.has_more or not page.data:
         break
     cursor = page.data[-1].id  # the response uses "id", not "skill_id" (it's the same value)
 ```
@@ -211,7 +211,7 @@ Use when the user wants to edit an existing Skill.
 2. **Patch fields explicitly.** Only send the fields being changed (`update_skill` is a patch — don't echo back unchanged tags or `instructions`).
 3. **`display_name` rename — DANGER.** The `display_name` IS the lookup key for `{{skill.<display_name>}}` and `{{snippet.<display_name>}}`. Renaming it silently breaks every prompt or agent instruction that references the old name. Before sending a rename, run the reference scan from Phase 5 step 1 and warn the user. Offer to update the references in the same session.
 4. **Soft-retire pattern** — adding a `retired` tag via `update_skill` is the recommended first step before deletion. It's visible in the Studio, reversible, and leaves a clear signal for audits. Reserve `delete_skill` for actual cleanup after the Skill has been confirmed unused.
-5. **`instructions` changes:** if the user is rewriting the body, run a clarity pass first — reuse `orq-optimize-prompt`'s heuristics (clarity, structure, no soft-constraint anti-patterns) but adapt; Skill `instructions` are typically shorter and capability-scoped, not full system prompts.
+5. **`instructions` changes:** if the user is rewriting the body, run a clarity pass first — reuse `orq-improve-agent`'s heuristics (clarity, structure, no soft-constraint anti-patterns) but adapt; Skill `instructions` are typically shorter and capability-scoped, not full system prompts.
 6. **Verify** by calling `get_skill` post-update and confirming the change landed.
 
 ### Phase 5: Delete (with reference scan)
@@ -219,9 +219,9 @@ Use when the user wants to edit an existing Skill.
 Use when the user wants to permanently retire a Skill. **`delete_skill` is irreversible** and does not scrub `{{skill.<display_name>}}` / `{{snippet.<display_name>}}` references elsewhere — those references silently fail to resolve after delete. Always offer tagging the Skill with `retired` first (Phase 4 step 4) and only proceed to delete when the user is sure.
 
 1. **Reference scan.** Find places that may reference the Skill by its `display_name`:
-   - Run `search_entities` with `type='prompt'`, `type='deployment'`, and `type='agent'` to enumerate non-skill candidates. You can also use `type='skill'` to enumerate sibling Skills — but note that `search_entities` only matches **metadata** (`display_name`, `key`, `description`) not body text, so it cannot find `{{skill.X}}` / `{{snippet.X}}` references inside instructions.
-   - Therefore, for any candidate returned by `search_entities`, and for all sibling Skills (paginate `list_skills`), fetch the full body and grep it yourself.
-   - For each candidate, fetch its full body (`get_deployment` for deployments; `get_agent` for agents; `get_skill` for sibling Skills' `instructions`; prompt bodies come back from `search_entities`/the prompt-fetch tool) and grep the body for both `{{skill.<display_name>}}` and `{{snippet.<display_name>}}` (case-sensitive — match the Skill's exact `display_name`).
+   - Enumerate candidates exactly as in the [known-caveats.md](resources/known-caveats.md) `delete_skill` workaround: `search_entities` once per `type` (`prompt`, `deployment`, `agent`), each paged to completion, plus every sibling Skill from a paginated `list_skills`. An unpaged `search_entities` call stops at 50 results per type, and a partial scan can wrongly clear a Skill for delete.
+   - `search_entities` only matches **metadata** (`display_name`, `key`, `description`), not body text, so it cannot find `{{skill.X}}` / `{{snippet.X}}` references inside instructions. Fetch every candidate's full body and grep it yourself.
+   - For each candidate, fetch its full body (`get_deployment` for deployments; `get_agent` for agents; `get_skill` for sibling Skills' `instructions`; `orq prompts retrieve <id>` for prompts, since `search_entities` returns metadata only) and grep the body for both `{{skill.<display_name>}}` and `{{snippet.<display_name>}}` (case-sensitive — match the Skill's exact `display_name`).
    - Note: this scan can be expensive in large workspaces. Cache results within the session.
    - If the user has a faster way to grep their workspace (e.g., a synced repo of prompts), prefer that.
 2. **Warn and confirm.** Show the user:

@@ -8,7 +8,7 @@ token refresh and the session file; orqi shells out to it and reads what it is t
 
 ## 1. Which credential
 
-Up to four candidates, best first. None is probed up front — they are tried on the real MCP
+Up to five candidates, best first. None is probed up front — they are tried on the real MCP
 connection, where a 401 selects the next one. A stall past the connect retries moves on too: it is
 the server's problem, not the key's, and a good login session at candidate 3 must not be lost to a
 hang on candidate 2. Only when nothing is accepted does the boot report, and a stall anywhere is
@@ -19,7 +19,8 @@ reported ahead of the rejections.
 | 0 | the key `/login orq` stored | pi's `/login` has been run in some session | `~/.orqi/agent/auth.json` | `/login key` |
 | 1 | the pinned profile's key | a profile is in force | `credentials.json`, by the name whoami reports (see [6](#6-pinning-a-profile)) | `orq profile <name>` |
 | 2 | `ORQ_API_KEY` | it is set, and differs from 0 and 1 | the environment | `ORQ_API_KEY` |
-| 3 | the login session | there is one | `orq auth login`, read through the CLI | `orq login session` |
+| 3 | the stored api-key login | `orq auth login --api-key` was run (CLI 11.1.1+), and it differs from 0 to 2 | `api_key_login_file` named by whoami (`~/.orq/sessions/<host>.apikey.json`, field `apiKey`) | `orq api-key login` |
+| 4 | the login session | there is one | `orq auth login`, read through the CLI | `orq login session` |
 
 The stored `/login` key comes first because pi's model runtime already prefers it over
 `ORQ_API_KEY`: ranking it lower would put the model and the tools on different credentials after a
@@ -40,7 +41,7 @@ same `whoami` payload orqi already reads. orqi takes that.
 |---|---|---|
 | 1 | `server` from `orq auth whoami -o json` | the CLI's resolved answer, which already accounts for `ORQ_SERVER` and for the profile |
 | 2 | `ORQ_SERVER` | only reached when whoami could not answer at all (no CLI, a stall, a dead session) |
-| 3 | `https://api.orq.ai` | the default |
+| 3 | `https://my.orq.ai` | the default, the same one CLI 11 uses (`api.orq.ai` still answers) |
 
 There is one spelling for the host, `ORQ_SERVER`, and both sides mean the same thing by it.
 
@@ -102,6 +103,8 @@ the CLI's own stderr above the login hint.
 | whoami named no file | `orq auth whoami named no session file` |
 | the file is gone or corrupt | `session file unreadable: <path> (…)` |
 | session expired | the CLI's own message, e.g. `Error: Invalid refresh token!` |
+| whoami says `authenticated: false` (CLI 11.0.1+) | the credential whoami vouched for (the login session, or the api-key login) is not tried; its `auth_error` is shown, e.g. `orq login session rejected: 401 …`. A failed check (`auth_check_error`: timeout, 5xx) is no verdict and changes nothing |
+| api-key login file gone or corrupt | `api-key login file unreadable: <path> (…)` |
 | every candidate rejected on the connection | the session opens anyway, with a warning pinned above the editor naming each candidate tried and the server's reason (`ORQ_API_KEY (acme): API key is not valid for this workspace…`), then the hint. The footer reads `orq:not connected`. One-shot prints the same block and exits 1 |
 | the MCP server unreachable after three attempts | `Could not reach the orq MCP server at <url>: <reason>`, exit 1 |
 | nothing above, just no credential | the hint alone, exit 1 |
@@ -167,3 +170,22 @@ keyless profile or a renamed field warns and falls through to the next candidate
 The candidate order that results is the one in [1](#1-which-credential); a keyless or unreadable
 profile just drops row 1 and warns.
 
+
+## 7. CLI 11 and the keychain
+
+whoami answers in four shapes, all read by `readWhoami()`:
+
+| Shape | Tells it apart | orqi reads |
+|---|---|---|
+| browser session | `workspaces`, no `method` | `session_file` → `workspaceTokens` (§3) |
+| API-key profile | `profile` | `credentials.json` (§6) |
+| exported key | `method: "api_key"`, `source: "ORQ_API_KEY"` | nothing more: the key is candidate 2 already |
+| api-key login | `method: "api_key"`, `api_key_login_file` | that file's `apiKey` |
+
+Every shape still names `session_file`, so an API-key launch keeps the workspace names for the
+footer.
+
+orq-cli PR #121 (open as of 2026-10-13) moves the session tokens into the OS keychain, leaving
+`session_file` without `workspaceTokens`. If it lands before orqi reads the keychain, the login
+session drops out of the candidate list. The workaround is the one that PR keeps: run the CLI with
+`ORQ_CREDENTIAL_STORE=file` (export it, then `orq auth login` again) so the tokens stay in the file.

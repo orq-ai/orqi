@@ -48,18 +48,21 @@ Keep each step under ~70 characters so it fits one terminal line.
 - For "how do I..." platform questions, use `search_docs` first -- never guess at platform behavior.
 - Chain tools progressively: start broad (analytics overview), then narrow (list_traces with filters), then deep (get_span full mode).
 
-**Available MCP tools (30 tools, 10 categories):**
+**Available MCP tools (44 tools, 13 categories):**
 
 | Category | Tools |
 |---|---|
 | Agents | `get_agent`, `create_agent`, `update_agent` |
 | Analytics | `get_analytics_overview`, `query_analytics` |
-| Dataset | `create_dataset`, `list_datapoints`, `create_datapoints`, `update_datapoint`, `delete_datapoints`, `delete_dataset` |
-| Evaluator | `get_llm_eval`, `get_python_eval`, `create_llm_eval`, `create_python_eval`, `update_llm_eval`, `update_python_eval` |
-| Experiment | `list_experiment_runs`, `get_experiment_run`, `create_experiment` |
+| Datasets | `create_dataset`, `list_datapoints`, `create_datapoints`, `update_datapoint`, `delete_datapoints`, `delete_dataset` |
+| Deployments | `get_deployment`, `create_deployment` |
+| Evaluators | `get_llm_eval`, `get_python_eval`, `create_llm_eval`, `create_python_eval`, `update_llm_eval`, `update_python_eval` |
+| Experiments | `list_experiment_runs`, `get_experiment_run`, `create_experiment` |
+| Feedback | `submit_feedback` |
+| Logs | `search_logs`, `get_log`, `get_log_context`, `list_trace_logs`, `list_log_facets`, `list_log_facet_values`, `query_log_aggregates`, `find_log_patterns` |
 | Models | `list_models` |
-| Registry | `list_registry_keys`, `list_registry_values` |
 | Search | `search_entities`, `search_directories`, `search_docs` |
+| Skills | `list_skills`, `get_skill`, `create_skill`, `update_skill`, `delete_skill` |
 | Traces | `list_traces`, `get_span`, `list_spans` |
 | Workspace | `delete_entity` |
 
@@ -67,19 +70,36 @@ Keep each step under ~70 characters so it fits one terminal line.
 
 | Skill | Triggers |
 |---|---|
-| `analyze-trace-failures` | "What's failing?", "Debug my agent", "Why are outputs bad?" |
-| `build-evaluator` | "Create an evaluator", "Set up a judge", "Measure quality" |
-| `build-agent` | "Create an agent", "Set up a support bot" |
-| `compare-agents` | "Compare these agents", "Which agent is better?" |
-| `run-experiment` | "Evaluate my agent", "Compare models" |
-| `generate-synthetic-dataset` | "Generate test cases", "Expand my dataset" |
-| `optimize-prompt` | "Improve my prompt", "Rewrite my system prompt" |
-| `setup-observability` | "Set up tracing", "Add observability" |
+| `orq-analyze-traces` | "What's failing?", "Debug my agent", "Why are outputs bad?" |
+| `orq-improve-agent` | "Improve my prompt", "Fix this agent", "Rewrite my system prompt" |
+| `orq-build-evaluator` | "Create an evaluator", "Set up a judge", "Measure quality" |
+| `orq-recommend-evaluators` | "Which evals does this agent need?", "What should I evaluate?" |
+| `orq-evaluator-alignment` | "My judge disagrees with humans", "Calibrate my evaluator" |
+| `orq-build-agent` | "Create an agent", "Set up a support bot" |
+| `orq-compare-agents` | "Compare these agents", "Which agent is better?" |
+| `orq-run-experiment` | "Evaluate my agent", "Compare models" |
+| `orq-generate-synthetic-dataset` | "Generate test cases", "Expand my dataset" |
+| `orq-simulate-agent` | "Simulate users against my agent", "Multi-turn test" |
+| `orq-red-team` | "Red team this deployment", "Test for vulnerabilities" |
+| `orq-setup-observability` | "Set up tracing", "Add observability" |
+| `orq-invoke-deployment` | "Call my deployment from code", "Invoke an agent via the API" |
+| `orq-manage-skills` | "List my orq Skills", "Create a Skill" |
+| `orq-cli` | Anything the MCP tools cannot do and the `orq` CLI can |
+| `evaluatorq` | "Write an evaluation script", "Custom scorer" |
+| `orqi-workspace-health-check` | "What's happening in my workspace?", "Health check" |
+| `orqi-investigate-root-cause` | "Why did this trace fail?", one failing trace or error pattern |
+| `orqi-debug-conversation` | "Where did this conversation go wrong?", multi-turn threads |
+| `orqi-optimize-cost` | "Reduce my costs", "Which model is cheaper?" |
+| `orqi-manage-knowledge-base` | "Set up a knowledge base", "Retrieval is bad" |
+| `orqi-setup-guardrails` | "Add a guardrail", "Block PII" |
+| `orqi-platform-guide` | "How does X work on orq?" |
+
+`orq-shared` is a reference bundle the other orq skills read; never invoke it on its own.
 
 **Lifecycle chains:**
-- Something's broken: `analyze-trace-failures` -> `build-evaluator` -> `run-experiment` -> `optimize-prompt`
-- Build something new: `build-agent` -> `generate-synthetic-dataset` -> `build-evaluator` -> `run-experiment`
-- Connect and monitor: `setup-observability` -> `analyze-trace-failures` -> `compare-agents`
+- Something's broken: `orq-analyze-traces` -> `orq-build-evaluator` -> `orq-run-experiment` -> `orq-improve-agent`
+- Build something new: `orq-build-agent` -> `orq-recommend-evaluators` -> `orq-generate-synthetic-dataset` -> `orq-run-experiment`
+- Connect and monitor: `orq-setup-observability` -> `orq-analyze-traces` -> `orq-compare-agents`
 
 ## Approval Gates
 

@@ -85,6 +85,11 @@ async function assetDir(): Promise<string> {
 
 const pkgDir = await assetDir();
 
+// pi derives every default path it is not handed (session files, /resume's
+// list, /new and /fork) from this variable, so setting it is what keeps orqi's
+// sessions out of ~/.pi/agent/sessions, where they mixed with the user's own pi.
+process.env.PI_CODING_AGENT_DIR ??= AGENT_DIR;
+
 // pi's update notice points at pi.dev and tells the user to run `pi update`,
 // neither of which applies to this binary. The header links orq's changelog.
 process.env.PI_SKIP_VERSION_CHECK ??= "1";
@@ -124,7 +129,7 @@ const customTools = [
 // Filled in below, once the services exist: the renderer only reads it at draw
 // time, and the skills count is not known until the resource loader has run.
 const header: HeaderInfo = {
-	name: "Orqi",
+	name: "orqi",
 	version: `v${VERSION}`,
 	workspace: undefined,
 	project: undefined,

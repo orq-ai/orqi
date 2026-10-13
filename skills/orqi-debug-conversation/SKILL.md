@@ -1,5 +1,5 @@
 ---
-name: debug-conversation
+name: orqi-debug-conversation
 description: >
   Debug multi-turn agent conversations. Trace a full session by thread_id,
   identify where context was lost, memory failed, tool was misselected, or the
@@ -51,9 +51,9 @@ Conversation Debug:
 
 ## When NOT to use
 
-- **Single-turn failure?** → use `investigate-root-cause`
-- **Broad pattern across many conversations?** → use `analyze-trace-failures`
-- **Agent config issues?** → use `build-agent`
+- **Single-turn failure?** → use `orqi-investigate-root-cause`
+- **Broad pattern across many conversations?** → use `orq-analyze-traces`
+- **Agent config issues?** → use `orq-build-agent`
 
 ## Multi-Turn Failure Mechanisms
 
@@ -182,7 +182,7 @@ In multi-agent setups, context lost during handoff between agents.
 
 ## Companion Skills
 
-- Root cause identified → `investigate-root-cause` (for deeper single-span analysis)
-- Prompt needs fixing → `optimize-prompt`
-- Memory config wrong → `build-agent` (reconfigure memory)
-- Need to validate fix → `run-experiment`
+- Root cause identified → `orqi-investigate-root-cause` (for deeper single-span analysis)
+- Prompt needs fixing → `orq-improve-agent`
+- Memory config wrong → `orq-build-agent` (reconfigure memory)
+- Need to validate fix → `orq-run-experiment`

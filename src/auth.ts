@@ -35,7 +35,8 @@ let cliProfile: string | undefined;
  * `ORQ_API_BASE_URL`, which the CLI reads for something else entirely.
  */
 export function apiBaseUrl(env: NodeJS.ProcessEnv = process.env, server = cliServer): string {
-	return server ?? env.ORQ_SERVER ?? "https://api.orq.ai";
+	// CLI 11 moved its default host to my.orq.ai (api.orq.ai still answers).
+	return server ?? env.ORQ_SERVER ?? "https://my.orq.ai";
 }
 
 export function mcpUrl(): string {
@@ -180,6 +181,65 @@ export function sessionFileOf(whoamiJson: string): string | undefined {
 	}
 }
 
+/** What one `orq auth whoami -o json` answer gives orqi. */
+export interface Whoami {
+	server?: string;
+	profile?: string;
+	/** The browser login session, unless whoami said the server rejected it. */
+	session?: Session;
+	/** The key `orq auth login --api-key` stored (CLI 11.1.1+), unless rejected. */
+	apiKeyLogin?: string;
+	/** Why there is no session or login key, for when nothing else turns up either. */
+	failure?: string;
+}
+
+/**
+ * Read a whoami answer, in any of the shapes CLI 11 prints.
+ *
+ * A browser session names `session_file`; an `orq auth login --api-key` login
+ * reports `method: "api_key"` and the key's own file in `api_key_login_file`
+ * (`<host>.apikey.json`, `{apiKey}`); an exported key or a profile reports
+ * `method`/`profile` and is orqi's own candidate already. Since 11.0.1 each can
+ * say `authenticated: false` with the server's `auth_error`: that is a 401, so
+ * the credential whoami vouched for is dropped here instead of being knocked
+ * on again. A failed check (`auth_check_error`, a timeout or a 5xx) leaves
+ * `authenticated` true, being no verdict. `read` is injectable for tests.
+ */
+export function readWhoami(json: string, read: (file: string) => string = (file) => readFileSync(file, "utf8")): Whoami {
+	let whoami: any;
+	try {
+		whoami = JSON.parse(json);
+	} catch {
+		return { failure: "orq auth whoami did not answer in JSON" };
+	}
+	const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+	const result: Whoami = { server: serverOf(json), profile: text(whoami?.profile) };
+	const rejected = whoami?.authenticated === false ? (text(whoami.auth_error) ?? "the server rejected it") : undefined;
+
+	const loginFile = whoami?.method === "api_key" ? text(whoami.api_key_login_file) : undefined;
+	if (loginFile) {
+		if (rejected) return { ...result, failure: `orq auth login --api-key key rejected: ${rejected}` };
+		try {
+			result.apiKeyLogin = text(JSON.parse(read(loginFile))?.apiKey);
+		} catch (error) {
+			result.failure = `api-key login file unreadable: ${loginFile} (${(error as Error).message})`;
+		}
+	}
+	// The session form carries no `method` or `profile`; only then is a
+	// rejection about the session. Otherwise the file is still read, for the
+	// workspace names and as a fallback the real connection settles.
+	if (rejected && !whoami?.method && !result.profile) return { ...result, failure: `orq login session rejected: ${rejected}` };
+	const file = text(whoami?.session_file);
+	if (!file) return { ...result, failure: result.failure ?? (result.apiKeyLogin ? undefined : "orq auth whoami named no session file") };
+	try {
+		result.session = JSON.parse(read(file));
+	} catch (error) {
+		// No browser session beside an api-key login is the normal case.
+		if (!result.apiKeyLogin) result.failure ??= `session file unreadable: ${file} (${(error as Error).message})`;
+	}
+	return result;
+}
+
 /**
  * The orq CLI login session, freshly read.
  *
@@ -188,18 +248,13 @@ export function sessionFileOf(whoamiJson: string): string | undefined {
  * ask `whoami` for the path rather than guessing. whoami also refreshes an
  * expired token and proves the session is live.
  */
-function readSession(): { session?: Session; failure?: string } {
+function readSession(): Whoami {
 	const whoami = runOrq(WHOAMI_ARGS);
 	if (!whoami.ok) return { failure: whoami.stderr.trim() || "orq auth whoami failed" };
-	cliServer = serverOf(whoami.stdout);
-	cliProfile = profileOf(whoami.stdout);
-	const file = sessionFileOf(whoami.stdout);
-	if (!file) return { failure: "orq auth whoami named no session file" };
-	try {
-		return { session: JSON.parse(readFileSync(file, "utf8")) };
-	} catch (error) {
-		return { failure: `session file unreadable: ${file} (${(error as Error).message})` };
-	}
+	const read = readWhoami(whoami.stdout);
+	cliServer = read.server;
+	cliProfile = read.profile;
+	return read;
 }
 
 /**
@@ -285,10 +340,12 @@ export function loginKey(authPath: string | undefined): string | undefined {
  * otherwise leave the switch silently re-pointing nothing.
  */
 export const SESSION_SOURCE = "orq login session";
+/** `orq auth login --api-key`: below an exported key, as the CLI ranks it, above the browser session. */
+export const API_KEY_LOGIN_SOURCE = "orq api-key login";
 
 export function credentialCandidates(authPath?: string): { candidates: Credential[]; failure?: string; profileGap?: string } {
 	const candidates: Credential[] = [];
-	const { session, failure } = readSession();
+	const { session, apiKeyLogin, failure } = readSession();
 	const login = loginKey(authPath);
 	if (login) candidates.push({ token: login, source: "/login key", workspace: workspaceOfKey(login, session) });
 	// A profile outranks an exported key, because it does for the CLI: it warns
@@ -299,6 +356,9 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 	if (process.env.ORQ_API_KEY && process.env.ORQ_API_KEY !== profile && process.env.ORQ_API_KEY !== login) {
 		const token = process.env.ORQ_API_KEY;
 		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
+	}
+	if (apiKeyLogin && ![login, profile, process.env.ORQ_API_KEY].includes(apiKeyLogin)) {
+		candidates.push({ token: apiKeyLogin, source: API_KEY_LOGIN_SOURCE, workspace: workspaceOfKey(apiKeyLogin, session) });
 	}
 	const workspace = session?.activeWorkspaceKey;
 	const token = sessionToken(session);

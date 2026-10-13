@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { apiBaseUrl, credentialCandidates, credentialsFile, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
+import { apiBaseUrl, credentialCandidates, credentialsFile, readWhoami, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { authLines, groupTools, NO_CREDENTIAL, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
@@ -43,11 +43,11 @@ import {
 	writeCache,
 } from "./update.ts";
 
-// The tool catalogue is only cached once orqi has run against a real workspace,
-// so it is absent in CI and on a fresh clone. The tests that read it are skipped
-// out loud there: a check that quietly passes on no data is worse than no check.
-const CATALOGUE_PATH = join(process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"), "tool-catalogue.json");
-const noCatalogue = !existsSync(CATALOGUE_PATH);
+// A committed snapshot of the server's catalogue (names and descriptions), so
+// the checks below run in CI too: they used to read ~/.orqi/agent's cache and
+// were skipped wherever orqi had never run. Refresh it from a live cache with
+//   jq '[.[] | {name, description}] | sort_by(.name)' ~/.orqi/agent/tool-catalogue.json
+const CATALOGUE_PATH = join(import.meta.dir, "fixtures", "tool-catalogue.json");
 
 /** A ReconnectFn for tests that never reach it. */
 const noReconnect = async () => ({ credential: { token: "", source: "" }, count: 0, added: [] });
@@ -111,7 +111,7 @@ test("groupTools keeps every tool exactly once", () => {
 	expect(listed.sort()).toEqual([...names].sort());
 });
 
-test.skipIf(noCatalogue)("every subagent tool exists in the orq catalogue", () => {
+test("every subagent tool exists in the orq catalogue", () => {
 	// Guards against silently handing a subagent an empty tool set.
 	const available = catalogueNames();
 	const missing = Object.entries(AGENT_TYPES).flatMap(([agent, def]) =>
@@ -131,7 +131,7 @@ test("no subagent depends on a denylisted tool", () => {
 	expect(Object.values(AGENT_TYPES).flatMap((def) => def.tools).length).toBeGreaterThan(0);
 });
 
-test.skipIf(noCatalogue)("every denylisted tool still exists in the orq catalogue", () => {
+test("every denylisted tool still exists in the orq catalogue", () => {
 	// A server-side rename would leave the denylist filtering nothing while the
 	// fat schema quietly ships again. Local-only: the runner has no cache.
 	const available = catalogueNames();
@@ -179,7 +179,7 @@ test("describe appends the unsaid constraints, and only where there are some", (
 	expect(describe({ name: "list_traces" })).toBe("list_traces");
 });
 
-test.skipIf(noCatalogue)("every hinted tool still exists and still omits what the hint adds", () => {
+test("every hinted tool still exists and still omits what the hint adds", () => {
 	// A hint for a renamed tool is dead weight; a hint the server has since
 	// documented itself is duplication. Both should surface as a failure here.
 	const catalogue: { name: string; description?: string }[] = JSON.parse(readFileSync(CATALOGUE_PATH, "utf8"));
@@ -244,6 +244,32 @@ test("skills.lock matches what is actually vendored", () => {
 	expect(SKILLS_LOCK.vendored).toEqual(dirs);
 	// Our own skills are never vendored, so upstream can never delete them.
 	expect(SKILLS_LOCK.vendored.filter((name) => name.startsWith("orqi-"))).toEqual([]);
+});
+
+test("the system prompt's tool table is exactly the tools the session gets", () => {
+	// The prompt said "30 tools" and listed two that no longer existed for a
+	// month. Pinned to the committed catalogue snapshot, minus the denylist.
+	const prompt = readFileSync(join(import.meta.dir, "..", "orqi-system-prompt.txt"), "utf8");
+	const table = prompt.slice(prompt.indexOf("**Available MCP tools"), prompt.indexOf("## Skills"));
+	const listed = [...table.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]!).sort();
+	const kept = keptTools([...catalogueNames()].map((name) => ({ name })), false).map((t) => t.name).sort();
+	expect(listed).toEqual(kept);
+	expect(table).toContain(`(${kept.length} tools,`);
+});
+
+test("every skill the system prompt names ships, under its directory's name", () => {
+	// pi loads a skill by its frontmatter name; a prompt naming `build-agent`
+	// while the skill is `orq-build-agent` points the model at nothing.
+	const root = join(import.meta.dir, "..", "skills");
+	const dirs = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+	const named = (dir: string) => readFileSync(join(root, dir, "SKILL.md"), "utf8").match(/^name:\s*(\S+)/m)?.[1];
+	expect(dirs.filter((dir) => named(dir) !== dir)).toEqual([]);
+	const prompt = readFileSync(join(import.meta.dir, "..", "orqi-system-prompt.txt"), "utf8");
+	const skills = prompt.slice(prompt.indexOf("## Skills"), prompt.indexOf("## Approval Gates"));
+	const mentioned = new Set([...skills.matchAll(/`((?:orqi?-)[a-z0-9-]+|evaluatorq)`/g)].map((m) => m[1]!));
+	expect([...mentioned].filter((name) => !dirs.includes(name))).toEqual([]);
+	// And nothing shipped is left out of the table.
+	expect(dirs.filter((dir) => !mentioned.has(dir))).toEqual([]);
 });
 
 test("vendor.ts and src/skills.ts agree on what counts as an upstream skill", () => {
@@ -420,7 +446,8 @@ test("the header uses the ORQI splash", () => {
 
 	const output = strip(headerLines(info, { cols: 100, rows: 40 }));
 	expect(output).toContain("██████╗ ██████╗  ██████╗  ████");
-	expect(output).toContain("ORQI v0");
+	// AGENTS.md's TUI drive waits for this exact string.
+	expect(output).toContain("orqi (aka TonyBot) v0");
 	expect(output).not.toContain("CLI");
 
 	// The logo is six rows and never gets split into a side-by-side layout.
@@ -699,9 +726,10 @@ test("the host follows the CLI, because an API-key profile carries its own serve
 
 	// ORQ_API_BASE_URL is the CLI's own variable for a different host and is
 	// not orqi's to reinterpret.
-	expect(apiBaseUrl({ ORQ_API_BASE_URL: "https://onprem.example" }, undefined)).toBe("https://api.orq.ai");
+	expect(apiBaseUrl({ ORQ_API_BASE_URL: "https://onprem.example" }, undefined)).toBe("https://my.orq.ai");
 
-	expect(apiBaseUrl({}, undefined)).toBe("https://api.orq.ai");
+	// CLI 11 moved its own default to my.orq.ai; orqi agrees when nobody said.
+	expect(apiBaseUrl({}, undefined)).toBe("https://my.orq.ai");
 	expect(serverOf('{"authenticated":false}')).toBeUndefined();
 	expect(serverOf("you are not logged in")).toBeUndefined();
 });
@@ -723,6 +751,52 @@ test("a timed-out orq call is not reported as a missing binary", () => {
 	// `error`; conflating them sends a working install off to debug its PATH.
 	expect(spawnFailure(Object.assign(new Error("spawnSync orq ETIMEDOUT"), { code: "ETIMEDOUT" }))).toMatch(/timed out after 15s/);
 	expect(spawnFailure(Object.assign(new Error("spawnSync orq ENOENT"), { code: "ENOENT" }))).toMatch(/not found on PATH/);
+});
+
+test("readWhoami understands every shape CLI 11 answers in", () => {
+	// Four shapes: a browser session, an API-key profile, an exported key and an
+	// `orq auth login --api-key` login. Each names its files differently, and
+	// since 11.0.1 any of them can say authenticated:false with the server's reason.
+	const files: Record<string, string> = {
+		"/h/.orq/sessions/my.orq.ai.json": JSON.stringify({ activeWorkspaceKey: "acme", workspaceTokens: { acme: { token: "sess" } } }),
+		"/h/.orq/sessions/my.orq.ai.apikey.json": JSON.stringify({ version: 1, apiKey: "sk-orq-stored", source: "login" }),
+	};
+	const read = (file: string) => {
+		if (!(file in files)) throw new Error(`ENOENT ${file}`);
+		return files[file]!;
+	};
+
+	const session = readWhoami('{"authenticated":true,"session_file":"/h/.orq/sessions/my.orq.ai.json","server":"https://my.orq.ai","workspaces":[]}', read);
+	expect(session.session?.activeWorkspaceKey).toBe("acme");
+	expect(session.server).toBe("https://my.orq.ai");
+	expect(session.apiKeyLogin).toBeUndefined();
+	expect(session.failure).toBeUndefined();
+
+	const profile = readWhoami('{"profile":"aim","server":"https://aim.orq.ai","session_file":"/h/.orq/sessions/aim.orq.ai.json","authenticated":true}', read);
+	expect(profile.profile).toBe("aim");
+	expect(profile.server).toBe("https://aim.orq.ai");
+
+	const env = readWhoami('{"method":"api_key","source":"ORQ_API_KEY","server":"https://my.orq.ai","session_file":"/h/.orq/sessions/my.orq.ai.json","authenticated":true}', read);
+	expect(env.apiKeyLogin).toBeUndefined(); // the env key is orqi's own candidate already
+	expect(env.session?.activeWorkspaceKey).toBe("acme");
+
+	const login = readWhoami('{"method":"api_key","server":"https://my.orq.ai","session_file":"/h/.orq/sessions/none.json","api_key_login_file":"/h/.orq/sessions/my.orq.ai.apikey.json","authenticated":true}', read);
+	expect(login.apiKeyLogin).toBe("sk-orq-stored");
+	expect(login.failure).toBeUndefined(); // no browser session is normal for an api-key login
+
+	// authenticated:false drops the credential whoami vouched for, and says why.
+	const deadSession = readWhoami('{"authenticated":false,"auth_error":"401 token revoked","session_file":"/h/.orq/sessions/my.orq.ai.json","workspaces":[]}', read);
+	expect(deadSession.session).toBeUndefined();
+	expect(deadSession.failure).toContain("401 token revoked");
+	const deadLogin = readWhoami('{"method":"api_key","api_key_login_file":"/h/.orq/sessions/my.orq.ai.apikey.json","session_file":"/h/x.json","authenticated":false,"auth_error":"401 key deleted"}', read);
+	expect(deadLogin.apiKeyLogin).toBeUndefined();
+	expect(deadLogin.failure).toContain("401 key deleted");
+
+	// A failed check (timeout, 5xx) is no verdict: authenticated stays true.
+	const checkFailed = readWhoami('{"authenticated":true,"auth_check_error":"timeout","session_file":"/h/.orq/sessions/my.orq.ai.json"}', read);
+	expect(checkFailed.session?.activeWorkspaceKey).toBe("acme");
+
+	expect(readWhoami("not json", read).failure).toBeDefined();
 });
 
 test("sessionFileOf takes the session path from whoami, whatever the CLI names it", () => {
