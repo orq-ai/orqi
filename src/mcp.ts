@@ -76,6 +76,7 @@ export function keptTools<T extends { name: string }>(tools: T[], allowAll = pro
 export function orqServerConfig(allowAll = process.env.ORQI_ALL_TOOLS === "1") {
 	return {
 		url: mcpUrl(),
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: a literal placeholder that pi expands per connection
 		headers: { Authorization: "Bearer ${ORQ_API_KEY}" },
 		// Declared to the model like built-in tools, as before; not behind codemode.
 		exposure: "direct" as const,

@@ -7,7 +7,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { credentialCandidates, LOGIN_HINT, loginKey, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
@@ -128,7 +128,7 @@ export interface Boot {
 export function orqCommands(
 	reconnect: ReconnectFn,
 	/** The orq tools pi's MCP has registered, by bare name: read live, they arrive when the server connects. */
-	toolNames: () => string[],
+	_toolNames: () => string[],
 	header: HeaderInfo,
 	agentDir = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"),
 	boot: Boot = {},

@@ -484,7 +484,8 @@ export function toAtif(steps: Step[], meta: AtifMeta): Record<string, unknown> {
 			out.push(current);
 		}
 		const id = step.toolCallId ?? `call_${step.id}`;
-		(current.tool_calls ??= []).push({
+		current.tool_calls ??= [];
+		current.tool_calls.push({
 			tool_call_id: id,
 			function_name: step.role === "subagent" ? "subagent" : (step.toolName ?? step.label),
 			arguments: step.args ?? {},
@@ -495,7 +496,8 @@ export function toAtif(steps: Step[], meta: AtifMeta): Record<string, unknown> {
 			subagents.push(toAtif(step.children, { ...meta, model: step.model, trajectoryId }));
 			result.subagent_trajectory_ref = [{ trajectory_id: trajectoryId }];
 		}
-		((current.observation ??= { results: [] }).results as unknown[]).push(result);
+		current.observation ??= { results: [] };
+		(current.observation.results as unknown[]).push(result);
 	}
 	const total = sumUsage(steps);
 	return {

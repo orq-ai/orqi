@@ -229,7 +229,7 @@ export function contextSplit(input: {
 	const skills = section(input.systemPrompt, "skills");
 	const project = section(input.systemPrompt, "project_context");
 	const base = input.systemPrompt.replace(skills, "").replace(project, "");
-	const hinted = base && base.includes(hintsSection()) ? hintsSection() : "";
+	const hinted = base.includes(hintsSection()) ? hintsSection() : "";
 	const active = new Set(input.active);
 	const live = input.tools.filter((tool) => active.has(tool.name) && tool.exposure !== "hidden");
 	const hidden = input.tools.filter((tool) => tool.exposure === "hidden" && tool.name.startsWith(TOOL_PREFIX));
@@ -808,7 +808,7 @@ export function orqHarness(deps: HarnessDeps) {
 		};
 
 		// ── events ────────────────────────────────────────────────────────────
-		pi.on("session_start", (event, ctx) => {
+		pi.on("session_start", (_event, ctx) => {
 			ctxRef = ctx;
 			// Every session is a thread: /new and /fork mint a new id, /resume keeps
 			// the file's own. The provider headers read this per request.
@@ -1172,7 +1172,10 @@ export function orqHarness(deps: HarnessDeps) {
 				let closeLive = () => {};
 				const shown = panel(
 					ctx,
-					(close) => ((closeLive = close), spec(close, ["reading spans…"])),
+					(close) => {
+						closeLive = close;
+						return spec(close, ["reading spans…"]);
+					},
 					"80%",
 					(p) => (live = p),
 				);
@@ -1392,7 +1395,7 @@ export function orqHarness(deps: HarnessDeps) {
 				};
 				const detail = (i: number): PanelSpec => {
 					const skill = skills[i]!;
-					const { frontmatter, body, files } = readSkill(skill.path, parseYaml);
+					const { frontmatter, files } = readSkill(skill.path, parseYaml);
 					const meta = Object.entries(frontmatter)
 						.filter(([key]) => key !== "name" && key !== "description")
 						.map(([key, value]) => `  ${key.padEnd(14)} ${typeof value === "string" ? oneLine(value) : JSON.stringify(value)}`);
@@ -1429,7 +1432,12 @@ export function orqHarness(deps: HarnessDeps) {
 								return {
 									...spec,
 									keys: {
-										u: () => (use(skills[i]!.name), closeDetail(), close(), true),
+										u: () => {
+											use(skills[i]!.name);
+											closeDetail();
+											close();
+											return true;
+										},
 										// The instructions on their own, like j for a tool's raw schema.
 										i: () => {
 											const body = readSkill(skills[i]!.path, parseYaml).body.trim();
@@ -1479,7 +1487,12 @@ export function orqHarness(deps: HarnessDeps) {
 					rows: release.items.map((item) => `${`${item.label}${item.tag ? ` (${item.tag})` : ""}`.padEnd(width)}${item.summary}`),
 					selectable: true,
 					hint: "↑↓ move · enter open in browser · esc close",
-					keys: { enter: () => (openUrl(CHANGELOG_URL), true) },
+					keys: {
+						enter: () => {
+							openUrl(CHANGELOG_URL);
+							return true;
+						},
+					},
 				});
 			},
 		});

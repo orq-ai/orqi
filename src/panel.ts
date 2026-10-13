@@ -28,6 +28,7 @@ export interface PanelSpec {
 	/** Row indices that cannot be chosen (drafts): drawn dim. */
 	disabled?: Set<number>;
 	/** Keys other than esc: `enter`, `t`, `o`, ... Return true to close the panel. */
+	// biome-ignore lint/suspicious/noConfusingVoidType: a handler may return nothing, sync or async
 	keys?: Record<string, (index: number) => boolean | void | Promise<boolean | void>>;
 	/** Rows to show at most before scrolling. */
 	height?: number;

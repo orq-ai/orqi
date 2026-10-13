@@ -648,7 +648,11 @@ test("/tools filters as you type, and enter opens the tool you see, not the one 
 			rows: ["create_agent", "get_span", "list_spans", "list_traces"],
 			selectable: true,
 			filterable: true,
-			keys: { enter: (i) => void (opened = i) },
+			keys: {
+				enter: (i) => {
+					opened = i;
+				},
+			},
 		},
 		plainPanel,
 		() => (closed = true),
@@ -982,7 +986,15 @@ test("the gate asks before a one-way call, remembers 'this turn' until the answe
 		return { toolCallId: id, toolName: `mcp__orq__${tool}`, input };
 	};
 	const asked: string[] = [];
-	const ui = (answer: string | undefined) => ({ hasUI: true, ui: { select: async (title: string) => (asked.push(title), answer) } as any });
+	const ui = (answer: string | undefined) => ({
+		hasUI: true,
+		ui: {
+			select: async (title: string) => {
+				asked.push(title);
+				return answer;
+			},
+		} as any,
+	});
 	// Reads and two-way calls run without a question; the verdict is recorded.
 	expect(await gate.onToolCall(call("r", "list_traces"), ui(undefined))).toBeUndefined();
 	expect(await gate.onToolCall(call("u", "update_agent"), ui(undefined))).toBeUndefined();

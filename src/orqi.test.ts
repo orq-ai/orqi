@@ -12,14 +12,12 @@ import {
 	rmSync,
 	statSync,
 	symlinkSync,
-	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
 	apiBaseUrl,
-	credentialCandidates,
 	credentialsFile,
 	readWhoami,
 	loginKey,
@@ -64,8 +62,7 @@ import {
 	type Rejection,
 } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
-import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
-import { DefaultResourceLoader, loadSkills } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import { liveIsNewer, pluginResources, readLive, SKILLS_LOCK, updateAction, updateDue, vendoredNames } from "./skills.ts";
 import {
 	assetName,
@@ -261,7 +258,8 @@ test("the unsaid constraints reach the prompt, named as the model sees the tool"
 
 test("the orq server is registered with pi as a direct server, denylist hidden, a fresh object each time", () => {
 	const config = orqServerConfig(false);
-	expect(config.headers.Authorization).toBe("Bearer ${ORQ_API_KEY}"); // pi resolves it per connection
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: a literal placeholder that pi expands per connection
+	expect(config.headers.Authorization).toBe("Bearer ${ORQ_API_KEY}");
 	expect(config.exposure).toBe("direct");
 	expect(Object.keys(config.toolExposure).sort()).toEqual([...DENYLISTED_TOOLS].sort());
 	expect(Object.values(config.toolExposure).every((v) => v === "hidden")).toBe(true);
@@ -1989,7 +1987,10 @@ async function updateWithFakeNpm(
 	process.env.ORQI_VERSION = "9.9.9";
 	console.error = (...args) => errors.push(args.join(" "));
 	console.log = (...args) => logs.push(args.join(" "));
-	process.stderr.write = ((chunk: string | Uint8Array) => (errors.push(chunk.toString()), true)) as typeof process.stderr.write;
+	process.stderr.write = ((chunk: string | Uint8Array) => {
+		errors.push(chunk.toString());
+		return true;
+	}) as typeof process.stderr.write;
 	try {
 		const code = await runUpdate([], join(root, "agent"), { execPath });
 		const argsFile = join(root, "npm-args");
