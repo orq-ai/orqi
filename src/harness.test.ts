@@ -2,17 +2,22 @@
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { parse as parseYaml } from "yaml";
+import { readSkill, skillOrigin } from "./skills.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
-import { brandTitle, costLines, repoOf, repriced, topModel } from "./harness.ts";
-import { minimapRow, minimapRows, minimapSummary, peekLines } from "./minimap.ts";
+import { brandTitle, contextRows, contextSplit, costLines, exitSummary, repoOf, repriced, topModel } from "./harness.ts";
+import { contextLines, minimapRow, minimapRows, minimapSummary, peekLines, sectionLines, signalLines, type ContextSplit } from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
-import { boxLines } from "./panel.ts";
+import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
+import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
-import { argSummary, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
+import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
+import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate } from "./gate.ts";
+import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
 
 /** Visible text: truncation adds ANSI resets around its ellipsis. */
 const bare = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -161,7 +166,7 @@ test("the footer degrades by width band", () => {
 	expect(medium).not.toContain("▁▂▃ ·"); // sparkline dropped
 	expect(medium).not.toContain("44 tools");
 	const narrow = footerLine({ ...state, minimapHidden: true }, 96);
-	expect(narrow).toContain("ctx ▇▇▇▁▁▁▁┊ 31% · minimap alt+m");
+	expect(narrow).toContain("ctx ▇▇▇▁▁▁▁┊ 31% · inspector alt+i");
 	expect(narrow).not.toContain("↑88k");
 	expect(narrow).not.toContain("84k/272k");
 	// Never wider than the terminal, whatever is in it.
@@ -433,6 +438,269 @@ test("the fixed header says who and where, dropping segments from the right as i
 	expect(headerBar(state, 200)).toBe(" orqi  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)");
 	const narrow = headerBar(state, 70);
 	expect(narrow).toBe(" orqi  workspace acme · agent support-triage · project Arian");
-	expect(headerBar({ connected: false }, 80)).toBe(" orqi  not connected");
+	expect(headerBar({ connected: false }, 80)).toBe(" orqi  not signed in · /login");
 	expect(visibleWidth(headerBar(state, 20))).toBeLessThanOrEqual(20);
+});
+
+test("a tool's parameters read as name, type, required, default and description", () => {
+	const lines = schemaLines({
+		type: "object",
+		required: ["trace_id"],
+		properties: {
+			trace_id: { type: "string", description: "Unique identifier of the trace" },
+			limit: { type: "integer", default: 25 },
+			mode: { enum: ["compact", "full"], description: "compact = metadata only" },
+			cursor: { anyOf: [{ type: "string" }, { type: "null" }] },
+			filters: { type: "object", properties: { project_id: { type: "string" } } },
+		},
+	});
+	expect(lines).toEqual([
+		"trace_id  string  (required)",
+		"          Unique identifier of the trace",
+		"limit     integer  (default 25)",
+		'mode      "compact" | "full"',
+		"          compact = metadata only",
+		"cursor    string | null",
+		"filters   object",
+		"  project_id  string",
+	]);
+	expect(schemaLines({ type: "object" })).toEqual(["(no parameters)"]);
+});
+
+test("/tools filters as you type, and enter opens the tool you see, not the one at that position before", async () => {
+	expect(filterRows(["list_traces  List traces", "get_span  Get a span", "list_spans  List spans"], "span")).toEqual([1, 2]);
+	expect(filterRows(["list_traces  List traces", "list_spans  List spans"], "list  TRACES")).toEqual([0]); // every word, any case
+	// Name matches first, description-only matches after.
+	expect(filterRows(["evaluatorq  scores production traces", "orq-analyze-traces  Analyze an agent"], "trace")).toEqual([1, 0]);
+	let opened = -1;
+	let closed = false;
+	const panel = new Panel(
+		{ title: "orq tools", rows: ["create_agent", "get_span", "list_spans", "list_traces"], selectable: true, filterable: true, keys: { enter: (i) => void (opened = i) } },
+		plainPanel,
+		() => (closed = true),
+		() => {},
+	);
+	for (const ch of "spa") panel.handleInput(ch);
+	expect(panel.render(60).map(bare).join("\n")).toContain("filter: spa▏ · 2/4");
+	panel.handleInput("\x1b[B"); // down to the second match
+	panel.handleInput("\r");
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(opened).toBe(2); // list_spans, its original index
+	panel.handleInput("\x7f"); // backspace edits the filter
+	expect(panel.render(60).map(bare).join("\n")).toContain("filter: sp▏");
+	panel.handleInput("\x1b"); // esc clears the filter first
+	expect(closed).toBe(false);
+	expect(panel.render(60).map(bare).join("\n")).toContain("type to filter");
+	panel.handleInput("\x1b"); // then closes
+	expect(closed).toBe(true);
+	for (const ch of "zzz") new Panel({ title: "t", rows: ["a"], selectable: true, filterable: true }, plainPanel, () => {}, () => {}).handleInput(ch);
+});
+
+test("/skills knows where each skill came from and reads its SKILL.md", () => {
+	expect(skillOrigin("/pkg/skills/orqi-platform-guide/SKILL.md")).toBe("orqi");
+	expect(skillOrigin("/pkg/skills/orq-build-agent/SKILL.md")).toBe("orq plugin");
+	expect(skillOrigin("/home/u/.orqi/agent/skills-live/current/skills/orq-build-agent/SKILL.md")).toBe("orq plugin (updated)");
+	expect(skillOrigin("/home/u/.agents/skills/tdd/SKILL.md")).toBe("local");
+	const detail = readSkill(join(import.meta.dir, "..", "skills", "orq-build-agent", "SKILL.md"), parseYaml);
+	expect(detail.frontmatter.name).toBe("orq-build-agent");
+	expect(String(detail.frontmatter.description)).toContain("orq.ai Agents");
+	expect(detail.body.length).toBeGreaterThan(100);
+	expect(detail.files.every((file) => file !== "SKILL.md")).toBe(true);
+});
+
+test("signals: a loop is the same tool with the same arguments three times in this turn", () => {
+	const call = (id: number, turn: number, args: Record<string, unknown>, extra: Partial<Step> = {}): Step => ({ id, turn, role: "tool", label: "get_span", toolName: "mcp__orq__get_span", detail: "", status: "ok", ts: 0, args, ...extra });
+	expect(canonical({ b: 1, a: { d: 2, c: 3 } })).toBe(canonical({ a: { c: 3, d: 2 }, b: 1 }));
+	const steps = [call(1, 1, { span_id: "x" }), call(2, 1, { span_id: "x" }), call(3, 2, { span_id: "x" }), call(4, 2, { span_id: "x" }), call(5, 2, { span_id: "y" })];
+	expect(signals(steps)).toEqual({ errors: 0, tools: 5, oneWay: 0, pending: 0 }); // two in turn 1, two in turn 2: no loop
+	steps.push(call(6, 2, { span_id: "x" }, { status: "error" }), call(7, 2, { span_id: "z" }, { label: "delete_dataset", toolName: "mcp__orq__delete_dataset", door: "one_way", gate: "waiting" }));
+	expect(signals(steps)).toEqual({ loop: { tool: "get_span", count: 3 }, errors: 1, tools: 7, oneWay: 0, pending: 1 });
+	// The gate fields land on the live step; a call with no step is ignored.
+	const trajectory = new Trajectory();
+	trajectory.toolStart("c1", "mcp__orq__delete_dataset", { dataset_id: "d" });
+	trajectory.gate("c1", "one_way", "allowed");
+	trajectory.gate("nope", "one_way", "denied");
+	expect(trajectory.steps).toHaveLength(1);
+	expect(signals(trajectory.steps).oneWay).toBe(1);
+});
+
+test("panel sections: a rule, an indented body, one calm line when empty", () => {
+	expect(sectionLines("teach", [], 36)).toEqual([" ─ teach ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
+	const split: ContextSplit = { prompt: 4_440, hints: 680, project: 0, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: [], skills: 24, hinted: 1, turns: 2, results: 2 } };
+	expect(contextLines(split, 36)).toEqual([
+		" ─ context ".padEnd(36, "─"),
+		"  prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k",
+		"  tools  ▇▇▇▇▇▇▁▁ 17.8k msgs    2.4k",
+		"  cache 94% · 27.3k/1.1M · /context ",
+	]);
+	expect(signalLines({ errors: 0, tools: 6, oneWay: 0, pending: 0 }, 36).slice(1).map((line) => line.trimEnd())).toEqual(["  no warnings · 0 one-way calls"]);
+	expect(signalLines({ loop: { tool: "get_span", count: 4 }, errors: 1, tools: 6, oneWay: 0, pending: 0 }, 40).slice(1).map((line) => line.trimEnd())).toEqual([
+		"  ⚠ tool loop  get_span ×4 same args",
+		"  errors 1/6 · one-way calls 0",
+	]);
+	expect(signalLines({ errors: 0, tools: 2, oneWay: 0, pending: 1 }, 36)[1]!.trimEnd()).toBe("  one-way calls 0 · pending 1");
+	expect(minimapSummary([], 2, 0.014, 1)).toBe("0 steps · turn 2 · $0.014 · ⚠ 1");
+});
+
+test("minimap rows mark a call waiting on the gate and the step a teach card is about", () => {
+	const step: Step = { id: 5, turn: 1, role: "tool", label: "delete_dataset", detail: "", status: "running", ts: 0, gate: "waiting" };
+	expect(bare(minimapRow(step, 36, false)).trimEnd()).toBe(" ⠋ tool   delete_dataset ?");
+	const done: Step = { ...step, status: "ok", gate: "allowed" };
+	expect(bare(minimapRow(done, 36, false, 0, undefined, true)).trimEnd()).toBe(" ⚙ tool   delete_dataset ✓ ▸");
+	expect(bare(minimapRows([done], 36, 3, undefined, 0, undefined, 5)[0]!)).toContain("✓ ▸");
+	// A managed agent's reply is labelled as the agent's.
+	const reply: Step = { id: 6, turn: 1, role: "assistant", label: "assist", detail: "I can help", status: "ok", ts: 0, model: "agent/qa-val-agent" };
+	expect(bare(minimapRow(reply, 36, false)).trimEnd()).toBe(" ▌ agent  I can help");
+});
+
+test("the context split: prompt and skills index apart, active schemas, the rest is messages", () => {
+	// pi's layout: orqi's prompt, then <project_context> and <skills> sections.
+	const prompt = `You are orqi.\n${hintsSection()}\n<project_context>\n${"p".repeat(800)}\n</project_context>\n<skills>\nThe following skills provide specialized instructions.\n<available_skills>\n  <skill>a</skill>\n  <skill>b</skill>\n</available_skills>\n</skills>\n<cwd>\n/x\n</cwd>`;
+	const tools = [
+		{ name: "mcp__orq__list_traces", description: "x".repeat(400), parameters: {} },
+		{ name: "mcp__orq__invoke_model", description: "y".repeat(400), parameters: {}, exposure: "hidden" },
+		{ name: "read", description: "z".repeat(40), parameters: {} },
+		{ name: "write", description: "w".repeat(40), parameters: {} },
+	];
+	const split = contextSplit({ systemPrompt: prompt, tools, active: ["mcp__orq__list_traces", "mcp__orq__invoke_model", "read"], used: 10_000, window: 272_000, steps: [{ id: 1, turn: 1, role: "assistant", label: "assist", detail: "", status: "ok", ts: 0, usage: { input: 1_000, output: 10, cacheRead: 9_000, cost: 0 } }], turns: 1 });
+	expect(split.hints).toBe(Math.ceil(hintsSection().length / 4));
+	expect(split.tools).toBe(Math.ceil(402 / 4) + Math.ceil(42 / 4)); // description + "{}"
+	expect(split.hidden).toBe(Math.ceil(402 / 4));
+	expect(split.counts).toMatchObject({ orq: 1, builtin: 1, hidden: ["invoke_model"], skills: 2, hinted: 1 });
+	expect(split.project).toBe(Math.ceil(("<project_context>\n".length + 800 + "\n</project_context>".length) / 4));
+	expect(split.prompt).toBeLessThan(Math.ceil(`You are orqi.\n\n\n<cwd>\n/x\n</cwd>`.length / 4) + 2);
+	expect(split.prompt + split.hints + split.project + split.tools + split.skills + split.messages).toBe(10_000);
+	expect(split.cache).toBe(0.9);
+	// Agent mode sends no prompt and no tools: nothing fixed, everything is messages.
+	const agent = contextSplit({ systemPrompt: "", tools, active: [], used: 500, window: 1, steps: [], turns: 0 });
+	expect([agent.prompt, agent.hints, agent.project, agent.tools, agent.skills, agent.messages]).toEqual([0, 0, 0, 0, 0, 500]);
+});
+
+/** The orq server's tools on 2026-10-13 (46): the list a new verb or concept must be checked against. */
+export const ORQ_TOOLS = [
+	"create_agent", "create_datapoints", "create_dataset", "create_deployment", "create_experiment", "create_llm_eval", "create_python_eval", "create_skill",
+	"delete_datapoints", "delete_dataset", "delete_entity", "delete_skill", "find_log_patterns", "get_agent", "get_analytics_overview", "get_deployment",
+	"get_experiment_run", "get_llm_eval", "get_log", "get_log_context", "get_python_eval", "get_skill", "get_span", "invoke_agent", "invoke_model",
+	"list_datapoints", "list_experiment_runs", "list_log_facet_values", "list_log_facets", "list_models", "list_skills", "list_spans", "list_trace_logs",
+	"list_traces", "query_analytics", "query_log_aggregates", "retrieve_agent_response", "search_directories", "search_docs", "search_entities",
+	"submit_feedback", "update_agent", "update_datapoint", "update_llm_eval", "update_python_eval", "update_skill",
+];
+
+test("teach: every orq tool has a concept, and a card is shown once per session", () => {
+	for (const tool of ORQ_TOOLS) expect(GLOSSARY[conceptOf(`mcp__orq__${tool}`) ?? "missing"], tool).toBeDefined();
+	expect(conceptOf("mcp__orq__get_span")).toBe("trace");
+	expect(conceptOf("mcp__orq__list_datapoints")).toBe("dataset");
+	expect(conceptOf("mcp__orq__delete_dataset")).toBe("one-way door");
+	expect(conceptOf("mcp__orq__submit_feedback")).toBe("feedback");
+	expect(conceptOf("read")).toBeUndefined();
+	const tool = (id: number, name: string): Step => ({ id, turn: 1, role: "tool", label: name, toolName: `mcp__orq__${name}`, detail: "", status: "ok", ts: 0 });
+	const run = [{ id: 1, turn: 1, role: "user", label: "user", detail: "", status: "ok", ts: 0 } as Step, tool(2, "list_traces"), tool(3, "get_span"), tool(4, "get_agent")];
+	const shown = new Set<string>();
+	const first = pickCard(run, shown)!;
+	expect([first.key, first.step.id, first.used]).toEqual(["trace", 2, ["list_traces", "get_span"]]);
+	expect(pickCard(run, shown)?.key).toBe("agent"); // trace was shown: the next concept
+	expect(pickCard(run, shown)).toBeUndefined();
+	expect(wrap("one two three four", 9)).toEqual(["one two", "three", "four"]);
+	const lines = cardLines(first, 34);
+	expect(lines[0]).toBe("trace");
+	expect(lines.every((line) => line.length <= 34)).toBe(true);
+	expect(lines.slice(-2)).toEqual(["used  list_traces · get_span", "docs  observability/traces"]);
+	expect(cardLine(first)).toStartWith("▸ teach  trace: One request through your agent or deployment, kept as a tree of spans:");
+	expect(cardLine(first)).toEndWith("used list_traces · get_span · https://docs.orq.ai/docs/observability/traces");
+	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(" orqi  workspace acme · routing orq/auto · teach · thread 01a1…6b7b");
+});
+
+test("/context: a row per part with tokens, share and cache, one bar, then the levers", () => {
+	const split: ContextSplit = { prompt: 4_440, hints: 680, project: 0, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: ["invoke_model", "invoke_agent", "retrieve_agent_response"], skills: 24, hinted: 1, turns: 2, results: 2 } };
+	const rows = contextRows(split);
+	expect(rows[0]).toBe("what the model reads on every turn                    tokens  share cache");
+	expect(rows[1]).toBe("system prompt   orqi-system-prompt.txt                 4,440    16%     ✓");
+	expect(rows[2]).toBe("  tool hints    TOOL_HINTS, 1 tool                       680     2%     ✓");
+	expect(rows[3]).toBe("tool schemas    44 orq tools · 4 built-in             17,810    65%     ✓");
+	expect(rows[4]).toBe("  hidden: invoke_model, invoke_agent, retrieve_agent_response  saves 1,540");
+	expect(rows[6]).toBe("messages        2 turns · 2 tool results               2,410     9%     ✗");
+	const bar = rows[8]!;
+	expect(bar).toMatch(/^▇+▁+$/);
+	expect(bar.length).toBe(60);
+	expect(rows[9]).toBe("▇ cached  prompt 5.1k · tools 18k · skills 1.9k   ▁ msgs 2.4k");
+	expect(rows).toContain(`· ${"ORQI_ALL_TOOLS=1".padEnd(19)}${"show the 3 hidden tools".padEnd(48)}→ +1.5k`);
+	expect(rows.at(-1)).toBe(`· ${"cache hit 94%".padEnd(19)}the prefix is cached; routing keeps it (/route explain)`);
+	const withProject = contextRows({ ...split, project: 3_000 }).find((row) => row.startsWith("  project files"))!;
+	expect(withProject).toEndWith("3,000    10%     ✓");
+	expect(withProject.length).toBe(rows[0]!.length);
+	// Agent mode: the agent's own prompt and tools are not ours to count; say so, and the way back.
+	expect(contextRows({ ...split, agent: "qa-val-agent" })[0]).toStartWith("agent mode: qa-val-agent's instructions");
+	expect(contextLines({ ...split, agent: "qa-val-agent" }, 36).slice(1).map((line) => line.trim())).toEqual(["agent qa-val-agent: its prompt", "and tools run on orq.ai", "msgs 2.4k/1.1M · /context"]);
+	// Nothing hidden, nothing measured from the cache: those levers are not offered.
+	const bare = contextRows({ ...split, cache: undefined, hidden: 0, counts: { ...split.counts, hidden: [] } });
+	expect(bare.some((row) => row.includes("ORQI_ALL_TOOLS") || row.includes("hidden:") || row.includes("cache hit"))).toBe(false);
+});
+
+test("the gate: a verb table, unknown never benign, every server tool has a known verb", () => {
+	for (const tool of ORQ_TOOLS) expect(knownVerb(tool), `${tool} has a verb the gate knows`).toBe(true);
+	expect(doorOf("list_traces")).toBe("benign");
+	expect(doorOf("retrieve_agent_response")).toBe("benign");
+	expect(doorOf("update_agent")).toBe("two_way");
+	expect(doorOf("delete_dataset")).toBe("one_way");
+	expect(doorOf("submit_feedback")).toBe("one_way");
+	expect(doorOf("archive_everything")).toBe("one_way"); // a verb nobody listed asks first
+	expect(maskSecrets({ name: "x", api_key: "sk-1", nested: { Authorization: "Bearer y", list: [{ token: "t" }] } })).toEqual({ name: "x", api_key: "•••", nested: { Authorization: "•••", list: [{ token: "•••" }] } });
+});
+
+test("the gate asks before a one-way call, remembers 'this turn' until the answer lands, and blocks without a UI", async () => {
+	const trajectory = new Trajectory();
+	const gate = orqGate(trajectory);
+	const call = (id: string, tool: string, input: Record<string, unknown> = {}) => {
+		trajectory.toolStart(id, `mcp__orq__${tool}`, input);
+		return { toolCallId: id, toolName: `mcp__orq__${tool}`, input };
+	};
+	const asked: string[] = [];
+	const ui = (answer: string | undefined) => ({ hasUI: true, ui: { select: async (title: string) => (asked.push(title), answer) } as any });
+	// Reads and two-way calls run without a question; the verdict is recorded.
+	expect(await gate.onToolCall(call("r", "list_traces"), ui(undefined))).toBeUndefined();
+	expect(await gate.onToolCall(call("u", "update_agent"), ui(undefined))).toBeUndefined();
+	expect(asked).toHaveLength(0);
+	expect(trajectory.steps.map((step) => step.door)).toEqual(["benign", "two_way"]);
+	// Deny (or escape) blocks with a reason the model can act on.
+	const denied = await gate.onToolCall(call("d1", "delete_dataset", { dataset_id: "01M4", api_key: "sk" }), ui(undefined));
+	expect(denied).toEqual({ block: true, reason: "The user refused this one-way call (delete_dataset). Ask before trying again." });
+	expect(asked[0]).toBe('delete_dataset · one-way: cannot be undone\n{"api_key":"•••","dataset_id":"01M4"}');
+	expect(trajectory.steps.at(-1)?.gate).toBe("denied");
+	// Allow once asks again next time; allow for this turn does not, until the turn ends.
+	expect(await gate.onToolCall(call("d2", "delete_dataset"), ui(ALLOW_ONCE))).toBeUndefined();
+	expect(await gate.onToolCall(call("d3", "delete_dataset"), ui(ALLOW_TURN))).toBeUndefined();
+	expect(await gate.onToolCall(call("d4", "delete_skill"), ui(undefined))).toBeUndefined();
+	expect(asked).toHaveLength(3);
+	expect(trajectory.steps.at(-1)?.gate).toBe("allowed");
+	gate.endTurn();
+	expect((await gate.onToolCall(call("d5", "delete_skill"), ui(undefined)))?.block).toBe(true);
+	// One-shot: nobody to ask, so the call is blocked and the model says how to confirm.
+	const oneShot = await gate.onToolCall(call("d6", "delete_dataset"), { hasUI: false, ui: {} as any });
+	expect(oneShot?.reason).toContain("rerun orqi interactively");
+	// Not an orq tool: not the gate's business.
+	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: {} }, ui(undefined))).toBeUndefined();
+});
+
+test("the exit summary: who, how long, what it cost, what it changed, where to find it", () => {
+	const trajectory = new Trajectory((_provider, id) => (id.includes("terra") ? 272_000 : 1_050_000));
+	trajectory.fromMessages(session());
+	trajectory.toolStart("g1", "mcp__orq__delete_dataset", { dataset_id: "01M4" });
+	trajectory.gate("g1", "one_way", "allowed");
+	trajectory.toolEnd("g1", false);
+	trajectory.toolStart("g2", "mcp__orq__update_agent", { key: "qa-val-agent" });
+	trajectory.gate("g2", "two_way");
+	trajectory.toolEnd("g2", false);
+	trajectory.toolStart("g3", "mcp__orq__delete_skill", { key: "old" });
+	trajectory.gate("g3", "one_way", "denied");
+	trajectory.toolEnd("g3", true);
+	const lines = exitSummary(trajectory, { workspace: "acme", startedAt: 0, now: 18 * 60_000, thread: "https://my.orq.ai/acme/traces/threads?id=7c1e" });
+	expect(lines).toEqual([
+		"orqi · acme · 18 min · 1 turn · $0.049",
+		"  models    gpt-5.6-terra ×2  $0.045  ·  gpt-5.6-luna ×2  $0.004",
+		"  tools     4 calls · orq_list_traces ×1, delete_dataset ×1 (allowed), update_agent ×1, delete_skill ×1 (denied)",
+		"  changes   1 one-way  delete_dataset dataset_id=01M4  ·  1 two-way  update_agent key=qa-val-agent",
+		"  context   peak 12k of 272k · cache hit 0%",
+		"  thread    https://my.orq.ai/acme/traces/threads?id=7c1e",
+	]);
+	expect(exitSummary(new Trajectory(), { startedAt: 0, now: 1, thread: "7c1e" })).toEqual(["orqi · <1 min · 0 turns · $0", "  tools     none", "  changes   none", "  thread    7c1e"]);
 });

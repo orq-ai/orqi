@@ -70,8 +70,19 @@ const PITCH = [
 // are restated here. Keep in step with pi's defaults if they change.
 const HINTS = "escape interrupt · ctrl+c/d exit · / commands · ! bash · ctrl+o expand";
 
+/**
+ * What the opening screen says instead of the pitch while no workspace is
+ * signed in: the pitch would advertise things that cannot work yet.
+ */
+export const SIGN_IN = [
+	"You're not signed in to an orq.ai workspace yet. Sign in to start:",
+	"  /login  →  Sign in with an account  →  orq.ai (browser)",
+	"  /key    →  paste an API key from my.orq.ai › Settings › API keys",
+	"  or run `orq auth login` in another terminal; orqi picks it up on your next message.",
+];
+
 /** The orqi views worth knowing on day one. */
-const VIEWS = "/learn · /route · /cost · /trace · /agents · /whatsnew · alt+m minimap";
+const VIEWS = "/learn · /route · /cost · /trace · /agents · /whatsnew · alt+i inspector";
 
 export const CHANGELOG_URL = "https://docs.orq.ai/docs/changelog/";
 
@@ -86,13 +97,10 @@ export interface HeaderInfo {
 	/** model · counts */
 	status: string;
 	cwd: string;
+	/** True while no credential was accepted: the opening screen invites a sign-in instead of the pitch. */
+	signedOut?: boolean;
 	/** Set when the update cache reports a newer version: the command the footer line tells the user to run. */
 	updateCommand?: string;
-}
-
-/** Terminal size at render time, or a safe default when it cannot be read. */
-export function terminalSize(): { cols: number; rows: number } {
-	return { cols: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 };
 }
 
 /**
@@ -102,7 +110,7 @@ export function terminalSize(): { cols: number; rows: number } {
  * below so the splash remains intact in narrow panes. Returned as lines so it
  * can be rendered to stdout or as a TUI entry.
  */
-export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
+export function headerLines(info: HeaderInfo): string[] {
 	const indent = "  ";
 	// Workspace leads the detail line and keeps its colour: it is the one piece
 	// of state that silently changes what every tool call returns.
@@ -111,7 +119,7 @@ export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
 		`${workspace}${color(info.status, MUTED)}`,
 		color(info.cwd, MUTED),
 		"",
-		...PITCH.map((line) => color(line, MUTED)),
+		...(info.signedOut ? SIGN_IN.map((line, i) => color(line, i === 0 ? TEXT : MUTED)) : PITCH.map((line) => color(line, MUTED))),
 	];
 	const footer = [
 		"",

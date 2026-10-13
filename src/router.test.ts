@@ -10,6 +10,7 @@ import {
 	ClassifyForbidden,
 	classifyWithOrq,
 	DIFFICULTY_QUESTION,
+	DOOR_QUESTION,
 	escalates,
 	floorOf,
 	fromDecisions,
@@ -39,6 +40,7 @@ test("the Decisions API spells bool as noul, both ways", () => {
 	});
 	expect((questions.destructive as any).type).toBe("noul");
 	expect((questions.difficulty as any).type).toBe("choice");
+	expect(Object.keys(DOOR_QUESTION.criteria)).toEqual(["benign", "two_way", "one_way"]); // evaluatorq's labels, so verdicts compare
 	// The live answer shape from my.orq.ai, 2026-10-13.
 	const result = fromDecisions(
 		{
@@ -89,7 +91,7 @@ test("the expected tier cuts the probabilities at 0.5 and 1.5", () => {
 	expect(tierOf({ easy: 0.4, medium: 0.4, hard: 0.2 }, [0.5, 1.5])).toBe("medium"); // 0.8 expected
 });
 
-test("the floor catches what the system prompt gates behind approval", () => {
+test("the fallback floor catches what changes state, when the classifier cannot answer", () => {
 	expect(floorOf("delete the old dataset")).toBe("destructive request");
 	expect(floorOf("create an experiment with auto_run")).toBe("auto_run experiment");
 	expect(floorOf("update the hallucination evaluator threshold")).toBe("evaluator mutation");
@@ -104,12 +106,17 @@ test("the policy table: reason × state × floor → rung", () => {
 	// user turns: the classifier, unless the floor says hard
 	expect(policy({ reason: "user", text: "why is it slow?", classified: probs })).toEqual({ tier: "medium" });
 	expect(policy({ reason: "user", text: "list my agents", classified: { easy: 0.81, medium: 0.15, hard: 0.04 } })).toEqual({ tier: "easy" });
-	expect(policy({ reason: "user", text: "delete dataset x", classified: { easy: 1, medium: 0, hard: 0 } })).toEqual({ tier: "hard", why: "floor: destructive request", arrow: "▲" });
-	// no classifier: the default rung, saying why
-	expect(policy({ reason: "user", text: "hi", classified: { error: "routing unavailable: API key lacks the classify permission" } })).toEqual({
-		tier: "medium",
-		why: "routing unavailable: API key lacks the classify permission",
-	});
+	// the door question, not the keywords: a request that changes state goes to hard, a question about one does not
+	expect(policy({ reason: "user", text: "delete dataset x", classified: { easy: 1, medium: 0, hard: 0 }, door: "one_way" })).toEqual({ tier: "hard", why: "door: one_way", arrow: "▲" });
+	expect(policy({ reason: "user", text: "rename the agent", classified: { easy: 1, medium: 0, hard: 0 }, door: "two_way" })).toEqual({ tier: "hard", why: "door: two_way", arrow: "▲" });
+	expect(policy({ reason: "user", text: "tell me which tool would delete a dataset", classified: { easy: 1, medium: 0, hard: 0 }, door: "benign" })).toEqual({ tier: "easy" });
+	// no door answer: no opinion, the difficulty decides
+	expect(policy({ reason: "user", text: "delete dataset x", classified: { easy: 1, medium: 0, hard: 0 } })).toEqual({ tier: "easy" });
+	// no classifier: the keyword floor stands in, else the default rung, saying why
+	const forbidden = { error: "routing unavailable: API key lacks the classify permission" };
+	expect(policy({ reason: "user", text: "delete dataset x", classified: forbidden })).toEqual({ tier: "hard", why: "floor: destructive request", arrow: "▲" });
+	expect(policy({ reason: "user", text: "delete dataset x" })).toEqual({ tier: "hard", why: "floor: destructive request", arrow: "▲" });
+	expect(policy({ reason: "user", text: "hi", classified: forbidden })).toEqual({ tier: "medium", why: "routing unavailable: API key lacks the classify permission" });
 	// continuation stays put (prompt cache)
 	expect(policy({ reason: "continuation", text: "", state: { ...medium, tier: "easy" } })).toEqual({ tier: "easy" });
 	// retry stays put, unless a bigger model would get past the error
@@ -132,6 +139,10 @@ test("the route log writes the columns the outcome harness reads", () => {
 		expect(row.prompt_hash).toHaveLength(16);
 		expect(row.prompt_hash).not.toContain("agents"); // a hash, not the prompt
 		expect(row.latency_ms).toBe(512);
+		// The door rides at the end, only when the classifier answered it.
+		logRoute(path, "delete it", { tier: "hard", model: "openai/gpt-5.6-sol", why: "door: one_way", door: "one_way", doorP: 0.94 });
+		const second = JSON.parse(readFileSync(path, "utf8").trim().split("\n")[1]!);
+		expect(Object.keys(second)).toEqual(["ts", "prompt_hash", "tier", "probabilities", "model", "cost", "latency_ms", "why", "door"]);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -142,6 +153,9 @@ test("the route line reads like the wireframe", () => {
 		routeLine({ tier: "medium", model: "openai/gpt-5.6-terra", probabilities: { easy: 0.12, medium: 0.71, hard: 0.17 }, latencyMs: 600, cost: 0.00003, classifier: "typesafe/jev-latest" }),
 	).toBe("route › medium   ▁▆▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003");
 	expect(routeLine({ tier: "hard", arrow: "▲", why: "floor: agent mutation", model: "openai/gpt-5.6-sol" })).toBe("route › hard ▲   floor: agent mutation   → gpt-5.6-sol");
+	expect(
+		routeLine({ tier: "hard", arrow: "▲", why: "door: one_way", door: "one_way", doorP: 0.94, model: "openai/gpt-5.6-sol", probabilities: { easy: 0.72, medium: 0.28, hard: 0 }, latencyMs: 300, cost: 0.00002, classifier: "typesafe/jev-latest" }),
+	).toBe("route › hard ▲   ▆▃▁   easy .72 · medium .28 · hard .00   door: one_way .94   → gpt-5.6-sol   jev 0.3 s $0.00002");
 	expect(selectionName({ provider: "orq", id: "auto" })).toBe("orq/auto");
 	expect(selectionName({ provider: "orq", id: "openai/gpt-5.6-terra" })).toBe("openai/gpt-5.6-terra");
 });
@@ -180,14 +194,30 @@ test("orq/auto routes a user turn through the classifier and keeps follow-ups on
 		expect(followUp.model.id).toBe("openai/gpt-5.6-terra");
 		expect(followUp.state).toBeUndefined(); // unchanged state is not re-stored
 		expect(seen).toHaveLength(1); // and draws no new route line
-		let asked = 0;
-		const counting = globalThis.fetch;
-		globalThis.fetch = (async (...args: Parameters<typeof fetch>) => (asked++, counting(...args))) as unknown as typeof fetch;
-		const floored = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: [{ type: "text", text: "delete the staging dataset" }] }] });
+		// The door question rides in the same request as difficulty; a one_way answer is hard.
+		let sentQuestions: string[] = [];
+		globalThis.fetch = (async (_url: string, init: RequestInit) => {
+			sentQuestions = Object.keys(JSON.parse(String(init.body)).questions);
+			return new Response(
+				JSON.stringify({
+					answers: {
+						difficulty: { type: "choice", choice: "easy", probabilities: { easy: 0.72, medium: 0.28, hard: 0 }, confidence: 0.7 },
+						door: { type: "choice", choice: "one_way", probabilities: { benign: 0.04, two_way: 0.02, one_way: 0.94 }, confidence: 0.94 },
+					},
+				}),
+				{ status: 200 },
+			);
+		}) as unknown as typeof fetch;
+		const doored = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: [{ type: "text", text: "delete the staging dataset" }] }] });
+		expect(sentQuestions).toEqual(["difficulty", "door"]);
+		expect(doored.model.id).toBe("openai/gpt-5.6-sol");
+		expect(doored.state).toMatchObject({ why: "door: one_way", door: "one_way", doorP: 0.94 });
+		expect(doored.state.latencyMs).toBeNumber(); // the classifier is asked on every user turn now
+		// A classifier that fails falls back to the keyword floor.
+		globalThis.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+		const floored = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "delete the staging dataset" }] });
 		expect(floored.model.id).toBe("openai/gpt-5.6-sol");
 		expect(floored.state.why).toBe("floor: destructive request");
-		expect(asked).toBe(0); // a floored turn never waits on the classifier
-		expect(floored.state.latencyMs).toBeUndefined();
 		// A 403 is remembered: later turns stop asking and say why.
 		globalThis.fetch = (async () => new Response("", { status: 403 })) as unknown as typeof fetch;
 		const forbidden = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "hi" }] });

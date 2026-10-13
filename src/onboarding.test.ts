@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { loginKey } from "./auth.ts";
 import { normalizeCommand } from "./frontmatter.ts";
+import { expiresAt, orqOAuth, parseDeviceLogin, refreshStoredSignIn } from "./oauth.ts";
 import { headerLines } from "./branding.ts";
 import { NO_CREDENTIAL, orqCommands } from "./commands.ts";
 import { learnRows, LEARN_PROMPTS, loginUrl, MaskedInput, maskKey, plausibleKey, saveLoginKey, WELCOME_OPTIONS, welcomeChoice } from "./onboarding.ts";
@@ -74,7 +75,7 @@ async function runWelcome(answers: (string | undefined)[], reconnectOk = true) {
 			if (!reconnectOk) throw new Error("stalled");
 			return { credential: next[0]!, added: [] };
 		},
-		[],
+		() => [],
 		header,
 		dir,
 		{ rejections: [{ source: NO_CREDENTIAL, reason: "nothing found" }], welcome: true, readCandidates: candidates as any },
@@ -106,9 +107,9 @@ test("welcome, no key pasted: says so and keeps the hint", async () => {
 });
 
 test("the header names the day-one views", () => {
-	const text = headerLines({ name: "orqi", version: "v0.2.0", status: "orq/auto · 44 tools", cwd: "~" }, { cols: 100, rows: 40 }).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	const text = headerLines({ name: "orqi", version: "v0.2.0", status: "orq/auto · 44 tools", cwd: "~" }).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 	expect(text).toContain("orqi (aka TonyBot) v0.2.0");
-	expect(text).toContain("/learn · /route · /cost · /trace · /agents · /whatsnew · alt+m minimap");
+	expect(text).toContain("/learn · /route · /cost · /trace · /agents · /whatsnew · alt+i inspector");
 	expect(text).not.toContain("changelog https://"); // /whatsnew replaces the bare URL
 });
 
@@ -142,4 +143,117 @@ test("plugin command frontmatter that YAML rejects is quoted, everything else is
 	const good = "---\ndescription: fine\nargument-hint: \"[x]\"\n---\nbody\n";
 	expect(normalizeCommand(good)).toBe(good);
 	expect(normalizeCommand("no frontmatter")).toBe("no frontmatter");
+});
+
+test("Sign in with an account: the CLI's device login, shown in pi's device-code view", async () => {
+	const shown: { userCode: string; verificationUri: string }[] = [];
+	const fakeCli = (exit: number) => async (args: string[], onOutput: (chunk: string) => void) => {
+		expect(args).toEqual(["auth", "login", "--no-input"]);
+		onOutput("- Open: https://my.orq.ai/device/approve?client_name=orq-cli&user_code=2YA3-ENTL\n");
+		onOutput("- Code: 2YA3-ENTL\n- Waiting for browser approval...\n");
+		if (exit !== 0) onOutput("Error: context canceled\n");
+		return exit;
+	};
+	const flow = orqOAuth(() => "session-token", fakeCli(0));
+	const credentials = await flow.login({ onDeviceCode: (info) => shown.push(info) });
+	expect(shown).toEqual([{ userCode: "2YA3-ENTL", verificationUri: "https://my.orq.ai/device/approve?client_name=orq-cli&user_code=2YA3-ENTL" }]);
+	expect(credentials.access).toBe("session-token");
+	expect(credentials.expires).toBeGreaterThan(Date.now());
+	expect(flow.getApiKey(credentials)).toBe("session-token");
+	expect(flow.name).toBe("orq.ai (browser)");
+	await expect(orqOAuth(() => "t", fakeCli(1)).login({ onDeviceCode: () => {} })).rejects.toThrow("context canceled");
+	await expect(orqOAuth(() => undefined, fakeCli(0)).login({ onDeviceCode: () => {} })).rejects.toThrow("no login session");
+	expect(parseDeviceLogin("nothing here")).toEqual({ url: undefined, code: undefined });
+});
+
+test("the credential reader takes a browser sign-in as readily as a pasted key", () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-oauth-"));
+	try {
+		const path = join(dir, "auth.json");
+		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "sess-123", refresh: "orq-cli-session", expires: 1 } }));
+		expect(loginKey(path)).toBe("sess-123");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a connected session switches to what /login just stored, once, and learns its workspace", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-switch-"));
+	const prior = process.env.ORQ_API_KEY;
+	try {
+		process.env.ORQ_API_KEY = "sk-orq-env";
+		const handlers = new Map<string, (event: any, ctx: any) => unknown>();
+		const pi = { registerEntryRenderer: () => {}, registerCommand: () => {}, registerTool: () => {}, appendEntry: () => {}, setModel: async () => true, on: (name: string, fn: any) => handlers.set(name, fn) } as any;
+		const notices: string[] = [];
+		const ctx = { hasUI: true, ui: { notify: (m: string) => notices.push(m), setStatus: () => {}, setWidget: () => {} } };
+		const tried: string[][] = [];
+		const header = { name: "orqi", version: "v0", status: "", cwd: "~" } as any;
+		orqCommands(
+			async (next) => {
+				tried.push(next.map((c) => c.token));
+				header.workspace = next[0]!.workspace;
+				return { credential: next[0]!, added: [] };
+			},
+			() => [],
+			header,
+			dir,
+			{ readCandidates: (() => ({ candidates: [{ token: "sess-token", source: "/login key", workspace: "orq-research" }, { token: "sk-orq-env", source: "ORQ_API_KEY" }] })) as any },
+		)(pi);
+		const input = () => handlers.get("input")!({ type: "input", text: "hi", source: "interactive" }, ctx);
+		await input();
+		expect(tried).toEqual([]); // nothing stored yet
+		writeFileSync(join(dir, "auth.json"), JSON.stringify({ orq: { type: "oauth", access: "sess-token", refresh: "r", expires: 1 } }));
+		await input();
+		expect(tried).toEqual([["sess-token"]]);
+		expect(header.workspace).toBe("orq-research");
+		await input();
+		expect(tried.length).toBe(1); // not again for the same stored token
+	} finally {
+		if (prior === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = prior;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("signed out, the opening screen invites a sign-in instead of the pitch", () => {
+	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	const base = { name: "orqi", version: "v0", status: "not signed in", cwd: "~" };
+	const out = strip(headerLines({ ...base, signedOut: true }));
+	expect(out).toContain("You're not signed in to an orq.ai workspace yet. Sign in to start:");
+	expect(out).toContain("/login  →  Sign in with an account  →  orq.ai (browser)");
+	expect(out).toContain("/key");
+	expect(out).not.toContain("Ask me to:");
+	expect(strip(headerLines(base))).toContain("Ask me to:");
+});
+
+test("a /login session token expires when the token says, not after a fixed TTL", () => {
+	const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`;
+	const now = 1_000_000_000_000;
+	// The CLI's 30-minute token: refresh a minute before its exp, not 50 minutes out.
+	expect(expiresAt(jwt({ exp: now / 1000 + 30 * 60 }), now)).toBe(now + 29 * 60_000);
+	// A long-lived token is still re-checked within the TTL; an opaque key gets the TTL.
+	expect(expiresAt(jwt({ exp: now / 1000 + 86_400 }), now)).toBe(now + 50 * 60_000);
+	expect(expiresAt("sk-orq-opaque", now)).toBe(now + 50 * 60_000);
+	// Already expired: at least a minute out, so pi does not refresh in a loop.
+	expect(expiresAt(jwt({ exp: now / 1000 - 10 }), now)).toBe(now + 60_000);
+});
+
+test("a refused browser sign-in is refreshed from the session in place; a pasted key never is", () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-signin-"));
+	try {
+		const path = join(dir, "auth.json");
+		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "stale", refresh: "orq-cli-session", expires: 9e15 }, other: { type: "api_key", key: "k" } }));
+		expect(refreshStoredSignIn(path, "fresh")).toBe(true);
+		const data = JSON.parse(readFileSync(path, "utf8"));
+		expect(data.orq).toMatchObject({ type: "oauth", access: "fresh", refresh: "orq-cli-session" });
+		expect(data.orq.expires).toBeLessThan(9e15); // the fresh token's own expiry, not the stale one's
+		expect(data.other).toEqual({ type: "api_key", key: "k" }); // other providers untouched
+		expect(refreshStoredSignIn(path, "fresh")).toBe(false); // already current
+		writeFileSync(path, JSON.stringify({ orq: { type: "api_key", key: "sk-orq-pasted" } }));
+		expect(refreshStoredSignIn(path, "fresh")).toBe(false);
+		expect(JSON.parse(readFileSync(path, "utf8")).orq.key).toBe("sk-orq-pasted");
+		expect(refreshStoredSignIn(join(dir, "missing.json"), "fresh")).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

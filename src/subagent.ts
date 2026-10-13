@@ -58,7 +58,6 @@ export const AGENT_TYPES: Record<string, AgentType> = {
 };
 
 export interface SubagentDeps {
-	orqTools: ToolDefinition[];
 	model?: Model<any>;
 	modelRuntime: ModelRuntime;
 	agentDir: string;
@@ -121,8 +120,8 @@ export function createSubagentTool(deps: SubagentDeps) {
 					isError: true,
 				};
 			}
-			const parent = (ctx as { model?: Model<any> } | undefined)?.model ?? deps.model;
-			const model = managed ? deps.modelRuntime.getModel("orq", agent) : (deps.modelFor?.(def!, parent) ?? deps.model);
+			const parentModel = (ctx as { model?: Model<any> } | undefined)?.model ?? deps.model;
+			const model = managed ? deps.modelRuntime.getModel("orq", agent) : (deps.modelFor?.(def!, parentModel) ?? deps.model);
 			if (!model) {
 				return {
 					content: [{ type: "text" as const, text: `no model for subagent "${agent}"${managed ? ": not a live agent in this workspace" : ""}` }],
@@ -131,6 +130,26 @@ export function createSubagentTool(deps: SubagentDeps) {
 				};
 			}
 			const allowed = new Set((def?.tools ?? []).map((name) => `${TOOL_PREFIX}${name}`));
+			// The orq tools live on the parent session (pi's MCP connected them there),
+			// so the child gets proxies that run each call through the parent's
+			// executeTool: same connection, same hooks, no second MCP handshake.
+			const parent = ctx as unknown as { tools?: readonly { name: string; label?: string; description: string; parameters: any }[]; executeTool?: (name: string, args: unknown, options?: { signal?: AbortSignal }) => Promise<{ result: any; isError: boolean }> } | undefined;
+			const proxies = managed || !parent?.executeTool
+				? []
+				: (parent.tools ?? [])
+						.filter((tool) => allowed.has(tool.name))
+						.map((tool) =>
+							defineTool({
+								name: tool.name,
+								label: tool.label ?? tool.name,
+								description: tool.description,
+								parameters: tool.parameters,
+								execute: async (_callId, args, callSignal) => {
+									const outcome = await parent.executeTool!(tool.name, args, { signal: callSignal ?? signal });
+									return { ...outcome.result, isError: outcome.isError };
+								},
+							}),
+						);
 			// Bare loader: the specialist prompt only (none for a managed agent,
 			// which carries its own), no skills or context files.
 			const resourceLoader = new DefaultResourceLoader({
@@ -150,7 +169,7 @@ export function createSubagentTool(deps: SubagentDeps) {
 				modelRuntime: deps.modelRuntime,
 				resourceLoader,
 				noTools: managed ? "all" : "builtin", // file/bash tools are irrelevant to a workspace question
-				customTools: managed ? [] : deps.orqTools.filter((tool) => allowed.has(tool.name)),
+				customTools: proxies,
 				sessionManager: SessionManager.inMemory(),
 				settingsManager: SettingsManager.inMemory(),
 			});

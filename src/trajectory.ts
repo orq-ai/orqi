@@ -13,6 +13,10 @@
  * carries its child steps, which becomes an embedded subagent trajectory.
  */
 
+// One definition, the Decisions question's criteria: two copies would drift.
+import type { Door } from "./router.ts";
+
+export type { Door };
 export type Role = "user" | "assistant" | "tool" | "subagent" | "route";
 export type Status = "running" | "ok" | "error";
 
@@ -38,11 +42,17 @@ export interface Step {
 	model?: string;
 	usage?: StepUsage;
 	toolCallId?: string;
+	/** The tool's full name (`mcp__orq__list_traces`) when the label shortens it. */
+	toolName?: string;
 	args?: Record<string, unknown>;
 	/** Full text, for the peek view and the export. */
 	text?: string;
 	children?: Step[];
+	/** The gate's verdict on an orq tool call. Session-local: a resume does not rebuild it. */
+	door?: Door;
+	gate?: "waiting" | "allowed" | "denied";
 }
+
 
 export interface ContextSample {
 	turn: number;
@@ -73,6 +83,9 @@ type AnyMessage = {
 	durationMs?: number;
 	details?: unknown;
 };
+
+/** MCP tools are `mcp__<server>__<tool>`; views show the tool. */
+export const shortTool = (name: string) => name.replace(/^mcp__[a-z0-9_-]+?__/, "");
 
 const oneLine = (text: string, max = 200) => text.replace(/\s+/g, " ").trim().slice(0, max);
 
@@ -211,7 +224,8 @@ export class Trajectory {
 				if (existing) continue;
 				this.push({
 					role: subagent ? "subagent" : "tool",
-					label: subagent ? String(block.arguments?.agent ?? "subagent") : (block.name ?? "tool"),
+					label: subagent ? String(block.arguments?.agent ?? "subagent") : shortTool(block.name ?? "tool"),
+					toolName: block.name,
 					detail: subagent ? oneLine(String(block.arguments?.task ?? "")) : argSummary(block.arguments),
 					status: "running",
 					ts: message.timestamp ?? Date.now(),
@@ -258,7 +272,8 @@ export class Trajectory {
 			const subagent = toolName === "subagent";
 			this.push({
 				role: subagent ? "subagent" : "tool",
-				label: subagent ? String(args?.agent ?? "subagent") : toolName,
+				label: subagent ? String(args?.agent ?? "subagent") : shortTool(toolName),
+				toolName,
 				detail: subagent ? oneLine(String(args?.task ?? "")) : argSummary(args),
 				status: "running",
 				ts: Date.now(),
@@ -275,6 +290,15 @@ export class Trajectory {
 		if (!step) return;
 		step.status = isError ? "error" : "ok";
 		step.durationMs = durationMs ?? step.durationMs;
+		this.changed();
+	}
+
+	/** The gate's verdict on a call; a call with no step (a subagent's) is ignored. */
+	gate(toolCallId: string, door: Door, gate?: Step["gate"]): void {
+		const step = this.steps.find((candidate) => candidate.toolCallId === toolCallId);
+		if (!step) return;
+		step.door = door;
+		step.gate = gate;
 		this.changed();
 	}
 
@@ -309,6 +333,41 @@ export class Trajectory {
 		visit(this.steps);
 		return rows;
 	}
+}
+
+/** `JSON.stringify` with sorted keys, so the same arguments compare equal whatever their order. */
+export function canonical(value: unknown): string {
+	return JSON.stringify(value, (_key, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v));
+}
+
+export interface Signals {
+	/** The same tool with the same arguments, three or more times in the current turn. */
+	loop?: { tool: string; count: number };
+	errors: number;
+	tools: number;
+	oneWay: number;
+	pending: number;
+}
+
+/** What the signals section warns about, from the steps alone. */
+export function signals(steps: Step[], turn = steps.at(-1)?.turn ?? 0): Signals {
+	const tools = steps.filter((step) => step.role === "tool");
+	const counts = new Map<string, { tool: string; count: number }>();
+	for (const step of tools) {
+		if (step.turn !== turn) continue;
+		const key = `${step.toolName ?? step.label} ${canonical(step.args ?? {})}`;
+		const seen = counts.get(key) ?? { tool: step.label, count: 0 };
+		seen.count++;
+		counts.set(key, seen);
+	}
+	const loop = [...counts.values()].filter((seen) => seen.count >= 3).sort((a, b) => b.count - a.count)[0];
+	return {
+		...(loop ? { loop } : {}),
+		errors: tools.filter((step) => step.status === "error").length,
+		tools: tools.length,
+		oneWay: tools.filter((step) => step.door === "one_way" && step.gate === "allowed").length,
+		pending: tools.filter((step) => step.gate === "waiting").length,
+	};
 }
 
 /** Sum usage over steps, descending into subagents that reported none of their own. */
@@ -385,7 +444,7 @@ export function toAtif(steps: Step[], meta: AtifMeta): Record<string, unknown> {
 			out.push(current);
 		}
 		const id = step.toolCallId ?? `call_${step.id}`;
-		(current.tool_calls ??= []).push({ tool_call_id: id, function_name: step.role === "subagent" ? "subagent" : step.label, arguments: step.args ?? {} });
+		(current.tool_calls ??= []).push({ tool_call_id: id, function_name: step.role === "subagent" ? "subagent" : (step.toolName ?? step.label), arguments: step.args ?? {} });
 		const result: Record<string, unknown> = { source_call_id: id, content: step.text ?? "" };
 		if (step.role === "subagent" && step.children?.length) {
 			const trajectoryId = `${meta.sessionId}/subagent-${step.id}`;

@@ -112,8 +112,16 @@ export interface PluginResources {
 }
 
 /**
+ * Plugin commands orqi leaves out. `/models` spends a model turn and three
+ * `list_models` calls to print what pi's `/model` already lists for free, and
+ * its error hint is Claude Code setup. Filtered here, not deleted from
+ * `commands/`, because `bun run vendor` would bring the file back.
+ */
+export const DROPPED_COMMANDS = ["models"];
+
+/**
  * Exactly one copy of the plugin, as individual skill dirs and template files.
- * `reserved` are slash commands orqi already owns.
+ * `reserved` are slash commands orqi already owns; `DROPPED_COMMANDS` never load.
  */
 export function pluginResources(pkgDir: string, agentDir: string, reserved: Iterable<string> = []): PluginResources {
 	const live = readLive(agentDir);
@@ -124,7 +132,7 @@ export function pluginResources(pkgDir: string, agentDir: string, reserved: Iter
 		.filter((name) => name.startsWith("orqi-"))
 		.map((name) => join(bundledSkills, name));
 	const upstream = vendoredNames(dirsIn(join(source, "skills"))).map((name) => join(source, "skills", name));
-	const taken = new Set(reserved);
+	const taken = new Set([...reserved, ...DROPPED_COMMANDS]);
 	const commands = markdownIn(join(source, "commands"))
 		.filter((name) => !taken.has(name.replace(/\.md$/, "")))
 		.map((name) => join(source, "commands", name));
@@ -254,4 +262,47 @@ async function downloadAndSwap(root: string, upstream: { sha: string; committed:
 	} finally {
 		rmSync(staging, { recursive: true, force: true });
 	}
+}
+
+/** Where a loaded skill came from, for the /skills view. */
+export function skillOrigin(path: string): string {
+	if (path.includes(`${"/"}skills-live${"/"}`)) return "orq plugin (updated)";
+	const dir = path.split("/").at(-2) ?? "";
+	if (dir.startsWith("orqi-")) return "orqi";
+	if (/^(orq-[a-z0-9-]+|evaluatorq)$/.test(dir)) return "orq plugin";
+	return "local";
+}
+
+export interface SkillDetail {
+	frontmatter: Record<string, unknown>;
+	body: string;
+	/** Files beside SKILL.md (resources, scripts), relative to the skill dir. */
+	files: string[];
+}
+
+/** Read a SKILL.md: its frontmatter, its body, and what ships beside it. */
+export function readSkill(path: string, parse: (yaml: string) => unknown): SkillDetail {
+	const text = readFileSync(path, "utf8");
+	const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
+	let frontmatter: Record<string, unknown> = {};
+	try {
+		frontmatter = (match ? (parse(match[1]!) as Record<string, unknown>) : {}) ?? {};
+	} catch {
+		// A skill pi loaded but whose frontmatter we cannot read still shows its body.
+	}
+	const dir = path.slice(0, path.lastIndexOf("/"));
+	const files: string[] = [];
+	const walk = (sub: string) => {
+		for (const entry of readdirSync(join(dir, sub), { withFileTypes: true })) {
+			const rel = sub ? `${sub}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) walk(rel);
+			else if (rel !== "SKILL.md") files.push(rel);
+		}
+	};
+	try {
+		walk("");
+	} catch {
+		// Unreadable dir: the view just lists no files.
+	}
+	return { frontmatter, body: match ? text.slice(match[0].length) : text, files: files.sort() };
 }

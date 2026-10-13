@@ -109,7 +109,7 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 		parts.push(ctx);
 	}
 	if (wide && state.tools > 0) parts.push(paint.dim(`${state.tools} tools`));
-	if (state.minimapHidden) parts.push(paint.dim("minimap alt+m"));
+	if (state.minimapHidden) parts.push(paint.dim("inspector alt+i"));
 	const left = ` ${parts.join(sep)}`;
 	const right = state.branch ? paint.dim(`${state.branch} `) : "";
 	const gap = width - visibleWidth(left) - visibleWidth(right);
@@ -126,6 +126,8 @@ export interface HeaderBarState {
 	/** `orq/auto` when routing is on. */
 	routing?: string;
 	connected: boolean;
+	/** Teach mode is on. */
+	teach?: boolean;
 	/** Short thread (session) id. */
 	thread?: string;
 	/** `orq plugin 3.10.0 (updated)` when a newer plugin is in use. */
@@ -135,7 +137,7 @@ export interface HeaderBarState {
 /**
  * The fixed header line:
  *
- *   orqi  workspace acme · project Arian · agent support-triage · routing orq/auto · thread 01a1…ed4f
+ *   orqi  workspace acme · project Arian · agent support-triage · routing orq/auto · teach · thread 01a1…ed4f
  *
  * Segments drop from the right as the terminal narrows; the workspace and
  * the agent stay longest, being the two that change what every call does.
@@ -144,11 +146,13 @@ export function headerBar(state: HeaderBarState, width: number, paint: Paint = p
 	const sep = paint.dim(" · ");
 	const label = (name: string, value: string) => `${paint.dim(name)} ${paint.text(value)}`;
 	const segments: string[] = [];
-	if (!state.connected) segments.push(paint.hot("not connected"));
+	if (!state.connected) segments.push(paint.hot("not signed in · /login"));
 	else if (state.workspace) segments.push(label("workspace", state.workspace));
-	if (state.agent) segments.push(label("agent", state.agent));
+	// Agent mode changes who answers: the agent stands out, it is not just another fact.
+	if (state.agent) segments.push(`${paint.dim("agent")} ${paint.hot(state.agent)}`);
 	if (state.project) segments.push(label("project", state.project));
 	if (state.routing) segments.push(label("routing", state.routing));
+	if (state.teach) segments.push(paint.text("teach"));
 	if (state.thread) segments.push(label("thread", state.thread));
 	if (state.plugin) segments.push(paint.dim(state.plugin));
 	const mark = ` ${(paint.brand ?? paint.text)("orqi")}  `;
