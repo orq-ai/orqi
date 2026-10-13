@@ -794,7 +794,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// The loaded skills, like /tools: where each came from, its metadata, its instructions.
 		pi.registerCommand("skills", {
-			description: "browse the loaded skills: type to filter, enter for metadata and instructions, u to use one",
+			description: "browse the loaded skills: type to filter, enter for details, i for instructions, u to use one",
 			handler: async (_args, ctx) => {
 				let skills: { name: string; description: string; path: string }[] = [];
 				try {
@@ -835,11 +835,8 @@ export function orqHarness(deps: HarnessDeps) {
 							"location",
 							`  ${skill.path.replace(homedir(), "~")}`,
 							...(files.length ? [`  ${files.length} more file${files.length === 1 ? "" : "s"}: ${files.slice(0, 8).join(", ")}${files.length > 8 ? ", …" : ""}`] : []),
-							"",
-							"instructions",
-							...body.trim().split("\n").map((line) => `  ${line}`),
 						],
-						hint: "u use · ↑↓ scroll · esc back",
+						hint: "i instructions · u use · esc back",
 					};
 				};
 				await panel(ctx, (close) => ({
@@ -853,7 +850,17 @@ export function orqHarness(deps: HarnessDeps) {
 						enter: (i) => {
 							void panel(ctx, (closeDetail) => {
 								const spec = detail(i);
-								return { ...spec, keys: { u: () => (use(skills[i]!.name), closeDetail(), close(), true) } };
+								return {
+									...spec,
+									keys: {
+										u: () => (use(skills[i]!.name), closeDetail(), close(), true),
+										// The instructions on their own, like j for a tool's raw schema.
+										i: () => {
+											const body = readSkill(skills[i]!.path, parseYaml).body.trim();
+											void panel(ctx, { title: `skill ${skills[i]!.name} · instructions`, rows: body.split("\n"), hint: "↑↓ scroll · esc back" });
+										},
+									},
+								};
 							});
 						},
 					},
