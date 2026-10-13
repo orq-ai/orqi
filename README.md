@@ -102,7 +102,7 @@ Five candidates, best first: the credential `/login` or `/key` stored, a pinned 
 `ORQ_API_KEY`, then the key `orq auth login --api-key` stored, then the `orq auth login` session.
 Each is checked with one API call, so a rejected one falls through to the next. The profile wins
 over an exported key because it does for the orq CLI too. If every one is rejected, orqi still
-opens, pins a warning saying what the server said about each, and reconnects on your next message
+opens, pins a warning naming every source tried and what the server said, and reconnects on your next message
 once `/login` (browser or key), `/key` or `orq auth login` has produced a credential it accepts.
 
 ```bash

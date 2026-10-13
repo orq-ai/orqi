@@ -165,8 +165,8 @@ credential takes precedence over the configured `ORQ_API_KEY` for the model, and
 #0 for the tools for the same reason. Router wiring mirrors `orq launch pi`, ported to TypeScript
 in `src/model.ts`.
 
-A boot on which every credential is rejected still opens, with a warning naming each rejection
-pinned above the editor, and reconnects on the next message once `/key`, `/login` or `orq auth
+A boot on which every credential is rejected still opens, with a warning naming every source tried and the server's
+reason pinned above the editor, and reconnects on the next message once `/key`, `/login` or `orq auth
 login` has produced a credential the API accepts: `ORQ_API_KEY` moves to it and the `orq` server is
 re-registered, which makes pi reconnect. Only the one-shot form exits once a candidate existed; with
 no candidate at all the TUI opens a welcome instead.

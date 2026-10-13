@@ -13,6 +13,10 @@
  * carries its child steps, which becomes an embedded subagent trajectory.
  */
 
+// One definition, the Decisions question's criteria: two copies would drift.
+import type { Door } from "./router.ts";
+
+export type { Door };
 export type Role = "user" | "assistant" | "tool" | "subagent" | "route";
 export type Status = "running" | "ok" | "error";
 
@@ -49,7 +53,6 @@ export interface Step {
 	gate?: "waiting" | "allowed" | "denied";
 }
 
-export type Door = "benign" | "two_way" | "one_way";
 
 export interface ContextSample {
 	turn: number;
