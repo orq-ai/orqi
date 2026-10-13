@@ -27,8 +27,25 @@ export function parseDeviceLogin(output: string): DeviceLogin {
 	return { url, code };
 }
 
-/** Minutes a session token is trusted before pi asks for a refresh (the CLI's own tokens last longer). */
+/** How long a session token is trusted when it carries no expiry of its own. */
 const TOKEN_TTL_MS = 50 * 60 * 1000;
+
+/**
+ * When pi should ask for a fresh token: a minute before the JWT's own `exp`.
+ * A fixed TTL outlived the CLI's 30-minute tokens, so pi kept sending an
+ * expired one and every model call failed with 401 until a restart. Never
+ * less than a minute out, so a token near its end does not refresh in a loop.
+ */
+export function expiresAt(token: string, now = Date.now()): number {
+	let exp: unknown;
+	try {
+		exp = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString()).exp;
+	} catch {
+		// Not a JWT: the fixed TTL.
+	}
+	const own = typeof exp === "number" ? exp * 1000 - 60_000 : now + TOKEN_TTL_MS;
+	return Math.max(now + 60_000, Math.min(own, now + TOKEN_TTL_MS));
+}
 
 interface Callbacks {
 	onDeviceCode(info: { userCode: string; verificationUri: string }): void;
@@ -47,7 +64,7 @@ export function orqOAuth(
 	const fresh = (refreshMarker = "orq-cli-session") => {
 		const access = sessionToken();
 		if (!access) throw new Error("orq auth whoami has no login session: run `orq auth login`");
-		return { access, refresh: refreshMarker, expires: Date.now() + TOKEN_TTL_MS };
+		return { access, refresh: refreshMarker, expires: expiresAt(access) };
 	};
 	return {
 		name: "orq.ai (browser)",
