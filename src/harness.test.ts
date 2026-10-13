@@ -14,7 +14,7 @@ import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from ".
 import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
 import { schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
-import { argSummary, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
+import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 
 /** Visible text: truncation adds ANSI resets around its ellipsis. */
@@ -504,4 +504,20 @@ test("/skills knows where each skill came from and reads its SKILL.md", () => {
 	expect(String(detail.frontmatter.description)).toContain("orq.ai Agents");
 	expect(detail.body.length).toBeGreaterThan(100);
 	expect(detail.files.every((file) => file !== "SKILL.md")).toBe(true);
+});
+
+test("signals: a loop is the same tool with the same arguments three times in this turn", () => {
+	const call = (id: number, turn: number, args: Record<string, unknown>, extra: Partial<Step> = {}): Step => ({ id, turn, role: "tool", label: "get_span", toolName: "mcp__orq__get_span", detail: "", status: "ok", ts: 0, args, ...extra });
+	expect(canonical({ b: 1, a: { d: 2, c: 3 } })).toBe(canonical({ a: { c: 3, d: 2 }, b: 1 }));
+	const steps = [call(1, 1, { span_id: "x" }), call(2, 1, { span_id: "x" }), call(3, 2, { span_id: "x" }), call(4, 2, { span_id: "x" }), call(5, 2, { span_id: "y" })];
+	expect(signals(steps)).toEqual({ errors: 0, tools: 5, oneWay: 0, pending: 0 }); // two in turn 1, two in turn 2: no loop
+	steps.push(call(6, 2, { span_id: "x" }, { status: "error" }), call(7, 2, { span_id: "z" }, { label: "delete_dataset", toolName: "mcp__orq__delete_dataset", door: "one_way", gate: "waiting" }));
+	expect(signals(steps)).toEqual({ loop: { tool: "get_span", count: 3 }, errors: 1, tools: 7, oneWay: 0, pending: 1 });
+	// The gate fields land on the live step; a call with no step is ignored.
+	const trajectory = new Trajectory();
+	trajectory.toolStart("c1", "mcp__orq__delete_dataset", { dataset_id: "d" });
+	trajectory.gate("c1", "one_way", "allowed");
+	trajectory.gate("nope", "one_way", "denied");
+	expect(trajectory.steps).toHaveLength(1);
+	expect(signals(trajectory.steps).oneWay).toBe(1);
 });

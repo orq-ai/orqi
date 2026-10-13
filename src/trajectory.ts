@@ -44,7 +44,12 @@ export interface Step {
 	/** Full text, for the peek view and the export. */
 	text?: string;
 	children?: Step[];
+	/** The gate's verdict on an orq tool call. Session-local: a resume does not rebuild it. */
+	door?: Door;
+	gate?: "waiting" | "allowed" | "denied";
 }
+
+export type Door = "benign" | "two_way" | "one_way";
 
 export interface ContextSample {
 	turn: number;
@@ -285,6 +290,15 @@ export class Trajectory {
 		this.changed();
 	}
 
+	/** The gate's verdict on a call; a call with no step (a subagent's) is ignored. */
+	gate(toolCallId: string, door: Door, gate?: Step["gate"]): void {
+		const step = this.steps.find((candidate) => candidate.toolCallId === toolCallId);
+		if (!step) return;
+		step.door = door;
+		step.gate = gate;
+		this.changed();
+	}
+
 	/** A routing decision (`orq/auto`), shown before the turn's reply. */
 	route(label: string, detail: string, usage?: StepUsage, durationMs?: number, model?: string): void {
 		this.push({ role: "route", label, detail, status: "ok", ts: Date.now(), usage, durationMs, model });
@@ -316,6 +330,41 @@ export class Trajectory {
 		visit(this.steps);
 		return rows;
 	}
+}
+
+/** `JSON.stringify` with sorted keys, so the same arguments compare equal whatever their order. */
+export function canonical(value: unknown): string {
+	return JSON.stringify(value, (_key, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v));
+}
+
+export interface Signals {
+	/** The same tool with the same arguments, three or more times in the current turn. */
+	loop?: { tool: string; count: number };
+	errors: number;
+	tools: number;
+	oneWay: number;
+	pending: number;
+}
+
+/** What the signals section warns about, from the steps alone. */
+export function signals(steps: Step[], turn = steps.at(-1)?.turn ?? 0): Signals {
+	const tools = steps.filter((step) => step.role === "tool");
+	const counts = new Map<string, { tool: string; count: number }>();
+	for (const step of tools) {
+		if (step.turn !== turn) continue;
+		const key = `${step.toolName ?? step.label} ${canonical(step.args ?? {})}`;
+		const seen = counts.get(key) ?? { tool: step.label, count: 0 };
+		seen.count++;
+		counts.set(key, seen);
+	}
+	const loop = [...counts.values()].filter((seen) => seen.count >= 3).sort((a, b) => b.count - a.count)[0];
+	return {
+		...(loop ? { loop } : {}),
+		errors: tools.filter((step) => step.status === "error").length,
+		tools: tools.length,
+		oneWay: tools.filter((step) => step.door === "one_way" && step.gate === "allowed").length,
+		pending: tools.filter((step) => step.gate === "waiting").length,
+	};
 }
 
 /** Sum usage over steps, descending into subagents that reported none of their own. */
