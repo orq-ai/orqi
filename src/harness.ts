@@ -26,7 +26,7 @@ import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSumma
 import { shortTool, signals, toAtif, Trajectory, type Step, type StepUsage } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
-import { cardLines, pickCard, type Concept } from "./teach.ts";
+import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { orqGate } from "./gate.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
@@ -616,8 +616,23 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("tool_execution_end", (event, ctx) => {
 			if (event.parentToolCallId) return;
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
+			syncWidgets(ctx);
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
 		});
+		/**
+		 * Without the side panel (regular mode, or hidden on a narrow terminal),
+		 * teach and signals fall back to one dim widget line each above the
+		 * editor. Widgets, not entries, so /trajectory and a resume stay clean.
+		 */
+		const panelShown = () => Boolean(sideRoot) && minimapVisible();
+		const syncWidgets = (ctx: ExtensionContext, teachLine?: string) => {
+			if (ctx.mode !== "tui") return;
+			const loop = signals(trajectory.steps, trajectory.turn).loop;
+			const dim = (line: string) => ctx.ui.theme.fg("dim", line);
+			ctx.ui.setWidget("orqi-signals", loop && !panelShown() ? [ctx.ui.theme.fg("warning", `⚠ tool loop: ${loop.tool} ×${loop.count} same args · /panel for details`)] : undefined);
+			if (teachLine !== undefined || !teachOn || panelShown()) ctx.ui.setWidget("orqi-teach", teachLine && teachOn && !panelShown() ? [dim(teachLine)] : undefined);
+		};
+
 		// The one-way gate. Registered here so its verdicts reach the trajectory;
 		// pi's own MCP handler only waits for the server, so a block here still wins.
 		const gate = orqGate(trajectory);
@@ -628,10 +643,13 @@ export function orqHarness(deps: HarnessDeps) {
 			measure(ctx);
 			const run = trajectory.steps.filter((step) => step.id > runFrom);
 			runFrom = trajectory.steps.at(-1)?.id ?? runFrom;
+			let teachLine = "";
 			if (teachOn && ctx.mode === "tui") {
 				const picked = pickCard(run, shownConcepts);
 				if (picked) card = { concept: picked.concept, used: picked.used, step: picked.step.id };
+				if (picked) teachLine = cardLine(card!);
 			}
+			syncWidgets(ctx, teachLine);
 			render();
 		});
 		pi.on("model_select", (_event, ctx) => {
@@ -750,7 +768,8 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				teachOn = arg ? arg === "on" : !teachOn;
-				ctx.ui.notify(teachOn ? "Teach mode on: a card follows each answer, in the side panel." : "Teach mode off.");
+				ctx.ui.notify(teachOn ? `Teach mode on: a card follows each answer, ${panelShown() ? "in the side panel" : "above the editor"}.` : "Teach mode off.");
+				syncWidgets(ctx);
 				render();
 			},
 		});
