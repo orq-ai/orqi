@@ -433,7 +433,8 @@ export function orqHarness(deps: HarnessDeps) {
 		let lastFooter = "";
 		let split: ContextSplit | undefined;
 		// ── teach state: the card lives in the panel, never the transcript ──
-		let teachOn = false;
+		// On by default: the cards are the harness explaining the platform; /teach off hides them.
+		let teachOn = true;
 		let card: { concept: Concept; used: string[]; step: number } | undefined;
 		const shownConcepts = new Set<string>();
 		/** The last step id a previous run reached: steering advances `turn` more than once per run. */
