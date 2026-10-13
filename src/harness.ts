@@ -21,6 +21,8 @@ import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
 import { toAtif, Trajectory, type StepUsage } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
+import { DIFFICULTY_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
+import { Text } from "@earendil-works/pi-tui";
 
 export interface HarnessDeps {
 	agentDir: string;
@@ -31,6 +33,32 @@ export interface HarnessDeps {
 	callTool: (name: string, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>;
 	/** The workspace the header shows: a key, or a short id when only an API key is known. */
 	workspace: () => string | undefined;
+	/** `orq/auto`: its pool and decision feed. */
+	routing?: Routing;
+}
+
+const ROUTE_ENTRY = "orqi-route";
+const ROUTE_WIDGET = "orqi-route";
+const BARS = "▁▂▃▄▅▆▇█";
+
+/** `orq/auto`, not `auto`: the virtual model's id alone reads like nothing. */
+export const selectionName = (model: { provider: string; id: string } | undefined) =>
+	model ? (model.provider === "orq" && model.id === "auto" ? "orq/auto" : model.id) : undefined;
+
+/**
+ * The route entry above a turn:
+ *   route › medium  ▁▅▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003
+ */
+export function routeLine(decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow">): string {
+	const tier = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(8);
+	const p = decision.probabilities;
+	const middle = p
+		? `${TIERS.map((t) => BARS[Math.min(7, Math.floor((p[t] ?? 0) * 8))]).join("")}   ${TIERS.map((t) => `${t} ${(p[t] ?? 0).toFixed(2).replace(/^0/, "")}`).join(" · ")}`
+		: (decision.why ?? "");
+	const why = p && decision.why ? `   ${decision.why}` : "";
+	const classifier = decision.classifier ? decision.classifier.split("/").at(-1)!.replace(/-latest$/, "") : "";
+	const timing = decision.latencyMs !== undefined ? `   ${classifier} ${(decision.latencyMs / 1000).toFixed(1)} s ${dollars(decision.cost ?? 0)}` : "";
+	return `route › ${tier} ${middle}${why}   → ${shortModel(decision.model)}${timing}`;
 }
 
 const WORKSPACE_STATUS = "orq-workspace";
@@ -186,7 +214,7 @@ export function orqHarness(deps: HarnessDeps) {
 							footerLine(
 								{
 									workspace: footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
-									selection: ctxRef?.model?.id,
+									selection: selectionName(ctxRef?.model),
 									physical: physical && physical !== ctxRef?.model?.id ? physical : undefined,
 									input: totals.input + totals.cacheRead,
 									output: totals.output,
@@ -350,6 +378,81 @@ export function orqHarness(deps: HarnessDeps) {
 				pi.setActiveTools(savedTools);
 				savedTools = undefined;
 			}
+		});
+
+		// ── routing ───────────────────────────────────────────────────────────
+		let routeShown = true;
+		pi.registerEntryRenderer<Decision>(ROUTE_ENTRY, (entry, _options, theme) => {
+			if (!routeShown || !entry.data) return undefined;
+			return new Text(theme.fg("dim", routeLine(entry.data)), 1, 0);
+		});
+		deps.routing?.onDecision((decision) => {
+			const usage = decision.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: decision.cost } : undefined;
+			const label = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`;
+			trajectory.route(label, `→ ${shortModel(decision.model)}`, usage, decision.latencyMs, decision.classifier);
+			try {
+				pi.appendEntry(ROUTE_ENTRY, decision);
+			} catch {
+				// A stale handle after /new: the step is in the trajectory regardless.
+			}
+			if (deps.routing?.unavailable) ctxRef?.ui.setWidget(ROUTE_WIDGET, [deps.routing.unavailable]);
+		});
+
+		pi.registerCommand("route", {
+			description: "orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route platform the workspace's smart routers",
+			handler: async (args, ctx) => {
+				const routing = deps.routing;
+				const arg = args.trim();
+				if (arg === "on" || arg === "off") {
+					routeShown = arg === "on";
+					ctx.ui.notify(`Route lines ${routeShown ? "shown" : "hidden"}.`);
+					render();
+					return;
+				}
+				if (arg === "platform") {
+					const listed = runOrq(["smart-routers", "list", "-o", "json"]);
+					let rows: string[] = [];
+					try {
+						const body = JSON.parse(listed.stdout);
+						rows = ((Array.isArray(body) ? body : body?.data) ?? []).map((r: any) => `  ${String(r.refId ?? r.key ?? r.name).padEnd(28)} ${String(r.profile ?? r.strategy ?? "").padEnd(10)} ${(r.models ?? []).map((m: any) => shortModel(typeof m === "string" ? m : (m.id ?? m.model ?? ""))).join(" · ")}`);
+					} catch {
+						// 403 or an older CLI: the catalogue still names them.
+						rows = deps.catalogue().filter((m) => m.id.includes("@orq/")).map((m) => `  ${m.id}`);
+						if (!listed.ok) rows.push(`  (orq smart-routers: ${listed.stderr.trim().split("\n")[0] ?? "failed"})`);
+					}
+					ctx.ui.notify(
+						[
+							`smart routers in ${deps.workspace() ?? "this workspace"}`,
+							...(rows.length ? rows : ["  none"]),
+							"platform routers decide per request inside the gateway; the choice shows in",
+							"the trace (see /trace). orq/auto decides here with the Decisions API and",
+							"shows it above each turn. Pick either with /model.",
+						].join("\n"),
+					);
+					return;
+				}
+				if (!routing) {
+					ctx.ui.notify("orq/auto is not available in this session.", "warning");
+					return;
+				}
+				const pool = TIERS.map((t: Tier) => `${t} ${shortModel(routing.pool[t])}`).join(" · ");
+				if (arg === "explain" || arg === "") {
+					ctx.ui.notify(
+						[
+							"route question (general_v2 · orq-smart-router RES-1619)",
+							`  ${DIFFICULTY_QUESTION.instructions}`,
+							...Object.entries(DIFFICULTY_QUESTION.criteria).map(([tier, text]) => `  ${tier.padEnd(7)} ${text}`),
+							`pool  ${pool}`,
+							`classifier  ${routing.classifier ?? "none"}${routing.unavailable ? ` (${routing.unavailable})` : ""}`,
+							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
+							"       goes one rung up; delete / auto_run / agent or evaluator changes never go below hard",
+							"select it with /model orq/auto, or ORQI_MODEL=orq/auto",
+						].join("\n"),
+					);
+					return;
+				}
+				ctx.ui.notify("usage: /route on|off|explain|platform", "warning");
+			},
 		});
 
 		// ── commands ──────────────────────────────────────────────────────────
@@ -584,8 +687,13 @@ export function orqHarness(deps: HarnessDeps) {
 
 /** The messages on the current branch, in order: what the trajectory rebuilds from. */
 function branchMessages(ctx: ExtensionContext): any[] {
-	return ctx.sessionManager
-		.getBranch()
-		.filter((entry: any) => entry.type === "message")
-		.map((entry: any) => entry.message);
+	return ctx.sessionManager.getBranch().flatMap((entry: any) => {
+		if (entry.type === "message") return [entry.message];
+		if (entry.type === "custom" && entry.customType === ROUTE_ENTRY && entry.data) {
+			const d = entry.data as Decision;
+			const label = `${d.tier}${d.arrow ? ` ${d.arrow}` : ""}`;
+			return [{ role: "route", label, detail: `→ ${shortModel(d.model)}`, usage: d.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: d.cost } : undefined, durationMs: d.latencyMs, model: d.classifier, timestamp: Date.parse(entry.timestamp ?? "") || undefined }];
+		}
+		return [];
+	});
 }

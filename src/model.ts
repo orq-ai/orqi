@@ -14,7 +14,9 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { apiBaseUrl, routerUrl } from "./auth.ts";
 
 export const PROVIDER_ID = "orq";
-export const DEFAULT_MODEL = process.env.ORQI_MODEL ?? "openai/gpt-5.6-terra";
+/** The default chat model, and the medium rung `orq/auto` falls back to. */
+export const BASE_MODEL = "openai/gpt-5.6-terra";
+export const DEFAULT_MODEL = process.env.ORQI_MODEL ?? BASE_MODEL;
 
 const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
@@ -153,7 +155,9 @@ async function catalogue(token: string, cachePath: string): Promise<{ models: Mo
  * downstream (the `/model` picker, the footer, ctrl+p cycling) follows.
  */
 export function onlyOrq(runtime: ModelRuntime): ModelRuntime {
-	const mine = (model: { provider: string }) => model.provider === PROVIDER_ID;
+	// orqi's own: the router, and the Decisions API classifiers `orq/auto` uses.
+	const ours = new Set([PROVIDER_ID, "orq-decisions"]);
+	const mine = (model: { provider: string }) => ours.has(model.provider);
 	return new Proxy(runtime, {
 		get(target, prop, receiver) {
 			const value = Reflect.get(target, prop, receiver);
@@ -161,16 +165,16 @@ export function onlyOrq(runtime: ModelRuntime): ModelRuntime {
 			const fn = value.bind(target);
 			switch (prop) {
 				case "getProviders":
-					return () => fn().filter((provider: { id: string }) => provider.id === PROVIDER_ID);
+					return () => fn().filter((provider: { id: string }) => ours.has(provider.id));
 				case "getProvider":
-					return (id: string) => (id === PROVIDER_ID ? fn(id) : undefined);
+					return (id: string) => (ours.has(id) ? fn(id) : undefined);
 				case "getModels":
 				case "getAvailableSnapshot":
 					return (...args: unknown[]) => fn(...args).filter(mine);
 				case "getAvailable":
 					return async (...args: unknown[]) => (await fn(...args)).filter(mine);
 				case "getModel":
-					return (provider: string, id: string) => (provider === PROVIDER_ID ? fn(provider, id) : undefined);
+					return (provider: string, id: string) => (ours.has(provider) ? fn(provider, id) : undefined);
 				default:
 					return fn;
 			}
@@ -258,6 +262,8 @@ export async function createOrqModelRuntime(agentDir: string, token: string): Pr
 }
 
 /** The configured default if the workspace has it, else the first enabled model. */
-export function pickModel(models: OrqModels) {
-	return models.runtime.getModel(PROVIDER_ID, DEFAULT_MODEL) ?? models.runtime.getModel(PROVIDER_ID, models.ids[0]);
+export function pickModel(models: OrqModels, id = DEFAULT_MODEL) {
+	// `orq/auto` is the virtual model: provider `orq`, id `auto`.
+	const wanted = id.startsWith("orq/") ? id.slice(4) : id;
+	return models.runtime.getModel(PROVIDER_ID, wanted) ?? models.runtime.getModel(PROVIDER_ID, BASE_MODEL) ?? models.runtime.getModel(PROVIDER_ID, models.ids[0]);
 }

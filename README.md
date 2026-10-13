@@ -49,6 +49,7 @@ never runs automatically.
 | **orq AI Router** | The only model provider, so `/model` offers exactly the models the workspace has enabled |
 | **7 workspace commands** | `/tools`, `/whoami`, `/workspace [key]`, `/reconnect`, `/doctor`, `/update`, `/feedback <text>` (straight to the orq.ai team) |
 | **A harness you can see through** | A footer with the workspace, the model that answered, tokens, cost and a context bar with a per-turn sparkline; a minimap of every step beside the transcript (`alt+m`, `/panel focus`); `/cost` per model; `/trace` for a turn's spans and smart-router decision; `/open` for the session's thread in Studio; `/trajectory` to export the session as a Harbor ATIF file; `/whatsnew` renders the latest orq.ai release in the terminal |
+| **Smart routing you can watch** | `orq/auto` (`/model orq/auto` or `ORQI_MODEL=orq/auto`) asks the orq Decisions API how hard each turn is and routes it to an easy, medium or hard model from your workspace, with a route line above the turn showing the probabilities, the pick, and what the decision cost. `/route explain` prints the question and the pool, `/route platform` lists the workspace's smart routers |
 | **Managed agents** | `/agents` lists the workspace's agents (enter talks, `i` inspects, `t` traces, `o` opens Studio); `/agent <key>` talks to one, with orqi's own prompt and tools switched off; the `subagent` tool delegates to `agent/<key>` too |
 | **44 orq MCP tools** | Every tool the workspace's MCP server exposes today, minus three invocation surfaces ([why](ARCHITECTURE.md#tools)). Wrapped as native pi tools with an `orq_` prefix. Results render as a one-line summary (`23 items · 6.0 KB`); `ctrl+o` expands to pretty-printed JSON. The model always receives the full payload |
 | **24 skills** | 17 from [orq-ai/assistant-plugins](https://github.com/orq-ai/assistant-plugins) plus the 7 orqi skills, vendored in `skills/`. The upstream 17 refresh themselves: orqi checks once a day and picks up new ones without waiting for a release |
@@ -68,6 +69,9 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQ_PROFILE` | Which API-key profile the orq CLI authenticates with; orqi uses that profile's key and follows whichever host the CLI resolves from it |
 | `ORQI_MODEL` | Router model (default `openai/gpt-5.6-terra`) |
 | `ORQI_TUI` | `regular` renders inline instead of fullscreen; the minimap then floats as an overlay instead of taking its own columns |
+| `ORQI_ROUTE_POOL` | Override `orq/auto` rungs: `easy=openai/gpt-5.6-luna,hard=anthropic/claude-opus-5` |
+| `ORQI_ROUTE_LOG` | `1` appends each routing decision to `~/.orqi/agent/routes.jsonl` (prompt hash, tier, probabilities, model, cost, latency) |
+| `ORQI_ROUTE_THRESHOLDS`, `ORQI_ROUTE_CLASSIFIER` | Expected-tier cut points (default `0.5,1.5`) and the classifier model (default `typesafe/jev-latest`) |
 | `ORQI_TAG` | Sent as `X-ORQ-METADATA-tag` on every router call, so a workshop instructor can filter the Threads tab by it |
 | `ORQI_WORKSPACE` | Workspace key for Studio links (`/open`, `/trace`), for an API key that cannot read its own workspace's settings |
 | `ORQI_THEME` | `dark` selects the theme that keeps turquoise for success and red for errors; the default is one-hue amber. `/theme` switches mid-session |

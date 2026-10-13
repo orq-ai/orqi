@@ -26,7 +26,8 @@ import { credentialCandidates, LOGIN_HINT_ONESHOT, mcpUrl, projectForCredential,
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { authLines, orqCommands } from "./commands.ts";
 import { connectOrqTools, firstLine } from "./mcp.ts";
-import { createOrqModelRuntime, pickModel } from "./model.ts";
+import { createOrqModelRuntime, DEFAULT_MODEL, pickModel } from "./model.ts";
+import { registerRouting } from "./router.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { orqHarness } from "./harness.ts";
 import { createSubagentTool } from "./subagent.ts";
@@ -134,10 +135,27 @@ if (oneShot && !orq.credential) {
 process.env.ORQI_REPO ??= repoName();
 const models = await createOrqModelRuntime(AGENT_DIR, orq.credential?.token ?? candidates[0]!.token);
 const modelRuntime = models.runtime;
+// `orq/auto` and the Decisions API classifiers, on the runtime itself so the
+// boot model can be `orq/auto` and subagents can resolve its rungs.
+const routing = registerRouting(
+	modelRuntime,
+	models.catalogue,
+	DEFAULT_MODEL,
+	process.env.ORQI_ROUTE_LOG === "1" ? join(AGENT_DIR, "routes.jsonl") : undefined,
+);
 const model = pickModel(models);
 const customTools = [
 	...orq.tools,
-	createSubagentTool({ orqTools: orq.tools, model, modelRuntime, agentDir: AGENT_DIR }),
+	createSubagentTool({
+		orqTools: orq.tools,
+		model,
+		modelRuntime,
+		agentDir: AGENT_DIR,
+		// Under orq/auto a subagent runs on its type's rung (investigator and
+		// docs easy, analyst medium); otherwise on whatever the parent runs.
+		modelFor: (agent, parent) =>
+			parent?.provider === "orq" && parent.id === "auto" ? (modelRuntime.getModel("orq", routing.pool[agent.rung]) ?? model) : (parent ?? model),
+	}),
 ];
 
 // Filled in below, once the services exist: the renderer only reads it at draw
@@ -197,6 +215,7 @@ const services = await createAgentSessionServices({
 					return { text: (result.content as { text?: string }[]).map((block) => block.text ?? "").join("\n"), isError: Boolean((result as { isError?: boolean }).isError) };
 				},
 				workspace: () => header.workspace,
+				routing,
 			}),
 		],
 	},

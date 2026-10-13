@@ -146,6 +146,12 @@ export class Trajectory {
 	}
 
 	private add(message: AnyMessage): void {
+		if (message.role === "route") {
+			// A persisted orqi-route entry, replayed on resume.
+			const route = message as unknown as { label: string; detail: string; usage?: StepUsage; durationMs?: number; model?: string; timestamp?: number };
+			this.push({ role: "route", label: route.label, detail: route.detail, status: "ok", ts: route.timestamp ?? Date.now(), usage: route.usage, durationMs: route.durationMs, model: route.model });
+			return;
+		}
 		if (message.role === "user") {
 			this.turn++;
 			const text = textOf(message.content);
@@ -251,8 +257,8 @@ export class Trajectory {
 	}
 
 	/** A routing decision (`orq/auto`), shown before the turn's reply. */
-	route(label: string, detail: string, usage?: StepUsage, durationMs?: number): void {
-		this.push({ role: "route", label, detail, status: "ok", ts: Date.now(), usage, durationMs });
+	route(label: string, detail: string, usage?: StepUsage, durationMs?: number, model?: string): void {
+		this.push({ role: "route", label, detail, status: "ok", ts: Date.now(), usage, durationMs, model });
 		this.changed();
 	}
 
