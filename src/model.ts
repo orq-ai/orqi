@@ -213,13 +213,9 @@ export function routerHeaders(env: NodeJS.ProcessEnv = process.env): Record<stri
  * Write models.json into the orqi agent dir and build a runtime over it.
  * The user's own ~/.pi is never touched.
  */
-export async function createOrqModelRuntime(agentDir: string, token: string): Promise<OrqModels> {
-	mkdirSync(agentDir, { recursive: true });
-	// v2: entries carry prices, agents and classifiers; a v1 cache would price everything at $0 for a day.
-	const { models, note } = await catalogue(token, join(agentDir, "model-catalogue.v2.json"));
+/** models.json: the router as one provider, the offered models with their prices. */
+function writeModelsJson(agentDir: string, models: ModelInfo[]): void {
 	const offered = models.filter((model) => !model.kind || talkable(model));
-	process.env.ORQI_THREAD_ID ??= crypto.randomUUID();
-
 	writeFileSync(
 		join(agentDir, "models.json"),
 		JSON.stringify(
@@ -250,7 +246,15 @@ export async function createOrqModelRuntime(agentDir: string, token: string): Pr
 		),
 		{ mode: 0o600 },
 	);
+}
 
+const CACHE_FILE = "model-catalogue.v2.json"; // v2: prices, agents and classifiers; a v1 cache priced everything at $0
+
+export async function createOrqModelRuntime(agentDir: string, token: string): Promise<OrqModels> {
+	mkdirSync(agentDir, { recursive: true });
+	const { models, note } = await catalogue(token, join(agentDir, CACHE_FILE));
+	process.env.ORQI_THREAD_ID ??= crypto.randomUUID();
+	writeModelsJson(agentDir, models);
 	// The resolved credential may be a login-session token rather than the
 	// exported key, so make $ORQ_API_KEY agree with whatever auth resolved.
 	process.env.ORQ_API_KEY = token;
@@ -259,6 +263,30 @@ export async function createOrqModelRuntime(agentDir: string, token: string): Pr
 		authPath: join(agentDir, "auth.json"),
 	});
 	return { runtime: onlyOrq(runtime), ids: models.filter((model) => !model.kind).map((model) => model.id), catalogue: models, note };
+}
+
+/**
+ * Fetch the catalogue again with a credential that works and reload the
+ * running runtime from it. A boot with no credential (the welcome) started on
+ * the one-model fallback; without this, /model, orq/auto and /agents stayed
+ * that thin until a restart. Mutates `models` so every reader sees the change.
+ */
+export async function refreshOrqModels(agentDir: string, token: string, models: OrqModels): Promise<boolean> {
+	const prior = process.env.ORQI_REFRESH_MODELS;
+	process.env.ORQI_REFRESH_MODELS = "1";
+	try {
+		const { models: fresh, note } = await catalogue(token, join(agentDir, CACHE_FILE));
+		if (note) return false;
+		writeModelsJson(agentDir, fresh);
+		await models.runtime.refresh();
+		models.catalogue = fresh;
+		models.ids = fresh.filter((model) => !model.kind).map((model) => model.id);
+		models.note = undefined;
+		return true;
+	} finally {
+		if (prior === undefined) delete process.env.ORQI_REFRESH_MODELS;
+		else process.env.ORQI_REFRESH_MODELS = prior;
+	}
 }
 
 /** The configured default if the workspace has it, else the first enabled model. */

@@ -295,7 +295,10 @@ export interface Decision extends RouteState {
 export interface Routing {
 	pool: Pool;
 	classifier?: string;
-	onDecision(listener: (decision: Decision) => void): void;
+	/** Returns the unsubscribe: each session's harness listens, and stops when that session ends. */
+	onDecision(listener: (decision: Decision) => void): () => void;
+	/** Recompute the pool and classifier from a fresher catalogue (after a first sign-in). */
+	refresh(catalogue: ModelInfo[]): void;
 	/** Set once a 403 says the key cannot classify: the widget line. */
 	unavailable?: string;
 }
@@ -312,13 +315,25 @@ interface RuntimeLike {
  * subagents can resolve the rungs. Returns the pool and a decision feed.
  */
 export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], defaultModel: string, routeLog?: string): Routing {
-	const classifiers = catalogue.filter((model) => model.kind === "classifier");
 	const listeners = new Set<(decision: Decision) => void>();
-	const pool = routePool(catalogue, defaultModel === `orq/${AUTO_ID}` ? BASE_MODEL : defaultModel);
-	const classifier = process.env.ORQI_ROUTE_CLASSIFIER ?? (classifiers.some((model) => model.id === DEFAULT_CLASSIFIER) ? DEFAULT_CLASSIFIER : classifiers[0]?.id);
-	const routing: Routing = { pool, classifier, onDecision: (listener) => listeners.add(listener) };
-	if (classifiers.length) runtime.registerProvider(DECISIONS_PROVIDER, decisionsProvider(classifiers));
-	const hard = catalogue.find((model) => model.id === pool.hard);
+	const base = defaultModel === `orq/${AUTO_ID}` ? BASE_MODEL : defaultModel;
+	const routing: Routing = {
+		pool: routePool(catalogue, base),
+		onDecision: (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		refresh: (next) => {
+			const classifiers = next.filter((model) => model.kind === "classifier");
+			routing.pool = routePool(next, base);
+			routing.classifier = process.env.ORQI_ROUTE_CLASSIFIER ?? (classifiers.some((model) => model.id === DEFAULT_CLASSIFIER) ? DEFAULT_CLASSIFIER : classifiers[0]?.id);
+			routing.unavailable = undefined;
+			if (classifiers.length) runtime.registerProvider(DECISIONS_PROVIDER, decisionsProvider(classifiers));
+		},
+	};
+	routing.refresh(catalogue);
+	const pool = () => routing.pool;
+	const hard = catalogue.find((model) => model.id === routing.pool.hard);
 
 	runtime.registerVirtualModel({
 		provider: "orq",
@@ -337,6 +352,7 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 			let latencyMs: number | undefined;
 			// A floored turn is hard whatever the classifier says: do not wait for it.
 			if (request.reason === "user" && !floorOf(text)) {
+				const classifier = routing.classifier;
 				if (!classifier) classified = { error: "no classifier model in this workspace" };
 				else if (routing.unavailable) classified = { error: routing.unavailable };
 				else {
@@ -355,8 +371,8 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 				}
 			}
 			const decision = policy({ reason: request.reason, text, state, failedError: request.failed?.message?.errorMessage, classified });
-			const model = runtime.getModel("orq", pool[decision.tier]) ?? runtime.getModel("orq", pool.medium) ?? request.previous?.model;
-			if (!model) throw new Error(`orq/auto: no model for the ${decision.tier} rung (${pool[decision.tier]})`);
+			const model = runtime.getModel("orq", pool()[decision.tier]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
+			if (!model) throw new Error(`orq/auto: no model for the ${decision.tier} rung (${pool()[decision.tier]})`);
 			const changed = request.reason === "user" || (request.reason === "retry" && decision.arrow);
 			if (!changed) return { model, thinkingLevel: request.thinkingLevel };
 			const next: RouteState = {
@@ -366,7 +382,7 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 				...(decision.why ? { why: decision.why } : {}),
 				...(cost !== undefined ? { cost } : {}),
 				...(latencyMs !== undefined ? { latencyMs } : {}),
-				...(classifier && request.reason === "user" ? { classifier } : {}),
+				...(routing.classifier && request.reason === "user" && latencyMs !== undefined ? { classifier: routing.classifier } : {}),
 			};
 			for (const listener of listeners) listener({ ...next, reason: request.reason, arrow: decision.arrow });
 			if (routeLog) {

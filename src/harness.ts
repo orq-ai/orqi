@@ -10,7 +10,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { HStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
+import { HStack, matchesKey, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { apiBaseUrl, runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
@@ -64,6 +64,29 @@ export function routeLine(decision: Pick<Decision, "tier" | "probabilities" | "w
 
 const WORKSPACE_STATUS = "orq-workspace";
 
+/** Marks orqi's HStack around pi's layout root, so a later session or /reload unwraps it instead of nesting. */
+const SIDE = Symbol.for("orqi.minimap.side");
+
+/**
+ * `owner/repo` from a git remote, credentials never included: it is sent as a
+ * header on every router call and stored in traces. Anything that does not
+ * parse sends nothing.
+ */
+export function repoOf(remote: string): string {
+	const scp = remote.match(/^[\w.-]+@[\w.-]+:(.+)$/); // git@github.com:owner/repo.git
+	let path: string;
+	if (scp) path = scp[1]!;
+	else {
+		try {
+			path = new URL(remote).pathname; // user:pass@ lives in the URL's auth part, not here
+		} catch {
+			return "";
+		}
+	}
+	const parts = path.replace(/\.git$/, "").split("/").filter(Boolean);
+	return parts.length >= 2 ? parts.slice(-2).join("/") : (parts[0] ?? "");
+}
+
 /** Open a URL in the browser; false when there is no opener. */
 export function openUrl(url: string): boolean {
 	const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
@@ -94,7 +117,7 @@ export function costLines(rows: Map<string, StepUsage & { calls: number }>, turn
 	const rule = "─".repeat(66);
 	const lines = [`session cost${dollars(total).padStart(42)}   (${turns} ${turns === 1 ? "turn" : "turns"})`, rule];
 	for (const [model, row] of [...rows].sort((a, b) => b[1].cost - a[1].cost)) {
-		const toks = `↑${tokens(row.input + row.cacheRead)}${row.output ? ` ↓${tokens(row.output)}` : ""}`;
+		const toks = row.input + row.cacheRead + row.output ? `↑${tokens(row.input + row.cacheRead)}${row.output ? ` ↓${tokens(row.output)}` : ""}` : "";
 		lines.push(`${model.padEnd(28).slice(0, 28)} ${String(row.calls).padStart(3)} calls  ${toks.padEnd(16)} ${dollars(row.cost).padStart(9)}`);
 	}
 	if (rows.size === 0) lines.push("no model calls yet");
@@ -109,7 +132,8 @@ export function costLines(rows: Map<string, StepUsage & { calls: number }>, turn
 /** The most capable chat model the workspace offers: the "always" baseline for /cost. */
 export function topModel(catalogue: ModelInfo[]): ModelInfo | undefined {
 	return catalogue
-		.filter((model) => !model.kind && model.cost && !model.id.includes("@"))
+		// Not a smart router, and not a regional copy of a model already listed.
+		.filter((model) => !model.kind && model.cost && !model.id.includes("@") && !/\/(eu|us|global|apac)\./.test(model.id))
 		.sort((a, b) => (b.intelligence ?? 0) - (a.intelligence ?? 0) || (b.cost?.output ?? 0) - (a.cost?.output ?? 0))[0];
 }
 
@@ -124,8 +148,10 @@ export function orqHarness(deps: HarnessDeps) {
 		let frame = 0;
 		let spinTimer: ReturnType<typeof setInterval> | undefined;
 		let resolvedWorkspace: string | undefined;
-		let workspaceAsked = false;
+		let workspaceAskedFor: string | undefined;
 		let savedTools: string[] | undefined;
+		let reserveTokens = 16_384;
+		let lastFooter = "";
 
 		// ── minimap state ─────────────────────────────────────────────────────
 		let minimapForced: boolean | undefined; // undefined = auto by width
@@ -157,8 +183,9 @@ export function orqHarness(deps: HarnessDeps) {
 			const host = studioHost(apiBaseUrl());
 			const known = process.env.ORQI_WORKSPACE ?? resolvedWorkspace ?? deps.workspace();
 			if (looksLikeKey(known)) return { host, workspace: known };
-			if (workspaceAsked) return { host, workspace: resolvedWorkspace };
-			workspaceAsked = true;
+			// Asked once per credential: a /login or the welcome changes the answer.
+			if (workspaceAskedFor === process.env.ORQ_API_KEY) return { host, workspace: resolvedWorkspace };
+			workspaceAskedFor = process.env.ORQ_API_KEY;
 			// An API key alone names its workspace by id; the key comes from the API, when the key may read it.
 			try {
 				const res = await fetch(`${apiBaseUrl()}/v2/workspace-settings`, {
@@ -206,13 +233,22 @@ export function orqHarness(deps: HarnessDeps) {
 					dispose: unsub,
 					invalidate() {},
 					render(width: number): string[] {
+						// Rendering must never throw: an exception here takes the whole TUI down.
+						try {
+							lastFooter = footerFrame(width);
+						} catch {
+							// Keep the last good frame.
+						}
+						return [lastFooter];
+					},
+				};
+				function footerFrame(width: number): string {
 						const totals = trajectory.totals();
 						const lastAnswer = [...trajectory.steps].reverse().find((step) => step.role === "assistant" && step.model);
 						const sample = trajectory.samples.at(-1);
-						const reserve = pi.getSettings().compaction?.reserveTokens ?? 16384;
+						const reserve = reserveTokens;
 						const physical = lastAnswer?.model;
-						return [
-							footerLine(
+						return footerLine(
 								{
 									workspace: footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
 									selection: selectionName(ctxRef?.model),
@@ -228,10 +264,8 @@ export function orqHarness(deps: HarnessDeps) {
 								},
 								width,
 								paint,
-							),
-						];
-					},
-				};
+							);
+				}
 			});
 		};
 
@@ -273,12 +307,16 @@ export function orqHarness(deps: HarnessDeps) {
 		 * that renamed it) the panel falls back to an overlay.
 		 */
 		const attachMinimap = (tui: TUI, theme: { fg(token: string, text: string): string }, ctx: ExtensionContext) => {
-			const host = tui as unknown as { layoutRoot?: Component; setLayoutRoot?(root: Component | undefined): void };
+			const host = tui as unknown as { layoutRoot?: Component & { [SIDE]?: Component }; setLayoutRoot?(root: Component | undefined): void };
 			if (host.layoutRoot === sideRoot && sideRoot) return;
 			if (host.layoutRoot && typeof host.setLayoutRoot === "function") {
+				// A previous session or /reload left its own wrapper: wrap pi's root, not that.
+				const inner = host.layoutRoot[SIDE] ?? host.layoutRoot;
 				const panelEntry = { component: minimapView(theme), basis: MINIMAP_WIDTH, shrink: 0, visible: (viewport: { width: number }) => minimapVisible(viewport.width) };
-				sideRoot = new HStack([{ component: host.layoutRoot, grow: 1, shrink: 1, basis: 0 }, panelEntry]);
-				host.setLayoutRoot(sideRoot as Component);
+				const wrapper = new HStack([{ component: inner, grow: 1, shrink: 1, basis: 0 }, panelEntry]) as HStack & { [SIDE]?: Component };
+				wrapper[SIDE] = inner;
+				sideRoot = wrapper;
+				host.setLayoutRoot(wrapper);
 				return;
 			}
 			if (overlay || ctx.mode !== "tui") return;
@@ -299,16 +337,16 @@ export function orqHarness(deps: HarnessDeps) {
 			releaseKeys = ctx.ui.onTerminalInput((data) => {
 				const steps = trajectory.steps;
 				const current = minimapSelected ?? steps.length - 1;
-				if (data === "\x1b") {
+				if (matchesKey(data, "escape")) {
 					minimapFocused = false;
 					minimapSelected = undefined;
 					releaseKeys?.();
 					releaseKeys = undefined;
-				} else if (data === "\x1b[A" || data === "\x1bOA") {
+				} else if (matchesKey(data, "up")) {
 					minimapSelected = Math.max(0, current - 1);
-				} else if (data === "\x1b[B" || data === "\x1bOB") {
+				} else if (matchesKey(data, "down")) {
 					minimapSelected = current + 1 >= steps.length ? undefined : current + 1;
-				} else if ((data === "\r" || data === "\n") && steps[current]) {
+				} else if (matchesKey(data, "enter") && steps[current]) {
 					const { title, body } = peekLines(steps[current]!);
 					void panel(ctx, { title, rows: body, hint: "esc close" });
 				} else {
@@ -336,11 +374,20 @@ export function orqHarness(deps: HarnessDeps) {
 			// Every session is a thread: /new and /fork mint a new id, /resume keeps
 			// the file's own. The provider headers read this per request.
 			process.env.ORQI_THREAD_ID = ctx.sessionManager.getSessionId();
+			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
 			trajectory.fromMessages(branchMessages(ctx));
 			traces.length = 0;
 			if (ctx.mode !== "tui") return;
 			installFooter(ctx);
 			ctx.ui.setWorkingIndicator({ frames: SPINNER.map((f) => ctx.ui.theme.fg("accent", f)), intervalMs: 80 });
+		});
+		// This handle dies with its session: stop everything that would outlive it.
+		pi.on("session_shutdown", () => {
+			if (spinTimer) clearInterval(spinTimer);
+			spinTimer = undefined;
+			releaseKeys?.();
+			releaseKeys = undefined;
+			stopDecisions?.();
 		});
 		pi.on("session_tree", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
 		pi.on("session_compact", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
@@ -387,7 +434,7 @@ export function orqHarness(deps: HarnessDeps) {
 			if (!routeShown || !entry.data) return undefined;
 			return new Text(theme.fg("dim", routeLine(entry.data)), 1, 0);
 		});
-		deps.routing?.onDecision((decision) => {
+		const stopDecisions = deps.routing?.onDecision((decision) => {
 			const usage = decision.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: decision.cost } : undefined;
 			const label = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`;
 			trajectory.route(label, `→ ${shortModel(decision.model)}`, usage, decision.latencyMs, decision.classifier);

@@ -179,12 +179,20 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `optionalDependencies` rather than keeping its own.
 - **The version has one source**: `package.json`, read by `src/branding.ts` and inlined at compile
   time. `release.yml` fails the release when the pushed tag and that version disagree.
+- **Session services are built per session, not once** (`makeServices` in `src/main.ts`). pi marks
+  a session's extension handles stale when `/new`, `/resume` or `/fork` replaces it; with one shared
+  services object every extension kept calling through dead handles, and the footer's first frame
+  after `/new` crashed the process on `pi.getSettings()`. State that must survive a session lives
+  in the factory closures (`orqCommands`), and the harness rebuilds from the branch. Renderers still
+  wrap their work in try/catch: an exception in a render takes the TUI down.
 - **The minimap reaches into pi's fullscreen layout root.** pi has no side-panel API, and an overlay
   covers the transcript's right edge, where prose wraps. In fullscreen the TUI has a `layoutRoot`
   (pi's chat viewport); `attachMinimap` in `src/harness.ts` wraps it in an `HStack` with the panel
   as a fixed 38-column entry, so the transcript reflows beside it. The reach is guarded: without a
   `layoutRoot` (regular mode, or a pi that renamed it) the panel falls back to a non-capturing
   overlay. The footer factory is where the TUI is handed over, which is why it is attached there.
+  The wrapper is marked with a symbol so the next session or `/reload` unwraps it before wrapping
+  again; without that, each `/reload` nested one more minimap.
   Ask upstream for a sidebar slot before building more on this.
 - **The minimap toggles on `alt+m`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle. Focus
   for ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/panel focus` is on, so

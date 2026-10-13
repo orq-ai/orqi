@@ -166,12 +166,16 @@ test("orq/auto routes a user turn through the classifier and keeps follow-ups on
 		expect(virtual.provider).toBe("orq");
 		expect(virtual.id).toBe("auto");
 		const seen: any[] = [];
+		const stale: any[] = [];
 		routing.onDecision((decision) => seen.push(decision));
+		// A listener from a session that ended stops hearing decisions.
+		routing.onDecision((decision) => stale.push(decision))();
 		const user = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "why is support-triage slower this week?" }] });
 		expect(user.model.id).toBe("openai/gpt-5.6-terra");
 		expect(user.state.tier).toBe("medium");
 		expect(user.state.cost).toBe(0.00003);
 		expect(seen).toHaveLength(1);
+		expect(stale).toHaveLength(0);
 		const followUp = await virtual.route({ reason: "continuation", thinkingLevel: "medium", state: user.state, messages: [] });
 		expect(followUp.model.id).toBe("openai/gpt-5.6-terra");
 		expect(followUp.state).toBeUndefined(); // unchanged state is not re-stored
@@ -189,6 +193,10 @@ test("orq/auto routes a user turn through the classifier and keeps follow-ups on
 		const forbidden = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "hi" }] });
 		expect(forbidden.state.tier).toBe("medium");
 		expect(routing.unavailable).toContain("classify permission");
+		// A fresher catalogue (after the first sign-in) recomputes the pool and clears the 403 memo.
+		routing.refresh(CATALOGUE.filter((m) => m.id !== "openai/gpt-5.6-luna"));
+		expect(routing.pool.easy).not.toBe("openai/gpt-5.6-luna");
+		expect(routing.unavailable).toBeUndefined();
 	} finally {
 		globalThis.fetch = realFetch;
 	}

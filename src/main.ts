@@ -26,10 +26,10 @@ import { credentialCandidates, LOGIN_HINT_ONESHOT, mcpUrl, projectForCredential,
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, orqCommands } from "./commands.ts";
 import { connectOrqTools, firstLine } from "./mcp.ts";
-import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, talkable } from "./model.ts";
+import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, talkable } from "./model.ts";
 import { registerRouting } from "./router.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
-import { orqHarness } from "./harness.ts";
+import { orqHarness, repoOf } from "./harness.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { currentUpdateCommand, maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
 
@@ -65,8 +65,7 @@ if (oneShot === "update") {
 /** `owner/repo` of the working directory's origin, or "" outside a repo. */
 function repoName(): string {
 	try {
-		const url = Bun.spawnSync(["git", "remote", "get-url", "origin"], { stderr: "ignore" }).stdout.toString().trim();
-		return url.replace(/^.*[:/]([^/:]+\/[^/]+?)(\.git)?$/, "$1");
+		return repoOf(Bun.spawnSync(["git", "remote", "get-url", "origin"], { stderr: "ignore" }).stdout.toString().trim());
 	} catch {
 		return "";
 	}
@@ -174,74 +173,89 @@ const header: HeaderInfo = {
 
 const liveSkills = liveSkillsDir(AGENT_DIR);
 
-const services = await createAgentSessionServices({
-	cwd: process.cwd(),
-	agentDir: AGENT_DIR,
-	modelRuntime,
-	resourceLoaderOptions: {
-		systemPrompt: readFileSync(join(pkgDir, "orqi-system-prompt.txt"), "utf8"),
-		// Ship a predictable skill set: the bundled orq + orqi skills only.
-		// Ambient discovery finds every skill installed on the machine (100+ here),
-		// which both bloats the prompt and makes orqi behave differently per user.
-		noSkills: !process.env.ORQI_LOCAL_SKILLS,
-		// Live (daily-updated) skills ahead of the bundled ones: pi resolves
-		// duplicate skill names first-wins, so a fresher orq-* copy supersedes
-		// the bundled one while the bundled orqi-* skills keep loading. The
-		// override folds that expected collision into one warning line.
-		...skillResources(pkgDir, liveSkills),
-		additionalThemePaths: [join(pkgDir, "themes")],
-		extensionFactories: [
-			orqCommands(
-				async (next: Credential[]) => {
-					const result = await orq.reconnect(next);
-					// The model runtime reads $ORQ_API_KEY; keep it on the credential the tools use.
-					process.env.ORQ_API_KEY = result.credential.token;
-					header.workspace = result.credential.workspace;
-					header.project = await projectForCredential(result.credential.token);
-					header.status = statusLine(`${orq.tools.length} tools`, result.note);
-					return result;
-				},
-				orq.tools.map((tool) => tool.name),
-				header,
-				AGENT_DIR,
-				{
-					rejections: welcome ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : orq.rejections,
-					candidates,
-					welcome,
-				},
-			),
-			orqHarness({
-				agentDir: AGENT_DIR,
-				catalogue: () => models.catalogue,
-				toolCount: () => orq.tools.length,
-				callTool: async (name, args) => {
-					const tool = orq.tools.find((candidate) => candidate.name === `orq_${name}`);
-					if (!tool) throw new Error(`orq_${name} is not available on this connection`);
-					// The MCP server stalls now and then (AGENTS.md); a slash command must not hang on it.
-					const result = await tool.execute(`orqi-${name}`, args as any, AbortSignal.timeout(20_000), undefined, undefined as any);
-					return { text: (result.content as { text?: string }[]).map((block) => block.text ?? "").join("\n"), isError: Boolean((result as { isError?: boolean }).isError) };
-				},
-				workspace: () => header.workspace,
-				routing,
-			}),
-		],
-	},
-});
-// Two amber phosphor themes ship in themes/: orq-amber is one hue throughout
-// and is the default, orq-dark keeps turquoise for success and red for errors.
-// Both are on additionalThemePaths, so pi's own /theme picker lists them either
-// way and a session can switch without restarting.
-services.settingsManager.setTheme(process.env.ORQI_THEME === "dark" ? "orq-dark" : "orq-amber");
-// Silence pi's own startup header - it pitches pi, and this CLI prints its own.
-// ctrl+o still shows the full help and loaded resources on demand.
-services.settingsManager.setQuietStartup(true);
-// Fullscreen keeps the composer pinned to the bottom of the terminal instead of
-// trailing the transcript. Still flagged experimental upstream, hence the opt-out.
-services.settingsManager.setTuiMode(process.env.ORQI_TUI === "regular" ? "regular" : "fullscreen");
-// Every pi upgrade would otherwise open the session with pi's own "What's New"
-// panel. Parking the marker ahead of any real pi version suppresses it; orq's
-// changelog is linked from the header.
-services.settingsManager.setLastChangelogVersion("999.0.0");
+// Services are built per session, not once: pi marks a session's extension
+// handles stale when the session is replaced (/new, /resume, /fork), and a
+// shared services object would leave every extension calling through dead
+// handles from then on (the footer's first frame after /new crashed on it).
+// The factories keep their own state across sessions where it matters
+// (the connection state in orqCommands); the harness rebuilds from the branch.
+const makeServices = async () => {
+	const created = await createAgentSessionServices({
+		cwd: process.cwd(),
+		agentDir: AGENT_DIR,
+		modelRuntime,
+		resourceLoaderOptions: {
+			systemPrompt: readFileSync(join(pkgDir, "orqi-system-prompt.txt"), "utf8"),
+			// Ship a predictable skill set: the bundled orq + orqi skills only.
+			// Ambient discovery finds every skill installed on the machine (100+ here),
+			// which both bloats the prompt and makes orqi behave differently per user.
+			noSkills: !process.env.ORQI_LOCAL_SKILLS,
+			// Live (daily-updated) skills ahead of the bundled ones: pi resolves
+			// duplicate skill names first-wins, so a fresher orq-* copy supersedes
+			// the bundled one while the bundled orqi-* skills keep loading. The
+			// override folds that expected collision into one warning line.
+			...skillResources(pkgDir, liveSkills),
+			additionalThemePaths: [join(pkgDir, "themes")],
+			extensionFactories: [
+				orqCommands(
+					async (next: Credential[]) => {
+						const result = await orq.reconnect(next);
+						// The model runtime reads $ORQ_API_KEY; keep it on the credential the tools use.
+						process.env.ORQ_API_KEY = result.credential.token;
+					// The boot had nothing that worked, so the models are the fallback:
+					// reload them now that the server takes a credential.
+					if (models.note && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
+						routing.refresh(models.catalogue);
+					}
+						header.workspace = result.credential.workspace;
+						header.project = await projectForCredential(result.credential.token);
+						header.status = statusLine(`${orq.tools.length} tools`, result.note);
+						return result;
+					},
+					orq.tools.map((tool) => tool.name),
+					header,
+					AGENT_DIR,
+					{
+						rejections: welcome ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : orq.rejections,
+						candidates,
+						welcome,
+					},
+				),
+				orqHarness({
+					agentDir: AGENT_DIR,
+					catalogue: () => models.catalogue,
+					toolCount: () => orq.tools.length,
+					callTool: async (name, args) => {
+						const tool = orq.tools.find((candidate) => candidate.name === `orq_${name}`);
+						if (!tool) throw new Error(`orq_${name} is not available on this connection`);
+						// The MCP server stalls now and then (AGENTS.md); a slash command must not hang on it.
+						const result = await tool.execute(`orqi-${name}`, args as any, AbortSignal.timeout(20_000), undefined, undefined as any);
+						return { text: (result.content as { text?: string }[]).map((block) => block.text ?? "").join("\n"), isError: Boolean((result as { isError?: boolean }).isError) };
+					},
+					workspace: () => header.workspace,
+					routing,
+				}),
+			],
+		},
+	});
+	// Two amber phosphor themes ship in themes/: orq-amber is one hue throughout
+	// and is the default, orq-dark keeps turquoise for success and red for errors.
+	// Both are on additionalThemePaths, so pi's own /theme picker lists them either
+	// way and a session can switch without restarting.
+	created.settingsManager.setTheme(process.env.ORQI_THEME === "dark" ? "orq-dark" : "orq-amber");
+	// Silence pi's own startup header - it pitches pi, and this CLI prints its own.
+	// ctrl+o still shows the full help and loaded resources on demand.
+	created.settingsManager.setQuietStartup(true);
+	// Fullscreen keeps the composer pinned to the bottom of the terminal instead of
+	// trailing the transcript. Still flagged experimental upstream, hence the opt-out.
+	created.settingsManager.setTuiMode(process.env.ORQI_TUI === "regular" ? "regular" : "fullscreen");
+	// Every pi upgrade would otherwise open the session with pi's own "What's New"
+	// panel. Parking the marker ahead of any real pi version suppresses it; orq's
+	// changelog is linked from the header.
+	created.settingsManager.setLastChangelogVersion("999.0.0");
+	return created;
+};
+const services = await makeServices();
 
 // One composition site for the status line: the reconnect closure above used to
 // patch the joined string by substring, which quietly did nothing whenever the
@@ -309,11 +323,16 @@ try {
 			session.dispose();
 		}
 	} else {
-		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ sessionManager, sessionStartEvent }) => ({
-			...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model, customTools })),
-			services,
-			diagnostics: services.diagnostics,
-		});
+		let first = true;
+		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ sessionManager, sessionStartEvent }) => {
+			const fresh = first ? services : await makeServices();
+			first = false;
+			return {
+				...(await createAgentSessionFromServices({ services: fresh, sessionManager, sessionStartEvent, model, customTools })),
+				services: fresh,
+				diagnostics: fresh.diagnostics,
+			};
+		};
 		const runtime = await createAgentSessionRuntime(createRuntime, {
 			cwd: process.cwd(),
 			agentDir: AGENT_DIR,

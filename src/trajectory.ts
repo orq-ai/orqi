@@ -136,6 +136,13 @@ export class Trajectory {
 		this.turn = 0;
 		this.nextId = 1;
 		for (const message of messages) this.add(message);
+		// Only live events may leave a step running; a replayed call with no
+		// result was interrupted (orqi killed mid-tool), and would spin forever.
+		for (const step of this.steps) {
+			if (step.status !== "running") continue;
+			step.status = "error";
+			step.text ??= "(interrupted: no result was recorded)";
+		}
 		this.changed();
 	}
 

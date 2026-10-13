@@ -45,20 +45,24 @@ export function boxLines(spec: PanelSpec, width: number, selected = 0, paint: Pa
 		return `${paint.border("│")} ${fitted}${" ".repeat(Math.max(0, inner - visibleWidth(fitted)))} ${paint.border("│")}`;
 	};
 	const out = [truncateToWidth(top, width)];
-	const height = spec.height ?? spec.rows.length;
-	const rows = spec.rows.slice(offset, offset + height);
-	rows.forEach((row, i) => {
-		const index = offset + i;
-		if (!spec.selectable) {
-			// Non-selectable bodies wrap; selectable rows stay one line each.
-			for (const wrapped of row === "" ? [""] : wrapTextWithAnsi(row, inner)) out.push(line(paint.text(wrapped)));
-			return;
+	const height = spec.height ?? Number.MAX_SAFE_INTEGER;
+	if (!spec.selectable) {
+		// Bodies wrap, then scroll: a peek at one long JSON line can be 80 rows.
+		const wrapped = spec.rows.flatMap((row) => (row === "" ? [""] : wrapTextWithAnsi(row, inner)));
+		for (const row of wrapped.slice(offset, offset + height)) out.push(line(paint.text(row)));
+		if (wrapped.length > height) {
+			const shown = `${offset + 1}-${Math.min(wrapped.length, offset + height)} of ${wrapped.length} lines · ↑↓ scroll`;
+			out.push(line(paint.dim(shown)));
 		}
-		const isSelected = index === selected;
-		const marker = isSelected ? paint.selected("▌ ") : "  ";
-		const body = spec.disabled?.has(index) ? paint.dim(row) : isSelected ? paint.selected(row) : paint.text(row);
-		out.push(line(`${marker}${body}`));
-	});
+	} else {
+		spec.rows.slice(offset, offset + height).forEach((row, i) => {
+			const index = offset + i;
+			const isSelected = index === selected;
+			const marker = isSelected ? paint.selected("▌ ") : "  ";
+			const body = spec.disabled?.has(index) ? paint.dim(row) : isSelected ? paint.selected(row) : paint.text(row);
+			out.push(line(`${marker}${body}`));
+		});
+	}
 	if (spec.hint) {
 		out.push(line(""));
 		out.push(line(paint.dim(spec.hint)));
@@ -89,11 +93,21 @@ export class Panel implements Component {
 		this.requestRender();
 	}
 
+	/** Body rows that fit: the overlay is capped at 85% of the screen, minus the box's own lines. */
+	private height(): number {
+		return this.spec.height ?? Math.max(4, Math.floor((process.stdout.rows ?? 30) * 0.85) - 7);
+	}
+
 	render(width: number): string[] {
-		const height = this.spec.height ?? this.spec.rows.length;
-		if (this.selected < this.offset) this.offset = this.selected;
-		if (this.selected >= this.offset + height) this.offset = this.selected - height + 1;
-		return boxLines(this.spec, width, this.selected, this.paint, this.spec.selectable ? this.offset : 0);
+		const height = this.height();
+		if (this.spec.selectable) {
+			if (this.selected < this.offset) this.offset = this.selected;
+			if (this.selected >= this.offset + height) this.offset = this.selected - height + 1;
+		} else {
+			const lines = this.spec.rows.flatMap((row) => (row === "" ? [""] : wrapTextWithAnsi(row, Math.max(10, width - 4)))).length;
+			this.offset = Math.max(0, Math.min(this.offset, lines - height));
+		}
+		return boxLines({ ...this.spec, height }, width, this.selected, this.paint, this.offset);
 	}
 
 	invalidate(): void {}
@@ -101,6 +115,12 @@ export class Panel implements Component {
 	handleInput(data: string): void {
 		if (matchesKey(data, "escape")) {
 			this.done();
+			return;
+		}
+		if (!this.spec.selectable && (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))) {
+			const step = matchesKey(data, "pageUp") || matchesKey(data, "pageDown") ? this.height() : 1;
+			this.offset = Math.max(0, this.offset + (matchesKey(data, "up") || matchesKey(data, "pageUp") ? -step : step));
+			this.requestRender();
 			return;
 		}
 		if (this.spec.selectable && matchesKey(data, "up")) {
@@ -116,9 +136,14 @@ export class Panel implements Component {
 		for (const [key, action] of Object.entries(this.spec.keys ?? {})) {
 			if (matchesKey(data, key as any) || data === key) {
 				if (this.spec.disabled?.has(this.selected) && key === "enter") return;
-				void Promise.resolve(action(this.selected)).then((close) => {
-					if (close) this.done();
-				});
+				// An action that throws (a dead session handle, a failed call) must not
+				// become an unhandled rejection that takes the process down.
+				void Promise.resolve()
+					.then(() => action(this.selected))
+					.then((close) => {
+						if (close) this.done();
+					})
+					.catch(() => {});
 				return;
 			}
 		}

@@ -6,7 +6,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, sparkline, tokens } from "./footer.ts";
-import { costLines, repriced, topModel } from "./harness.ts";
+import { costLines, repoOf, repriced, topModel } from "./harness.ts";
 import { minimapRow, minimapRows, minimapSummary, peekLines } from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines } from "./panel.ts";
@@ -188,7 +188,7 @@ test("minimap rows: one glyph per role, +N for a subagent's steps, a gutter on t
 	expect(rows[0]).toStartWith(" › user   why is support-triage");
 	expect(rows[2]).toBe(" ⚙ tool   orq_list_traces ✓ 0.8s".padEnd(36));
 	expect(rows[3]).toBe(" ⇢ sub    investigator ✓ +4 $0.004".padEnd(36));
-	expect(rows.at(-1)).toStartWith("▌⟶ route  hard ▲ floor");
+	expect(rows.at(-1)).toStartWith("▌» route  hard ▲ floor");
 	// Long text is cut at the panel's width, with an ellipsis.
 	expect(rows[4]!.trimEnd()).toEndWith("…");
 	// A running step spins.
@@ -349,7 +349,7 @@ test("/cost reprices the session's tokens at the most capable model", () => {
 	expect(lines[0]).toEndWith("$0.113   (14 turns)");
 	expect(lines[2]).toContain("openai/gpt-5.6-terra");
 	expect(lines.at(-1)).toMatch(/^always gpt-5\.6-sol would have cost +\$0\.422 {3}\(-73%\)$/);
-	expect(topModel([{ id: "a/b", cost: sol.cost, intelligence: 30 }, sol, { id: "acme@orq/r", cost: sol.cost, intelligence: 99 }])?.id).toBe("openai/gpt-5.6-sol");
+	expect(topModel([{ id: "a/b", cost: sol.cost, intelligence: 30 }, sol, { id: "acme@orq/r", cost: sol.cost, intelligence: 99 }, { id: "google/eu.claude-opus-5", cost: sol.cost, intelligence: 99 }])?.id).toBe("openai/gpt-5.6-sol");
 	expect(costLines(new Map(), 0)).toContain("no model calls yet");
 });
 
@@ -372,4 +372,36 @@ test("panels draw a box that fits the width, selection and disabled rows include
 	expect(lines[1]).toBe("│ ▌ support-triage                     │");
 	expect(lines.at(-1)).toBe(`└${"─".repeat(38)}┘`);
 	expect(lines.every((line) => visibleWidth(line) === 40)).toBe(true);
+});
+
+test("the repo header never carries credentials from the remote", () => {
+	expect(repoOf("https://user:secret@git.example.com/repo")).toBe("repo");
+	expect(repoOf("https://user:secret@github.com/orq-ai/orqi.git")).toBe("orq-ai/orqi");
+	expect(repoOf("git@github.com:orq-ai/orqi.git")).toBe("orq-ai/orqi");
+	expect(repoOf("ssh://git@github.com/orq-ai/orqi")).toBe("orq-ai/orqi");
+	expect(repoOf("not a remote")).toBe("");
+	expect(repoOf("")).toBe("");
+});
+
+test("a replayed tool call with no result is interrupted, not running forever", () => {
+	const trajectory = new Trajectory();
+	trajectory.fromMessages([
+		{ role: "user", content: "go", timestamp: 1 },
+		{ role: "assistant", content: [{ type: "toolCall", id: "c9", name: "orq_list_traces", arguments: {} }], stopReason: "toolUse", timestamp: 2 },
+	]);
+	expect(trajectory.steps.at(-1)?.status).toBe("error");
+	// Live, the same call is running until its result lands.
+	const live = new Trajectory();
+	live.message({ role: "assistant", content: [{ type: "toolCall", id: "c9", name: "orq_list_traces", arguments: {} }], stopReason: "toolUse", timestamp: 2 });
+	expect(live.steps.at(-1)?.status).toBe("running");
+});
+
+test("long panel bodies scroll instead of losing their bottom", () => {
+	const rows = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+	const top = boxLines({ title: "peek", rows, height: 5, hint: "esc close" }, 40, 0, undefined, 0).map(bare);
+	expect(top[1]).toContain("line 1");
+	expect(top.some((line) => line.includes("1-5 of 30 lines · ↑↓ scroll"))).toBe(true);
+	expect(top.at(-1)).toStartWith("└"); // the border survives
+	const later = boxLines({ title: "peek", rows, height: 5 }, 40, 0, undefined, 25).map(bare);
+	expect(later[1]).toContain("line 26");
 });

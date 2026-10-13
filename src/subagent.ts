@@ -113,7 +113,7 @@ export function createSubagentTool(deps: SubagentDeps) {
 		}),
 		execute: async (_id, { agent, task }, signal, _onUpdate, ctx) => {
 			const managed = agent.startsWith(AGENT_PREFIX);
-			const def = AGENT_TYPES[agent];
+			const def = Object.hasOwn(AGENT_TYPES, agent) ? AGENT_TYPES[agent] : undefined;
 			if (!managed && !def) {
 				return {
 					content: [{ type: "text" as const, text: `unknown subagent "${agent}": use ${Object.keys(AGENT_TYPES).join(", ")} or agent/<key>` }],

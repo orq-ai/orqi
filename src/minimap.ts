@@ -18,7 +18,7 @@ export const MINIMAP_WIDTH = 38;
 export const MINIMAP_MIN_COLS = 140;
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-const GLYPH: Record<Step["role"], string> = { user: "›", assistant: "▌", tool: "⚙", subagent: "⇢", route: "⟶" };
+const GLYPH: Record<Step["role"], string> = { user: "›", assistant: "▌", tool: "⚙", subagent: "⇢", route: "»" };
 const ROLE: Record<Step["role"], string> = { user: "user", assistant: "assist", tool: "tool", subagent: "sub", route: "route" };
 
 export interface RowPaint {
