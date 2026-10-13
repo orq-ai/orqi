@@ -56,7 +56,15 @@ Traces (last 24h): 47 total — 41 success, 4 error, 2 timeout
 
 Then add: `View and filter traces at **[Traces → my.orq.ai](https://my.orq.ai/)**.`
 
-**Then list traces grouped by status (errors first) using ASCII table format with full trace IDs:**
+**Then list traces grouped by status (errors first) using ASCII table format with full trace IDs. When the workspace key is known, make every trace ID a link to its canonical Studio URL:**
+
+```text
+https://my.orq.ai/<workspace-key>/traces/(trace:<trace-id>)
+```
+
+Do not append query parameters such as `traces_oql` or `traces_range`; they are transient Studio list state and are not needed to open the trace.
+
+**Table format:**
 ```
 Errors (4)
 
@@ -86,7 +94,7 @@ Success (showing 10 of 41)
 - Adapt fields based on what the API returns. Prioritize: timestamp, entity, error message or latency/tokens, trace ID.
 - Show errors and failures first — they're why the user is here.
 - Cap each group at 10 items. If there are more, show the count.
-- Include the trace ID so the user can reference it in follow-up.
+- Include the trace ID so the user can reference it in follow-up. When a workspace key is known, link it using the canonical trace URL above; otherwise leave it as plain text rather than guessing a URL.
 
 ### 5. Suggest next steps
 
