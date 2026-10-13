@@ -6,5 +6,8 @@ dist/
 .context/
 .DS_Store
 reports/
-.DS_Store
 .env
+.vscode/
+.idea/
+*.swp
+*~

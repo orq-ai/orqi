@@ -24,7 +24,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 ## Things that will look wrong but are deliberate
 
 - **The MCP server intermittently hangs.** Roughly one call in three, on `initialize` *and*
-  `tools/list`, no error, just a stall (measured: 1.3 s, 120 s timeout, 0.4 s). Hence the 20 s
+  `tools/list`, no error, only a stall (measured: 1.3 s, 120 s timeout, 0.4 s). Hence the 20 s
   timeouts, three attempts on a fresh connection, and the 24 h catalogue cache in
   `~/.orqi/agent/tool-catalogue.json`. Do not simplify that away. It is not auth: the same token
   succeeds on retry, and real auth failures return 401 immediately.
@@ -124,7 +124,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   appear in a subagent's tool list; a test guards that.
 - **`--version` and `--help` are answered before anything else runs** (`src/main.ts`). `argv[2]` is
   otherwise a prompt, so without those two branches `orqi --version` boots a session, connects to
-  the MCP server and bills a model call. `install.sh` calls `--version` to prove the binary it just
+  the MCP server and bills a model call. `install.sh` calls `--version` to prove the binary it has
   extracted can execute, so it must stay free of credentials and network.
 - **`update` is claimed as `argv[2]` too, for the same reason.** Without that branch, bare `orqi
   update` would boot a session and hand "update" to the model as a prompt; `orqi "update my agent"`
@@ -174,10 +174,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **An npm install is updated by npm, never by the rename swap.** npm owns the files under
   `node_modules`, so `orqi update` runs `npm install -g @orq-ai/orqi@<version>`, pinned to the exact
   version it reported rather than `latest`. It only does so when the running binary sits under
-  `npm root -g`: a project-local copy, the npx cache, a bun or pnpm global, or a global under another
-  Node also live in a `node_modules`, and `npm install -g` there would report success over a copy
-  it never touched. The version comes from GitHub, which is minutes ahead of npm on every release,
-  so an `E404`/`ETARGET` from npm reads as "not on npm yet", not as a permissions problem.
+  `npm root -g`: a project-local copy, the npx cache, a global installed by bun or pnpm, or a
+  global under another Node also live in a `node_modules`, and `npm install -g` there would report
+  success over a copy it never touched. The version comes from GitHub, which is minutes ahead of
+  npm on every release, so an `E404`/`ETARGET` from npm reads as "not on npm yet", not as a
+  permissions problem.
 - **The npm launcher is a child-process wrapper, not an exec.** Node cannot `exec`, so
   `npm/orqi/bin/orqi.js` spawns the binary, forwards SIGTERM and SIGHUP (a `kill` of the launcher
   would otherwise orphan it), ignores SIGINT (a terminal Ctrl-C already reaches the binary through
