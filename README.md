@@ -31,6 +31,10 @@ npm install -g @orq-ai/orqi
 npm installs only the binary for your platform (macOS arm64, macOS x64, linux x64). `orqi update`
 works for both: an npm install is updated through npm.
 
+Both installers check the download against the `.sha256` published with each release and refuse
+to install on a mismatch. `gh attestation verify orqi-linux-x64.tar.gz -R orq-ai/orqi` proves which
+workflow run built a tarball.
+
 Then run `orqi`. With nothing set up it opens a welcome: sign in with the browser, or paste an API
 key from my.orq.ai › Settings › API keys. `/learn` is a good first command after that. You can also
 sign in beforehand with the [orq CLI](https://github.com/orq-ai/orq-cli) (`orq auth login`) or export

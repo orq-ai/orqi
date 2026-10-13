@@ -33,6 +33,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { dirname, join, sep } from "node:path";
 import { $ } from "bun";
 import { VERSION } from "./branding.ts";
+import { parseChecksum, sha256Hex, sidecar } from "./checksum.ts";
 import { CHECK_TTL_MS } from "./skills.ts";
 
 export const REPO = "orq-ai/orqi";
@@ -362,6 +363,47 @@ export interface RunUpdateOptions {
 	execPath?: string;
 	/** Test seam for a local release tarball. Production uses GitHub. */
 	releaseUrl?: (asset: string, tag?: string) => string;
+	/** Test seam for the checksum sidecar. Production uses fetch. */
+	fetchText?: FetchText;
+}
+
+export type FetchText = (url: string) => Promise<{ status: number; body: string }>;
+
+/** Production sidecar fetch: one GET, bounded like the tarball download is. */
+const fetchText: FetchText = async (url) => {
+	const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+	return { status: response.status, body: await response.text() };
+};
+
+/**
+ * Check a downloaded tarball against the `.sha256` published beside it. Fails
+ * closed: a mismatch, a body that is not a digest (a captive portal's HTML),
+ * or any status but 200 and 404 refuses the install. A 404 is refused for
+ * `latest`, since every release from 0.2.0 on publishes a sidecar, and
+ * tolerated for a pinned older version, flagged so the caller can warn.
+ */
+export async function verifyChecksum(
+	file: string,
+	url: string,
+	pinned: boolean,
+	fetchImpl: FetchText = fetchText,
+): Promise<{ ok: true; unverified: boolean } | { ok: false; reason: string }> {
+	let answer: { status: number; body: string };
+	try {
+		answer = await fetchImpl(url);
+	} catch (error) {
+		return { ok: false, reason: `could not fetch the checksum (${url}: ${error instanceof Error ? error.message : String(error)})` };
+	}
+	if (answer.status === 404) {
+		if (pinned) return { ok: true, unverified: true };
+		return { ok: false, reason: `no checksum published at ${url}; refusing to install unverified (pin a release with ORQI_VERSION to override)` };
+	}
+	if (answer.status !== 200) return { ok: false, reason: `could not fetch the checksum (${url}: HTTP ${answer.status})` };
+	const expected = parseChecksum(answer.body);
+	if (!expected) return { ok: false, reason: `the checksum at ${url} is not a sha256 digest (a proxy or captive portal may be answering)` };
+	const actual = sha256Hex(readFileSync(file));
+	if (actual !== expected) return { ok: false, reason: `checksum mismatch for ${file.split("/").at(-1)}: expected ${expected}, got ${actual}` };
+	return { ok: true, unverified: false };
 }
 
 /**
@@ -500,6 +542,18 @@ export async function runUpdate(args: string[], agentDir: string, options: RunUp
 			console.error(`cannot update: download failed (${url})`);
 			return 1;
 		}
+
+		// Verify the bytes before anything reads them: a mismatch, a non-digest
+		// body or an odd status refuses the install; a pinned pre-sidecar release
+		// installs with a warning (see verifyChecksum). sidecar(url), not
+		// releaseUrl(sidecar(asset)): the test seam's releaseUrl ignores the asset
+		// name, and the sidecar must sit beside whatever it returned.
+		const checksum = await verifyChecksum(tarball, sidecar(url), pinned !== undefined, options.fetchText);
+		if (!checksum.ok) {
+			console.error(`cannot update: ${checksum.reason}`);
+			return 1;
+		}
+		if (checksum.unverified) console.error(`warning: installing UNVERIFIED: v${version} publishes no checksum`);
 
 		try {
 			// No --wildcards: it is GNU-only and bsdtar on macOS rejects it

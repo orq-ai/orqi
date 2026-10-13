@@ -6,8 +6,11 @@ dist/
 .context/
 .DS_Store
 reports/
-.DS_Store
 .env
+.vscode/
+.idea/
+*.swp
+*~
 
 # /trajectory writes its ATIF export to the working directory.
 /trajectory.json

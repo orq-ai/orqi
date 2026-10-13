@@ -14,8 +14,9 @@
  */
 
 import { $ } from "bun";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { checksumLine, sha256Hex, sidecar } from "./src/checksum.ts";
 
 const ROOT = import.meta.dir;
 const OUT = join(ROOT, "dist");
@@ -33,8 +34,10 @@ for (const { target, label } of TARGETS) {
 	await $`bun build --compile --target=${target} --outfile ${binary} ${join(ROOT, "src/main.ts")}`.quiet();
 	const archive = `orqi-${label}.tar.gz`;
 	await $`tar -czf ${join(OUT, archive)} -C ${OUT} orqi`;
+	// The sidecar install.sh and `orqi update` verify against; release.yml uploads it with the tarball.
+	writeFileSync(join(OUT, sidecar(archive)), checksumLine(sha256Hex(await Bun.file(join(OUT, archive)).bytes()), archive));
 	console.log(`${archive}  ${(Bun.file(join(OUT, archive)).size / 1024 / 1024).toFixed(1)} MB`);
 }
 
 await $`rm ${join(OUT, "orqi")}`.quiet();
-console.log(`\nIn ${OUT}. Tell the recipient:\n  tar -xzf orqi-macos-arm64.tar.gz && ./orqi`);
+console.log(`\nIn ${OUT}, each tarball with its .sha256. Tell the recipient:\n  tar -xzf orqi-macos-arm64.tar.gz && ./orqi`);
