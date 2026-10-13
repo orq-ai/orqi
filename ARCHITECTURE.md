@@ -85,7 +85,7 @@ the footer's cost and pi's `/session` are real numbers rather than zero.
 The side panel is the inspector: the trajectory on top (one row per step, the mouse wheel scrolls
 it), then three sections: signals (a tool called three times with the same arguments in one turn,
 errors, one-way calls), the context split (system prompt, tool schemas, skills index, messages, as
-characters over four, measured after each run and never in a render) and teach (with `/teach on`).
+characters over four, measured after each run and never in a render) and teach (on by default, `/teach off` hides it).
 `/context` opens the same split as a table with the levers that move it. On quit, an exit summary of
 the session prints above pi's resume hint.
 
