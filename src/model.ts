@@ -14,7 +14,9 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { apiBaseUrl, routerUrl } from "./auth.ts";
 
 export const PROVIDER_ID = "orq";
-export const DEFAULT_MODEL = process.env.ORQI_MODEL ?? "openai/gpt-5.6-terra";
+/** The default chat model, and the medium rung `orq/auto` falls back to. */
+export const BASE_MODEL = "openai/gpt-5.6-terra";
+export const DEFAULT_MODEL = process.env.ORQI_MODEL ?? BASE_MODEL;
 
 const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
@@ -153,7 +155,9 @@ async function catalogue(token: string, cachePath: string): Promise<{ models: Mo
  * downstream (the `/model` picker, the footer, ctrl+p cycling) follows.
  */
 export function onlyOrq(runtime: ModelRuntime): ModelRuntime {
-	const mine = (model: { provider: string }) => model.provider === PROVIDER_ID;
+	// orqi's own: the router, and the Decisions API classifiers `orq/auto` uses.
+	const ours = new Set([PROVIDER_ID, "orq-decisions"]);
+	const mine = (model: { provider: string }) => ours.has(model.provider);
 	return new Proxy(runtime, {
 		get(target, prop, receiver) {
 			const value = Reflect.get(target, prop, receiver);
@@ -161,16 +165,16 @@ export function onlyOrq(runtime: ModelRuntime): ModelRuntime {
 			const fn = value.bind(target);
 			switch (prop) {
 				case "getProviders":
-					return () => fn().filter((provider: { id: string }) => provider.id === PROVIDER_ID);
+					return () => fn().filter((provider: { id: string }) => ours.has(provider.id));
 				case "getProvider":
-					return (id: string) => (id === PROVIDER_ID ? fn(id) : undefined);
+					return (id: string) => (ours.has(id) ? fn(id) : undefined);
 				case "getModels":
 				case "getAvailableSnapshot":
 					return (...args: unknown[]) => fn(...args).filter(mine);
 				case "getAvailable":
 					return async (...args: unknown[]) => (await fn(...args)).filter(mine);
 				case "getModel":
-					return (provider: string, id: string) => (provider === PROVIDER_ID ? fn(provider, id) : undefined);
+					return (provider: string, id: string) => (ours.has(provider) ? fn(provider, id) : undefined);
 				default:
 					return fn;
 			}
@@ -209,13 +213,9 @@ export function routerHeaders(env: NodeJS.ProcessEnv = process.env): Record<stri
  * Write models.json into the orqi agent dir and build a runtime over it.
  * The user's own ~/.pi is never touched.
  */
-export async function createOrqModelRuntime(agentDir: string, token: string): Promise<OrqModels> {
-	mkdirSync(agentDir, { recursive: true });
-	// v2: entries carry prices, agents and classifiers; a v1 cache would price everything at $0 for a day.
-	const { models, note } = await catalogue(token, join(agentDir, "model-catalogue.v2.json"));
+/** models.json: the router as one provider, the offered models with their prices. */
+function writeModelsJson(agentDir: string, models: ModelInfo[]): void {
 	const offered = models.filter((model) => !model.kind || talkable(model));
-	process.env.ORQI_THREAD_ID ??= crypto.randomUUID();
-
 	writeFileSync(
 		join(agentDir, "models.json"),
 		JSON.stringify(
@@ -246,7 +246,15 @@ export async function createOrqModelRuntime(agentDir: string, token: string): Pr
 		),
 		{ mode: 0o600 },
 	);
+}
 
+const CACHE_FILE = "model-catalogue.v2.json"; // v2: prices, agents and classifiers; a v1 cache priced everything at $0
+
+export async function createOrqModelRuntime(agentDir: string, token: string): Promise<OrqModels> {
+	mkdirSync(agentDir, { recursive: true });
+	const { models, note } = await catalogue(token, join(agentDir, CACHE_FILE));
+	process.env.ORQI_THREAD_ID ??= crypto.randomUUID();
+	writeModelsJson(agentDir, models);
 	// The resolved credential may be a login-session token rather than the
 	// exported key, so make $ORQ_API_KEY agree with whatever auth resolved.
 	process.env.ORQ_API_KEY = token;
@@ -257,7 +265,33 @@ export async function createOrqModelRuntime(agentDir: string, token: string): Pr
 	return { runtime: onlyOrq(runtime), ids: models.filter((model) => !model.kind).map((model) => model.id), catalogue: models, note };
 }
 
+/**
+ * Fetch the catalogue again with a credential that works and reload the
+ * running runtime from it. A boot with no credential (the welcome) started on
+ * the one-model fallback; without this, /model, orq/auto and /agents stayed
+ * that thin until a restart. Mutates `models` so every reader sees the change.
+ */
+export async function refreshOrqModels(agentDir: string, token: string, models: OrqModels): Promise<boolean> {
+	const prior = process.env.ORQI_REFRESH_MODELS;
+	process.env.ORQI_REFRESH_MODELS = "1";
+	try {
+		const { models: fresh, note } = await catalogue(token, join(agentDir, CACHE_FILE));
+		if (note) return false;
+		writeModelsJson(agentDir, fresh);
+		await models.runtime.refresh();
+		models.catalogue = fresh;
+		models.ids = fresh.filter((model) => !model.kind).map((model) => model.id);
+		models.note = undefined;
+		return true;
+	} finally {
+		if (prior === undefined) delete process.env.ORQI_REFRESH_MODELS;
+		else process.env.ORQI_REFRESH_MODELS = prior;
+	}
+}
+
 /** The configured default if the workspace has it, else the first enabled model. */
-export function pickModel(models: OrqModels) {
-	return models.runtime.getModel(PROVIDER_ID, DEFAULT_MODEL) ?? models.runtime.getModel(PROVIDER_ID, models.ids[0]);
+export function pickModel(models: OrqModels, id = DEFAULT_MODEL) {
+	// `orq/auto` is the virtual model: provider `orq`, id `auto`.
+	const wanted = id.startsWith("orq/") ? id.slice(4) : id;
+	return models.runtime.getModel(PROVIDER_ID, wanted) ?? models.runtime.getModel(PROVIDER_ID, BASE_MODEL) ?? models.runtime.getModel(PROVIDER_ID, models.ids[0]);
 }
