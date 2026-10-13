@@ -166,7 +166,7 @@ test("the footer degrades by width band", () => {
 	expect(medium).not.toContain("▁▂▃ ·"); // sparkline dropped
 	expect(medium).not.toContain("44 tools");
 	const narrow = footerLine({ ...state, minimapHidden: true }, 96);
-	expect(narrow).toContain("ctx ▇▇▇▁▁▁▁┊ 31% · minimap alt+m");
+	expect(narrow).toContain("ctx ▇▇▇▁▁▁▁┊ 31% · inspector alt+i");
 	expect(narrow).not.toContain("↑88k");
 	expect(narrow).not.toContain("84k/272k");
 	// Never wider than the terminal, whatever is in it.

@@ -35,12 +35,12 @@ orqi
 | `src/frontmatter.ts` | `normalizeCommand`: quotes plugin command frontmatter that strict YAML would reject |
 | `src/update.ts` | `orqi update`: daily release check, header note, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
-| `src/harness.ts` | The teaching harness extension: footer, fixed header, side panel, working indicator, agent mode, exit summary, `alt+m`, `/cost /trace /open /trajectory /whatsnew /agents /agent /panel /teach /context /tools /skills /route /learn /btw` |
+| `src/harness.ts` | The teaching harness extension: footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, `/cost /trace /open /trajectory /whatsnew /agents /agent /panel /teach /context /tools /skills /route /learn /btw` |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
-| `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the side panel shows after a run |
+| `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
 | `src/router.ts` | `orq/auto` and the `orq-decisions` classifier provider: pool, policy, Decisions API adapter, route log |
 | `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
-| `src/footer.ts` / `src/minimap.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, minimap rows and the panel's teach, context and signals sections, boxed overlay panels |
+| `src/footer.ts` / `src/minimap.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, trajectory rows (`minimap.ts`, the module's old name) and the inspector's signals, context and teach sections, boxed overlay panels |
 | `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows and inspect view; the changelog parser |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
 | `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
@@ -77,16 +77,17 @@ in their parent's thread with `X-ORQ-METADATA-subagent: <name>` added by a one-l
 their own session.
 
 `src/harness.ts` feeds pi's events into one `Trajectory` (`src/trajectory.ts`), which everything
-visible reads: the footer, the minimap, `/cost` and `/trajectory`. It is built from pi's messages,
+visible reads: the footer, the inspector, `/cost` and `/trajectory`. It is built from pi's messages,
 which already carry usage, model, tool calls and durations, so a resumed or forked branch rebuilds
 the same steps. Prices come from the workspace catalogue (`million_tokens_*` in `/v2/models`), so
 the footer's cost and pi's `/session` are real numbers rather than zero.
 
-The side panel stacks three sections under the minimap: teach (with `/teach on`), the context
-split (system prompt, tool schemas, skills index, messages, as characters over four, measured after
-each run and never in a render) and signals (a tool called three times with the same arguments in
-one turn, errors, one-way calls). `/context` opens the same split as a table with the levers that
-move it. On quit, an exit summary of the session prints above pi's resume hint.
+The side panel is the inspector: the trajectory on top (one row per step, the mouse wheel scrolls
+it), then three sections: signals (a tool called three times with the same arguments in one turn,
+errors, one-way calls), the context split (system prompt, tool schemas, skills index, messages, as
+characters over four, measured after each run and never in a render) and teach (with `/teach on`).
+`/context` opens the same split as a table with the levers that move it. On quit, an exit summary of
+the session prints above pi's resume hint.
 
 Before an orq tool runs, `src/gate.ts` reads its door off the verb: reads are benign,
 `create_`/`update_` are two-way and only recorded, `delete_`/`submit_`/`invoke_` and any verb not

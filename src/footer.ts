@@ -109,7 +109,7 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 		parts.push(ctx);
 	}
 	if (wide && state.tools > 0) parts.push(paint.dim(`${state.tools} tools`));
-	if (state.minimapHidden) parts.push(paint.dim("minimap alt+m"));
+	if (state.minimapHidden) parts.push(paint.dim("inspector alt+i"));
 	const left = ` ${parts.join(sep)}`;
 	const right = state.branch ? paint.dim(`${state.branch} `) : "";
 	const gap = width - visibleWidth(left) - visibleWidth(right);

@@ -493,10 +493,24 @@ export function orqHarness(deps: HarnessDeps) {
 			});
 		};
 
-		// ── minimap ───────────────────────────────────────────────────────────
-		/** The panel itself: a box as tall as the screen, the minimap on top and its sections under it. */
+		// ── the inspector ─────────────────────────────────────────────────────
+		/**
+		 * The side panel, called the inspector on screen: a box as tall as the
+		 * screen, the trajectory (one row per step, `minimapRows`) on top and the
+		 * teach, context and signals sections under it.
+		 */
 		const minimapView = (theme: { fg(token: string, text: string): string }): Component => ({
 			invalidate() {},
+			// The wheel scrolls the trajectory (fullscreen routes mouse events to the component under
+			// the pointer). Back at the newest step it follows new steps again.
+			handleMouse(event) {
+				if (event.type !== "wheel" || !event.wheelDelta) return undefined;
+				const last = trajectory.steps.length - 1;
+				if (last < 0) return { handled: true };
+				const next = (minimapSelected ?? last) + event.wheelDelta;
+				minimapSelected = next >= last ? undefined : Math.max(0, next);
+				return { handled: true };
+			},
 			render(width: number): string[] {
 				const inner = Math.max(10, width - 2);
 				const rowPaint = {
@@ -507,9 +521,10 @@ export function orqHarness(deps: HarnessDeps) {
 				};
 				const found = signals(trajectory.steps, trajectory.turn);
 				const teach = teachOn ? [sectionLines("teach", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")] : [];
-				const sections = [...teach, ...(split ? [contextLines(split, inner)] : []), signalLines(found, inner)];
+				// Under the trajectory: what needs attention, then where the context goes, then the lesson.
+				const sections = [signalLines(found, inner), ...(split ? [contextLines(split, inner)] : []), ...teach];
 				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
-				const height = Math.max(3, (process.stdout.rows ?? 30) - 5 - below);
+				const height = Math.max(3, (process.stdout.rows ?? 30) - 6 - below);
 				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, teachOn ? card?.step : undefined);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
@@ -518,11 +533,16 @@ export function orqHarness(deps: HarnessDeps) {
 					side(theme.fg("dim", lines[0]!)),
 					...lines.slice(1).map((line, i) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : lines === teach[0] && i === 0 && card ? "accent" : "muted", line))),
 				];
-				const title = " minimap ";
+				const title = " inspector ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
-				const hint = minimapFocused ? "↑↓ move · enter peek · esc" : `alt+m · /panel focus · /teach ${teachOn ? "off" : "on"}`;
+				const hint = minimapFocused
+					? "↑↓ move · enter peek · esc"
+					: minimapSelected !== undefined
+						? "scrolled back · wheel down follows"
+						: `alt+i · /panel focus · /teach ${teachOn ? "off" : "on"}`;
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
+					side(theme.fg("dim", sectionLines("trajectory", [], inner)[0]!)),
 					...rows.map(side),
 					...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
 					...sections.flatMap(paintSection),
@@ -850,7 +870,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// ── commands ──────────────────────────────────────────────────────────
 		pi.registerCommand("teach", {
-			description: "/teach on|off: after each answer, a card in the side panel about a concept the run touched",
+			description: "/teach on|off: after each answer, a card in the inspector about a concept the run touched",
 			handler: async (args, ctx) => {
 				const arg = args.trim();
 				if (arg && arg !== "on" && arg !== "off") {
@@ -858,16 +878,16 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				teachOn = arg ? arg === "on" : !teachOn;
-				ctx.ui.notify(teachOn ? `Teach mode on: a card follows each answer, ${panelShown() ? "in the side panel" : "above the editor"}.` : "Teach mode off.");
+				ctx.ui.notify(teachOn ? `Teach mode on: a card follows each answer, ${panelShown() ? "in the inspector" : "above the editor"}.` : "Teach mode off.");
 				syncWidgets(ctx);
 				render();
 			},
 		});
 
-		pi.registerShortcut("alt+m", { description: "toggle the orqi minimap", handler: () => toggleMinimap() });
+		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
 
 		pi.registerCommand("panel", {
-			description: "minimap: /panel toggles it, /panel focus moves through steps with ↑↓ and enter",
+			description: "the inspector: /panel toggles it, /panel focus moves through the trajectory with ↑↓ and enter",
 			handler: async (args, ctx) => {
 				if (args.trim() === "focus") {
 					focusMinimap(ctx);

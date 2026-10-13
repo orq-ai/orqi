@@ -132,12 +132,12 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
   runs when the classifier errors, 403s, times out, or the workspace has no classifier. A response
   without a door answer has no opinion; the router does not invent one.
-- **Teach lives in the side panel, never the transcript.** Cards are not session entries, so
-  `/trajectory` exports only the conversation and a resume shows no lessons. When the panel is
-  hidden (under 140 columns unless `alt+m` forces it, in fullscreen or as the regular-mode overlay)
-  the card and a tool-loop warning fall back to one widget line above the editor, for the same
-  reason. The glossary is static (`src/teach.ts`): no model call and no docs fetch per card, and
-  each concept shows once per session.
+- **Teach lives in the inspector (the side panel), never the transcript.** Cards are not session
+  entries, so `/trajectory` exports only the conversation and a resume shows no lessons. When the
+  panel is hidden (under 140 columns unless `alt+i` forces it, in fullscreen or as the regular-mode
+  overlay) the card and a tool-loop warning fall back to one widget line above the editor, for the
+  same reason. The glossary is static (`src/teach.ts`): no model call and no docs fetch per card,
+  and each concept shows once per session.
 - **The exit summary is written from `session_shutdown`, not from `main.ts`.** `InteractiveMode`
   ends in `process.exit`, so `main.ts` never regains control. On quit pi leaves the alternate
   screen, emits `session_shutdown` with reason `quit`, then prints its resume hint, so a stdout
@@ -222,16 +222,19 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   after `/new` crashed the process on `pi.getSettings()`. State that must survive a session lives
   in the factory closures (`orqCommands`), and the harness rebuilds from the branch. Renderers still
   wrap their work in try/catch: an exception in a render takes the TUI down.
-- **The minimap reaches into pi's fullscreen layout root.** pi has no side-panel API, and an overlay
-  covers the transcript's right edge, where prose wraps. In fullscreen the TUI has a `layoutRoot`
-  (pi's chat viewport); `attachMinimap` in `src/harness.ts` wraps it in an `HStack` with the panel
-  as a fixed 38-column entry, so the transcript reflows beside it. The reach is guarded: without a
-  `layoutRoot` (regular mode, or a pi that renamed it) the panel falls back to a non-capturing
-  overlay. Either way it shows by itself from 140 columns (`MINIMAP_MIN_COLS`); `alt+m` forces it
-  on or off. The footer factory is where the TUI is handed over, which is why it is attached there.
-  The wrapper is marked with a symbol so the next session or `/reload` unwraps it before wrapping
-  again; without that, each `/reload` nested one more minimap.
-  Ask upstream for a sidebar slot before building more on this.
+- **The inspector reaches into pi's fullscreen layout root.** It was the minimap until it grew
+  sections; the code (`minimap.ts`, `minimapView`, `attachMinimap`) keeps the old name. pi has no
+  side-panel API, and an overlay covers the transcript's right edge, where prose wraps. In
+  fullscreen the TUI has a `layoutRoot` (pi's chat viewport); `attachMinimap` in `src/harness.ts`
+  wraps it in an `HStack` with the panel as a fixed 38-column entry, so the transcript reflows
+  beside it. The reach is guarded: without a `layoutRoot` (regular mode, or a pi that renamed it)
+  the panel falls back to a non-capturing overlay. Either way it shows by itself from 140 columns
+  (`MINIMAP_MIN_COLS`); `alt+i` forces it on or off. The trajectory scrolls with the mouse wheel:
+  fullscreen routes mouse events to the component under the pointer (`handleMouse`), and scrolling
+  back to the newest step follows again. The footer factory is where the TUI is handed over, which
+  is why it is attached there. The wrapper is marked with a symbol so the next session or `/reload`
+  unwraps it before wrapping again; without that, each `/reload` nested one more inspector. Ask
+  upstream for a sidebar slot before building more on this.
 - **pi's `/login` → "Sign in with an account" lists `orq.ai (browser)`** (`src/oauth.ts`). pi shows
   a provider there only if it registers an OAuth flow; this one runs the orq CLI's own device login
   (`orq auth login`), shows pi's device-code view with the CLI's URL and code, and stores the login
@@ -246,10 +249,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   mask), and a built-in cannot be overridden. `/key` and the first-run welcome use `MaskedInput`
   (`src/onboarding.ts`): dots and the last four characters, never the key, then the same storage and
   recovery as `/login orq`.
-- **A fixed header sits above the transcript, inside the same layout wrap as the minimap.** The
-  wrapper is `VStack(header, HStack(pi's root, minimap))`: the header says who and where (workspace,
-  agent, project, routing, connection, thread), the footer what and how much. Regular mode has no
-  layout root, so the header becomes a widget above the editor there.
+- **A fixed header sits above the transcript, inside the same layout wrap as the inspector.** The
+  wrapper is `VStack(header, HStack(pi's root, inspector))`: the header says who and where
+  (workspace, agent, project, routing, connection, thread), the footer what and how much. Regular
+  mode has no layout root, so the header becomes a widget above the editor there.
 - **The terminal title is rewritten, not set.** pi writes `π - <dir>` from a name baked into its own
   package (`APP_TITLE`), at startup and on every session change, with no setting. `brandTitle`
   wraps the terminal's `setTitle` once (symbol-marked) and swaps the mark to `orqi`.
@@ -257,9 +260,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   model (no credential yet) holds a zero-price model object; after the first sign-in the commands
   extension re-selects the same model from the reloaded catalogue, and the trajectory reprices any
   zero-cost usage it already recorded.
-- **The minimap toggles on `alt+m`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle. Focus
-  for ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/panel focus` is on, so
-  the editor never loses the keyboard otherwise.
+- **The inspector toggles on `alt+i`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle, and pi
+  binds no `alt+i`. Focus for ↑↓/enter is raw input intercepted with `onTerminalInput` only while
+  `/panel focus` is on, so the editor never loses the keyboard otherwise.
 - **The ATIF export is `/trajectory`, not `/export trajectory`.** `/export` is a pi built-in (HTML),
   and pi drops colliding extension commands; the collision test now covers the harness too.
 - **Agents are models, and agent mode empties the prompt and the tool set.** A managed agent is

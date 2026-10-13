@@ -82,7 +82,7 @@ export const SIGN_IN = [
 ];
 
 /** The orqi views worth knowing on day one. */
-const VIEWS = "/learn · /route · /cost · /trace · /agents · /whatsnew · alt+m minimap";
+const VIEWS = "/learn · /route · /cost · /trace · /agents · /whatsnew · alt+i inspector";
 
 export const CHANGELOG_URL = "https://docs.orq.ai/docs/changelog/";
 
