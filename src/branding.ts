@@ -70,6 +70,17 @@ const PITCH = [
 // are restated here. Keep in step with pi's defaults if they change.
 const HINTS = "escape interrupt · ctrl+c/d exit · / commands · ! bash · ctrl+o expand";
 
+/**
+ * What the opening screen says instead of the pitch while no workspace is
+ * signed in: the pitch would advertise things that cannot work yet.
+ */
+export const SIGN_IN = [
+	"You're not signed in to an orq.ai workspace yet. Sign in to start:",
+	"  /login  →  Sign in with an account  →  orq.ai (browser)",
+	"  /key    →  paste an API key from my.orq.ai › Settings › API keys",
+	"  or run `orq auth login` in another terminal; orqi picks it up on your next message.",
+];
+
 /** The orqi views worth knowing on day one. */
 const VIEWS = "/learn · /route · /cost · /trace · /agents · /whatsnew · alt+m minimap";
 
@@ -86,6 +97,8 @@ export interface HeaderInfo {
 	/** model · counts */
 	status: string;
 	cwd: string;
+	/** True while no credential was accepted: the opening screen invites a sign-in instead of the pitch. */
+	signedOut?: boolean;
 	/** Set when the update cache reports a newer version: the command the footer line tells the user to run. */
 	updateCommand?: string;
 }
@@ -111,7 +124,7 @@ export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
 		`${workspace}${color(info.status, MUTED)}`,
 		color(info.cwd, MUTED),
 		"",
-		...PITCH.map((line) => color(line, MUTED)),
+		...(info.signedOut ? SIGN_IN.map((line, i) => color(line, i === 0 ? TEXT : MUTED)) : PITCH.map((line) => color(line, MUTED))),
 	];
 	const footer = [
 		"",

@@ -111,8 +111,8 @@ const AUTH_PATH = join(AGENT_DIR, "auth.json"); // where pi's /login stores the 
 const { candidates, failure, profileGap } = credentialCandidates(AUTH_PATH);
 // No credential at all: one-shot has nothing to try and stops; the TUI opens
 // anyway with a welcome that signs in from inside the session.
-const welcome = candidates.length === 0;
-if (welcome && oneShot) {
+// With no candidate at all, one-shot has nothing to try and stops.
+if (candidates.length === 0 && oneShot) {
 	if (failure) console.error(failure);
 	console.error(LOGIN_HINT_ONESHOT);
 	process.exit(1);
@@ -135,6 +135,9 @@ try {
 		bootNote = `orq did not answer the credential check (${firstLine(error)}); trying ${credential?.source ?? "nothing"}`;
 	}
 }
+// Nothing accepted (no candidate, or every one refused): the TUI opens on the
+// sign-in invitation and the welcome; one-shot says why and stops.
+const welcome = !credential;
 if (oneShot && !credential) {
 	// No session to log in from: say what was rejected and why, then stop.
 	for (const line of authLines(bootRejections, LOGIN_HINT_ONESHOT)) console.error(line);
@@ -142,7 +145,7 @@ if (oneShot && !credential) {
 }
 // pi's MCP reads the server's Authorization header from here, per connection.
 if (credential) process.env.ORQ_API_KEY = credential.token;
-const mcp = orqMcp();
+const mcp = orqMcp(Boolean(credential));
 // With nothing accepted the model runs on the best guess; a bad key only
 // degrades the model catalogue to its fallback, and /login replaces it.
 // Every router call names the repo it came from, so a team's Threads tab can be
@@ -232,14 +235,15 @@ const makeServices = async () => {
 					}
 						header.workspace = result.credential.workspace;
 						header.project = await projectForCredential(result.credential.token);
-						header.status = statusLine("connected", result.note);
+						header.status = statusLine("orq MCP", result.note);
+						header.signedOut = false;
 						return result;
 					},
 					mcp.toolNames,
 					header,
 					AGENT_DIR,
 					{
-						rejections: welcome ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : bootRejections,
+						rejections: candidates.length === 0 ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : bootRejections,
 						candidates,
 						welcome,
 					},
@@ -301,7 +305,8 @@ const skills = services.resourceLoader.getSkills().skills.length;
 const update = pendingUpdate(readCache(AGENT_DIR));
 header.workspace = credential?.workspace;
 header.project = credential ? await projectForCredential(credential.token) : undefined;
-header.status = statusLine(credential ? "orq MCP" : welcome ? "not signed in" : "not connected");
+header.status = statusLine(credential ? "orq MCP" : "not signed in");
+header.signedOut = !credential;
 const startupLine = [header.name, header.workspace, header.status, credential?.source].filter(Boolean).join(" · ");
 // The header's "update available" line is the only place a pending update is
 // announced: it used to also ride in the status list above, saying the same

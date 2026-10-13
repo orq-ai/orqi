@@ -218,12 +218,15 @@ export const bareName = (name: string) => (name.startsWith(TOOL_PREFIX) ? name.s
  * session re-runs it (services are per session), so `refresh` always reaches
  * the live handle.
  */
-export function orqMcp() {
+export function orqMcp(signedIn: boolean) {
 	let current: ExtensionAPI | undefined;
+	// Signed out, the server is not registered at all: pi would only report
+	// "requires authentication · run /mcp", pointing away from /login and /key.
+	let enabled = signedIn;
 	return {
 		extension: (pi: ExtensionAPI) => {
 			current = pi;
-			pi.registerMcpServer(MCP_SERVER, orqServerConfig());
+			if (enabled) pi.registerMcpServer(MCP_SERVER, orqServerConfig());
 			pi.registerToolRenderer((toolName, next) => {
 				if (!toolName.startsWith(TOOL_PREFIX)) return next();
 				return {
@@ -240,8 +243,9 @@ export function orqMcp() {
 				};
 			});
 		},
-		/** Reconnect with whatever credential ORQ_API_KEY holds now. */
+		/** Reconnect with whatever credential ORQ_API_KEY holds now (the first time, connect at all). */
 		refresh: () => {
+			enabled = true;
 			try {
 				current?.registerMcpServer(MCP_SERVER, orqServerConfig());
 			} catch {

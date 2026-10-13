@@ -436,7 +436,7 @@ test("the fixed header says who and where, dropping segments from the right as i
 	expect(headerBar(state, 200)).toBe(" orqi  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)");
 	const narrow = headerBar(state, 70);
 	expect(narrow).toBe(" orqi  workspace acme · agent support-triage · project Arian");
-	expect(headerBar({ connected: false }, 80)).toBe(" orqi  not connected");
+	expect(headerBar({ connected: false }, 80)).toBe(" orqi  not signed in · /login");
 	expect(visibleWidth(headerBar(state, 20))).toBeLessThanOrEqual(20);
 });
 

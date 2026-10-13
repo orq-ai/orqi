@@ -1084,7 +1084,8 @@ test("authLines says what was rejected, why, and the way out", () => {
 		"  orq login session: expired",
 		LOGIN_HINT,
 	]);
-	expect(LOGIN_HINT).toContain("/login orq");
+	expect(LOGIN_HINT).toContain("/login"); // the browser sign-in
+	expect(LOGIN_HINT).toContain("/key"); // the masked paste
 });
 
 

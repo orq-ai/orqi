@@ -70,7 +70,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   "still on the previous workspace" rather than "not connected" over tools that keep answering.
   The stored `/login` key is candidate #0 for the tools because pi's model runtime already
   prefers it. Only one-shot exits, having no session to log in from - but a boot with no
-  candidate at all exits in one-shot mode; the TUI opens anyway with a welcome (`welcome` in
+  candidate at all exits in one-shot mode. Whenever nothing was accepted (no candidate, or every
+  one refused) the TUI opens signed out: the opening screen swaps its pitch for a sign-in invitation
+  (`SIGN_IN` in `src/branding.ts`), the fixed header reads `not signed in · /login`, the orq MCP
+  server is not registered (pi would only say "requires authentication · run /mcp"), and a welcome (`welcome` in
   `src/commands.ts`) whose every path ends in the same `recover`, so a workshop laptop with nothing
   set up gets to a working session without leaving it.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled

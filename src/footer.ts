@@ -144,7 +144,7 @@ export function headerBar(state: HeaderBarState, width: number, paint: Paint = p
 	const sep = paint.dim(" · ");
 	const label = (name: string, value: string) => `${paint.dim(name)} ${paint.text(value)}`;
 	const segments: string[] = [];
-	if (!state.connected) segments.push(paint.hot("not connected"));
+	if (!state.connected) segments.push(paint.hot("not signed in · /login"));
 	else if (state.workspace) segments.push(label("workspace", state.workspace));
 	if (state.agent) segments.push(label("agent", state.agent));
 	if (state.project) segments.push(label("project", state.project));
