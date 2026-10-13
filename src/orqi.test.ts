@@ -93,7 +93,8 @@ function installerEnv(root: string, tarball: string): Record<string, string | un
 	writeFileSync(curl, `#!/bin/sh
 # Fake curl: serves $ORQI_TEST_TARBALL for the tarball URL and
 # $ORQI_TEST_TARBALL.sha256 for the sidecar URL (404 when absent); honours
-# -o and -w '%{http_code}' the way install.sh calls it.
+# -o and -w '%{http_code}' the way install.sh calls it. $ORQI_TEST_SUM_STATUS
+# forces the sidecar's status (000 for a dropped connection, 503, ...).
 out=''; url=''; status=0
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -107,6 +108,10 @@ while [ "$#" -gt 0 ]; do
 done
 case "$url" in
 	*.sha256)
+		if [ -n "\${ORQI_TEST_SUM_STATUS:-}" ]; then
+			[ "$status" = 1 ] && printf '%s' "$ORQI_TEST_SUM_STATUS"
+			exit 7
+		fi
 		if [ -f "$ORQI_TEST_TARBALL.sha256" ]; then
 			cp "$ORQI_TEST_TARBALL.sha256" "$out"
 			[ "$status" = 1 ] && printf 200
@@ -1710,6 +1715,17 @@ test("install.sh refuses a bad or missing checksum on latest, and installs a pin
 		expect(result.success).toBe(false);
 		expect(result.stderr.toString()).toContain("no checksum published");
 		expect(readFileSync(target, "utf8")).toBe(original);
+		// An exported lowercase `version` is not a pin.
+		result = attempt({ ...env, ORQI_VERSION: "", version: "999.0.0" });
+		expect(result.success).toBe(false);
+		expect(result.stderr.toString()).toContain("no checksum published");
+		// No answer, or a server error: refused, pinned or not.
+		for (const status of ["000", "503"]) {
+			result = attempt({ ...env, ORQI_TEST_SUM_STATUS: status });
+			expect(result.success).toBe(false);
+			expect(result.stderr.toString()).toContain(`returned HTTP ${status}`);
+			expect(readFileSync(target, "utf8")).toBe(original);
+		}
 		// No sidecar on a pinned version: installs, warns once.
 		result = attempt(env);
 		expect(result.success, result.stderr.toString()).toBe(true);

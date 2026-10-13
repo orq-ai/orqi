@@ -130,6 +130,9 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 asset="orqi-$PLATFORM.tar.gz"
+# Empty means latest. Cleared first so an exported lowercase `version` from the
+# caller's shell cannot pass for a pin (the checksum 404 policy reads it).
+version=''
 if [ -n "${ORQI_VERSION:-}" ]; then
 	# Normalized and interpolated into the release URL below, same as
 	# src/update.ts does for the equivalent env var: an unchecked
@@ -211,7 +214,7 @@ case "${sum_status:-000}" in
 	404)
 		# Every release from 0.2.0 on publishes a sidecar, so a 404 on latest is
 		# a broken fetch; on a pinned older release it is the release's age.
-		if [ -z "${version:-}" ]; then
+		if [ -z "$version" ]; then
 			err "no checksum published for $asset at the latest release"
 			err "refusing to install unverified; pin a release with ORQI_VERSION if that is what you want"
 			exit 1
