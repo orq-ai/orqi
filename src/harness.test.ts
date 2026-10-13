@@ -8,7 +8,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
-import { brandTitle, contextSplit, costLines, repoOf, repriced, topModel } from "./harness.ts";
+import { brandTitle, contextRows, contextSplit, costLines, repoOf, repriced, topModel } from "./harness.ts";
 import { contextLines, minimapRow, minimapRows, minimapSummary, peekLines, sectionLines, signalLines, type ContextSplit } from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
@@ -601,4 +601,24 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(cardLine(first)).toStartWith("▸ teach  trace: One request through your agent or deployment, kept as a tree of spans:");
 	expect(cardLine(first)).toEndWith("used list_traces · get_span · https://docs.orq.ai/docs/observability/traces");
 	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(" orqi  workspace acme · routing orq/auto · teach · thread 01a1…6b7b");
+});
+
+test("/context: a row per part with tokens, share and cache, one bar, then the levers", () => {
+	const split: ContextSplit = { prompt: 4_440, hints: 680, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: ["invoke_model", "invoke_agent", "retrieve_agent_response"], skills: 24, hinted: 1, turns: 2, results: 2 } };
+	const rows = contextRows(split);
+	expect(rows[0]).toBe("what the model reads on every turn                    tokens  share cache");
+	expect(rows[1]).toBe("system prompt   orqi-system-prompt.txt                 4,440    16%     ✓");
+	expect(rows[2]).toBe("  tool hints    TOOL_HINTS, 1 tool                       680     2%     ✓");
+	expect(rows[3]).toBe("tool schemas    44 orq tools · 4 built-in             17,810    65%     ✓");
+	expect(rows[4]).toBe("  hidden: invoke_model, invoke_agent, retrieve_agent_response  saves 1,540");
+	expect(rows[6]).toBe("messages        2 turns · 2 tool results               2,410     9%     ✗");
+	const bar = rows[8]!;
+	expect(bar).toMatch(/^▇+▁+$/);
+	expect(bar.length).toBe(60);
+	expect(rows[9]).toStartWith("prompt ───");
+	expect(rows).toContain("· ORQI_ALL_TOOLS=1  show the 3 hidden tools                       → +1.5k");
+	expect(rows.at(-1)).toBe("· cache hit 94%     the prefix is cached; routing keeps it (/route explain)");
+	// Nothing hidden, nothing measured from the cache: those levers are not offered.
+	const bare = contextRows({ ...split, cache: undefined, hidden: 0, counts: { ...split.counts, hidden: [] } });
+	expect(bare.some((row) => row.includes("ORQI_ALL_TOOLS") || row.includes("hidden:") || row.includes("cache hit"))).toBe(false);
 });

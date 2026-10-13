@@ -17,7 +17,7 @@ import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { apiBaseUrl, runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
 import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
-import { contextLines, sectionLines, MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, signalLines, SPINNER, type ContextSplit } from "./minimap.ts";
+import { contextLines, contextUsed, sectionLines, MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, signalLines, SPINNER, type ContextSplit } from "./minimap.ts";
 import { talkable, type ModelInfo } from "./model.ts";
 import { bareName, hintsSection, schemaLines, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -212,6 +212,49 @@ export function contextSplit(input: {
 			results: input.steps.filter((step) => step.role === "tool" || step.role === "subagent").length,
 		},
 	};
+}
+
+/**
+ * The /context table: where the tokens of every request go, one stacked bar,
+ * then what would move them. Cached means the part sits in the prompt
+ * prefix the provider can cache; the messages grow every turn.
+ */
+export function contextRows(split: ContextSplit, barWidth = 60): string[] {
+	const used = contextUsed(split);
+	const num = (n: number) => n.toLocaleString("en-US");
+	const share = (n: number) => `${used ? Math.round((n / used) * 100) : 0}%`;
+	const c = split.counts;
+	const row = (name: string, what: string, n: number, cached: boolean) => `${name.padEnd(16)}${what.padEnd(36)}${num(n).padStart(8)}${share(n).padStart(7)}${(cached ? "✓" : "✗").padStart(6)}`;
+	const parts = [
+		{ label: "prompt", n: split.prompt + split.hints, cached: true },
+		{ label: "tools", n: split.tools, cached: true },
+		{ label: "skills", n: split.skills, cached: true },
+		{ label: "msgs", n: split.messages, cached: false },
+	];
+	// Each part gets its share of the bar, at least one cell when it is there at all.
+	const cells = parts.map((part) => (part.n ? Math.max(1, Math.round((part.n / Math.max(1, used)) * barWidth)) : 0));
+	// Rounding leaves the bar a cell short or long: the largest part absorbs it.
+	if (used) cells[cells.indexOf(Math.max(...cells))]! += barWidth - cells.reduce((a, b) => a + b, 0);
+	const bar = parts.map((part, i) => (part.cached ? "▇" : "▁").repeat(cells[i]!)).join("");
+	const labels = parts.map((part, i) => (cells[i]! > part.label.length + 1 ? `${part.label} ${"─".repeat(cells[i]! - part.label.length - 1)}` : "─".repeat(cells[i]!))).join("");
+	return [
+		`${"what the model reads on every turn".padEnd(52)}${"tokens".padStart(8)}${"share".padStart(7)}${"cache".padStart(6)}`,
+		row("system prompt", "orqi-system-prompt.txt", split.prompt, true),
+		...(split.hints ? [row("  tool hints", `TOOL_HINTS, ${c.hinted} tool${c.hinted === 1 ? "" : "s"}`, split.hints, true)] : []),
+		row("tool schemas", `${c.orq} orq tools · ${c.builtin} built-in`, split.tools, true),
+		...(c.hidden.length ? [`  hidden: ${c.hidden.join(", ")}  saves ${num(split.hidden)}`] : []),
+		row("skills index", `${c.skills} skills, name + description`, split.skills, true),
+		row("messages", `${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.results} tool result${c.results === 1 ? "" : "s"}`, split.messages, false),
+		"",
+		bar,
+		labels,
+		"",
+		"what would change it",
+		`· /agent <key>      agent mode sends no prompt and no tools       → ~${tokens(split.messages)}`,
+		...(c.hidden.length ? [`· ORQI_ALL_TOOLS=1  show the ${c.hidden.length} hidden tools                       → +${tokens(split.hidden)}`] : []),
+		"· /compact          summarise the messages into one",
+		...(split.cache !== undefined ? [`· cache hit ${Math.round(split.cache * 100)}%`.padEnd(20) + "the prefix is cached; routing keeps it (/route explain)"] : []),
+	];
 }
 
 export function orqHarness(deps: HarnessDeps) {
@@ -866,51 +909,72 @@ export function orqHarness(deps: HarnessDeps) {
 		// pi's /mcp lists the tools but enter only goes back; this one opens each.
 		pi.registerCommand("tools", {
 			description: "browse the orq tools: enter shows a tool's definition, j its raw schema",
+			handler: async (_args, ctx) => showTools(ctx),
+		});
+
+		pi.registerCommand("context", {
+			description: "where the context goes: prompt, tool schemas, skills, messages, and what would change each",
 			handler: async (_args, ctx) => {
-				let tools: ToolInfo[] = [];
-				try {
-					tools = pi.getAllTools().filter((tool) => tool.name.startsWith(TOOL_PREFIX) && tool.exposure !== "hidden");
-				} catch {
-					// A handle from a replaced session: show nothing rather than throw.
-				}
-				if (tools.length === 0) {
-					ctx.ui.notify("No orq tools yet: the MCP server is still connecting, or not connected. /mcp shows its state.", "warning");
+				measure(ctx);
+				if (!split) {
+					ctx.ui.notify("Context is not measured yet: send a message first.", "warning");
 					return;
 				}
-				tools.sort((a, b) => bareName(a.name).localeCompare(bareName(b.name)));
-				const width = Math.min(28, Math.max(...tools.map((tool) => bareName(tool.name).length)));
-				const firstLine = (text: string | undefined) => String(text ?? "").split("\n")[0]!.trim();
-				const detail = (tool: ToolInfo): PanelSpec => {
-					const hints = (tool as { annotations?: Record<string, unknown> }).annotations ?? {};
-					const flags = [hints.readOnlyHint ? "read-only" : "", hints.destructiveHint ? "destructive" : "", hints.idempotentHint ? "idempotent" : ""].filter(Boolean).join(" · ");
-					return {
-						title: tool.name,
-						badge: [tool.exposure, flags].filter(Boolean).join(" · "),
-						// Parameters first: they are what a definition is opened for; descriptions run long.
-						rows: ["parameters", ...schemaLines(tool.parameters).map((line) => `  ${line}`), "", "description", ...String(tool.description ?? "").trim().split("\n").map((line) => `  ${line}`)],
-						hint: "j raw schema · esc back",
-						keys: {
-							j: () => {
-								void panel(ctx, { title: `${tool.name} · input schema`, rows: JSON.stringify(tool.parameters, null, 2).split("\n"), hint: "esc back" });
-							},
-						},
-					};
-				};
+				const used = contextUsed(split);
 				await panel(ctx, {
-					title: "orq tools",
-					badge: `${tools.length} · mcp__orq__*`,
-					rows: tools.map((tool) => `${bareName(tool.name).padEnd(width)}  ${firstLine(tool.description)}`),
-					selectable: true,
-					filterable: true,
-					hint: "type to filter · ↑↓ move · enter definition · esc close",
-					keys: {
-						enter: (i) => {
-							void panel(ctx, detail(tools[i]!));
-						},
-					},
-				});
+					title: "context",
+					badge: `${tokens(used)} of ${tokens(split.window)}${split.window ? ` · ${Math.round((used / split.window) * 100)}%` : ""}`,
+					rows: contextRows(split),
+					hint: "t open /tools · esc close",
+					keys: { t: () => void showTools(ctx) },
+				}, 84);
 			},
 		});
+
+		const showTools = async (ctx: ExtensionContext) => {
+			let tools: ToolInfo[] = [];
+			try {
+				tools = pi.getAllTools().filter((tool) => tool.name.startsWith(TOOL_PREFIX) && tool.exposure !== "hidden");
+			} catch {
+				// A handle from a replaced session: show nothing rather than throw.
+			}
+			if (tools.length === 0) {
+				ctx.ui.notify("No orq tools yet: the MCP server is still connecting, or not connected. /mcp shows its state.", "warning");
+				return;
+			}
+			tools.sort((a, b) => bareName(a.name).localeCompare(bareName(b.name)));
+			const width = Math.min(28, Math.max(...tools.map((tool) => bareName(tool.name).length)));
+			const firstLine = (text: string | undefined) => String(text ?? "").split("\n")[0]!.trim();
+			const detail = (tool: ToolInfo): PanelSpec => {
+				const hints = (tool as { annotations?: Record<string, unknown> }).annotations ?? {};
+				const flags = [hints.readOnlyHint ? "read-only" : "", hints.destructiveHint ? "destructive" : "", hints.idempotentHint ? "idempotent" : ""].filter(Boolean).join(" · ");
+				return {
+					title: tool.name,
+					badge: [tool.exposure, flags].filter(Boolean).join(" · "),
+					// Parameters first: they are what a definition is opened for; descriptions run long.
+					rows: ["parameters", ...schemaLines(tool.parameters).map((line) => `  ${line}`), "", "description", ...String(tool.description ?? "").trim().split("\n").map((line) => `  ${line}`)],
+					hint: "j raw schema · esc back",
+					keys: {
+						j: () => {
+							void panel(ctx, { title: `${tool.name} · input schema`, rows: JSON.stringify(tool.parameters, null, 2).split("\n"), hint: "esc back" });
+						},
+					},
+				};
+			};
+			await panel(ctx, {
+				title: "orq tools",
+				badge: `${tools.length} · mcp__orq__*`,
+				rows: tools.map((tool) => `${bareName(tool.name).padEnd(width)}  ${firstLine(tool.description)}`),
+				selectable: true,
+				filterable: true,
+				hint: "type to filter · ↑↓ move · enter definition · esc close",
+				keys: {
+					enter: (i) => {
+						void panel(ctx, detail(tools[i]!));
+					},
+				},
+			});
+		};
 
 		// The loaded skills, like /tools: where each came from, its metadata, its instructions.
 		pi.registerCommand("skills", {
