@@ -24,7 +24,7 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
-import { orqOAuth } from "./oauth.ts";
+import { orqOAuth, refreshStoredSignIn } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./commands.ts";
 import { callOrqTool, CredentialsRejected, firstLine, hintsSection, orqMcp, pickCredential, type Reconnected, type Rejection } from "./mcp.ts";
@@ -126,8 +126,10 @@ if (profileGap) console.error(profileGap);
 let credential: Credential | undefined;
 let bootRejections: Rejection[] = [];
 let bootNote: string | undefined;
+// What the API actually refused on the way to the winner: a stall is no verdict.
+const refusedAtBoot: Rejection[] = [];
 try {
-	credential = candidates.length ? await pickCredential(candidates) : undefined;
+	credential = candidates.length ? await pickCredential(candidates, undefined, refusedAtBoot) : undefined;
 } catch (error) {
 	if (error instanceof CredentialsRejected) bootRejections = error.rejections;
 	else {
@@ -145,6 +147,18 @@ if (oneShot && !credential) {
 }
 // pi's MCP reads the server's Authorization header from here, per connection.
 if (credential) process.env.ORQ_API_KEY = credential.token;
+// The stored /login credential is candidate #0 and pi's model runtime prefers it,
+// so one the API refused breaks every model call even though the tools connected
+// on something else. A stale browser sign-in is refreshed from the session in
+// place; a refused pasted key gets one pinned line saying how to replace it.
+const storedLogin = candidates.find((candidate) => candidate.source === "/login key");
+// Refused, not merely slow: a stored key that stalled at boot is retried on the
+// first message instead of being reported as broken.
+const loginRefused =
+	credential &&
+	storedLogin &&
+	refusedAtBoot.some((rejection) => rejection.source === storedLogin.source) &&
+	!(credential.source === SESSION_SOURCE && refreshStoredSignIn(AUTH_PATH, credential.token));
 const mcp = orqMcp(Boolean(credential));
 // With nothing accepted the model runs on the best guess; a bad key only
 // degrades the model catalogue to its fallback, and /login replaces it.
@@ -223,6 +237,7 @@ const commands = orqCommands(
 		rejections: candidates.length === 0 ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : bootRejections,
 		candidates,
 		welcome,
+		loginRefused: Boolean(loginRefused),
 	},
 );
 

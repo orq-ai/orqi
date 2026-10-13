@@ -12,6 +12,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 
 export interface DeviceLogin {
 	url?: string;
@@ -27,8 +28,25 @@ export function parseDeviceLogin(output: string): DeviceLogin {
 	return { url, code };
 }
 
-/** Minutes a session token is trusted before pi asks for a refresh (the CLI's own tokens last longer). */
+/** How long a session token is trusted when it carries no expiry of its own. */
 const TOKEN_TTL_MS = 50 * 60 * 1000;
+
+/**
+ * When pi should ask for a fresh token: a minute before the JWT's own `exp`.
+ * A fixed TTL outlived the CLI's 30-minute tokens, so pi kept sending an
+ * expired one and every model call failed with 401 until a restart. Never
+ * less than a minute out, so a token near its end does not refresh in a loop.
+ */
+export function expiresAt(token: string, now = Date.now()): number {
+	let exp: unknown;
+	try {
+		exp = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString()).exp;
+	} catch {
+		// Not a JWT: the fixed TTL.
+	}
+	const own = typeof exp === "number" ? exp * 1000 - 60_000 : now + TOKEN_TTL_MS;
+	return Math.max(now + 60_000, Math.min(own, now + TOKEN_TTL_MS));
+}
 
 interface Callbacks {
 	onDeviceCode(info: { userCode: string; verificationUri: string }): void;
@@ -47,7 +65,7 @@ export function orqOAuth(
 	const fresh = (refreshMarker = "orq-cli-session") => {
 		const access = sessionToken();
 		if (!access) throw new Error("orq auth whoami has no login session: run `orq auth login`");
-		return { access, refresh: refreshMarker, expires: Date.now() + TOKEN_TTL_MS };
+		return { access, refresh: refreshMarker, expires: expiresAt(access) };
 	};
 	return {
 		name: "orq.ai (browser)",
@@ -73,6 +91,27 @@ export function orqOAuth(
 		refreshToken: async (_credentials: unknown) => fresh(),
 		getApiKey: (credentials: { access: string }) => credentials.access,
 	};
+}
+
+/**
+ * A browser sign-in pi stored whose token the API refused, while the login
+ * session it copies was accepted: write the session's token over it, which is
+ * what pi's refresh would have done had it known the token was stale. pi
+ * re-reads auth.json when the file changes, so the model runtime, which
+ * prefers this entry over ORQ_API_KEY, stops failing with 401. A pasted key
+ * is never touched: it is not the session's to replace. True when rewritten.
+ */
+export function refreshStoredSignIn(authPath: string, sessionToken: string): boolean {
+	try {
+		const data = JSON.parse(readFileSync(authPath, "utf8"));
+		const stored = data?.orq;
+		if (stored?.type !== "oauth" || stored.access === sessionToken) return false;
+		data.orq = { ...stored, access: sessionToken, expires: expiresAt(sessionToken) };
+		writeFileSync(authPath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /** Run the orq CLI, streaming its output; the abort signal kills it. */

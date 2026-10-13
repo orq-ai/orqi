@@ -112,8 +112,16 @@ export interface PluginResources {
 }
 
 /**
+ * Plugin commands orqi leaves out. `/models` spends a model turn and three
+ * `list_models` calls to print what pi's `/model` already lists for free, and
+ * its error hint is Claude Code setup. Filtered here, not deleted from
+ * `commands/`, because `bun run vendor` would bring the file back.
+ */
+export const DROPPED_COMMANDS = ["models"];
+
+/**
  * Exactly one copy of the plugin, as individual skill dirs and template files.
- * `reserved` are slash commands orqi already owns.
+ * `reserved` are slash commands orqi already owns; `DROPPED_COMMANDS` never load.
  */
 export function pluginResources(pkgDir: string, agentDir: string, reserved: Iterable<string> = []): PluginResources {
 	const live = readLive(agentDir);
@@ -124,7 +132,7 @@ export function pluginResources(pkgDir: string, agentDir: string, reserved: Iter
 		.filter((name) => name.startsWith("orqi-"))
 		.map((name) => join(bundledSkills, name));
 	const upstream = vendoredNames(dirsIn(join(source, "skills"))).map((name) => join(source, "skills", name));
-	const taken = new Set(reserved);
+	const taken = new Set([...reserved, ...DROPPED_COMMANDS]);
 	const commands = markdownIn(join(source, "commands"))
 		.filter((name) => !taken.has(name.replace(/\.md$/, "")))
 		.map((name) => join(source, "commands", name));

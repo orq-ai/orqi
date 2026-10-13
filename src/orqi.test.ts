@@ -6,10 +6,10 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { apiBaseUrl, credentialCandidates, credentialsFile, readWhoami, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
-import { authLines, groupTools, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
+import { authLines, LOGIN_CTA, LOGIN_REFUSED, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { orqHarness } from "./harness.ts";
-import { authReason, CredentialsRejected, DENYLISTED_TOOLS, hintsSection, isAuthError, keptTools, orqServerConfig, pickCredential, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { authReason, CredentialsRejected, DENYLISTED_TOOLS, hintsSection, isAuthError, keptTools, orqServerConfig, pickCredential, summarize, TOOL_HINTS, TOOL_PREFIX, type Rejection } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { DefaultResourceLoader, loadSkills } from "@earendil-works/pi-coding-agent";
@@ -96,21 +96,6 @@ function catalogueNames(): Set<string> {
 	expect(Array.isArray(parsed)).toBe(true);
 	return new Set(parsed.map((tool: { name: string }) => tool.name));
 }
-
-test("groupTools buckets tools by the entity they act on", () => {
-	const grouped = groupTools(["orq_list_traces", "orq_get_span", "orq_create_agent", "orq_get_agent"]);
-	const lines = grouped.split("\n");
-	expect(lines).toContain("traces: orq_get_span, orq_list_traces");
-	expect(lines).toContain("agents: orq_create_agent, orq_get_agent");
-});
-
-test("groupTools keeps every tool exactly once", () => {
-	const names = ["orq_query_analytics", "orq_search_docs", "orq_list_models", "orq_delete_entity"];
-	const listed = groupTools(names)
-		.split("\n")
-		.flatMap((line) => line.split(": ")[1].split(", "));
-	expect(listed.sort()).toEqual([...names].sort());
-});
 
 test("every subagent tool exists in the orq catalogue", () => {
 	// Guards against silently handing a subagent an empty tool set.
@@ -208,6 +193,10 @@ test("pickCredential takes the first accepted, names every rejection, and a stal
 		{ source: "/login key", workspace: undefined, reason: "API key is not valid for this workspace." },
 		{ source: "ORQ_API_KEY", workspace: "acme", reason: "API key is not valid for this workspace." },
 	]);
+	// The refusals met on the way to a winner are reported; a stall is not one.
+	const refused: Rejection[] = [];
+	expect(await pickCredential([a, b, c], probe({ a: "stall", b: "401", c: "ok" }), refused)).toBe(c);
+	expect(refused.map((rejection) => rejection.source)).toEqual(["ORQ_API_KEY"]);
 	// Nothing accepted and a stall somewhere: the stall is reported, not "every key was rejected".
 	await expect(pickCredential([a, b], probe({ a: "401", b: "stall" }))).rejects.toThrow("timed out");
 });
@@ -336,7 +325,7 @@ function pluginDirs(live?: { committed: string; sha?: string; skills?: string[];
 	const pkg = join(root, "pkg");
 	for (const name of ["orq-cli", "orq-build-agent", "orqi-platform-guide"]) mkdirSync(join(pkg, "skills", name), { recursive: true });
 	mkdirSync(join(pkg, "commands"), { recursive: true });
-	for (const name of ["traces", "workspace"]) writeFileSync(join(pkg, "commands", `${name}.md`), "x");
+	for (const name of ["traces", "workspace", "models"]) writeFileSync(join(pkg, "commands", `${name}.md`), "x");
 	const agent = join(root, "agent");
 	if (live) {
 		const current = join(agent, "skills-live", "current");
@@ -353,7 +342,7 @@ test("one copy of the orq plugin: bundled by default, so pi never sees a name tw
 	try {
 		const resources = pluginResources(pkg, agent, ["workspace"]);
 		expect(resources.additionalSkillPaths.map((p) => p.slice(pkg.length))).toEqual(["/skills/orq-build-agent", "/skills/orq-cli", "/skills/orqi-platform-guide"]);
-		// The plugin's commands become prompt templates, minus names orqi already owns.
+		// The plugin's commands become prompt templates, minus names orqi already owns and the ones it drops.
 		expect(resources.additionalPromptTemplatePaths.map((p) => p.slice(pkg.length))).toEqual(["/commands/traces.md"]);
 		expect(resources.note).toBeUndefined();
 	} finally {
@@ -449,7 +438,7 @@ test("the header uses the ORQI splash", () => {
 	const info = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
 	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 
-	const output = strip(headerLines(info, { cols: 100, rows: 40 }));
+	const output = strip(headerLines(info));
 	expect(output).toContain("██████╗ ██████╗  ██████╗  ████");
 	// AGENTS.md's TUI drive waits for this exact string.
 	expect(output).toContain("orqi (aka TonyBot) v0");
@@ -470,10 +459,10 @@ test("the header shows an update line only when a newer release is cached", () =
 	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 	const base = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
 
-	const withoutUpdate = strip(headerLines(base, { cols: 100, rows: 40 }));
+	const withoutUpdate = strip(headerLines(base));
 	expect(withoutUpdate).not.toContain("update available");
 
-	const withUpdate = strip(headerLines({ ...base, updateCommand: "orqi update" }, { cols: 100, rows: 40 }));
+	const withUpdate = strip(headerLines({ ...base, updateCommand: "orqi update" }));
 	expect(withUpdate).toContain("update available · run: orqi update");
 
 	const art = withUpdate.split("\n").filter((line) => /[█▀▄]/.test(line));
@@ -833,7 +822,7 @@ test("authReason pulls the server's reason out of the MCP SDK's wrapping", () =>
 });
 
 /** A fake pi plus a fake UI, wired to orqCommands with a stubbed candidate reader. */
-function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, boot: Boot & { header?: any } = {}) {
+function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, boot: Boot & { header?: any; agentDir?: string } = {}) {
 	const handlers = new Map<string, (event: any, ctx: any) => any>();
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
 	const registered: string[] = [];
@@ -859,7 +848,7 @@ function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, 
 	} as any;
 	const header = boot.header ?? { name: "orqi", version: "v0", status: "not connected", cwd: "~" };
 	const toolNames: string[] = [];
-	const factory = orqCommands(reconnect, () => toolNames, header, "/nonexistent", boot);
+	const factory = orqCommands(reconnect, () => toolNames, header, boot.agentDir ?? "/nonexistent", boot);
 	factory(pi);
 	const input = () => handlers.get("input")!({ type: "input", text: "hi", source: "interactive" }, ctx);
 	return {
@@ -898,7 +887,7 @@ test("a rejected boot pins the warning, and the next message reconnects", async 
 	h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
 	expect(h.widgets.get("orq-auth")).toEqual(authLines(rejected));
 	expect(h.status.get("orq-workspace")).toBe("orq:not connected");
-	expect(h.notices).toEqual(["orq is not connected: every credential was rejected."]);
+	expect(h.notices).toEqual([]); // pinned once, not also notified
 
 	// Nothing changed since boot: the turn does not knock on the server again,
 	// not even on the first message.
@@ -953,7 +942,7 @@ test("a rejection after a retry re-pins the widget with the new reasons", async 
 	});
 	stored = [{ token: "sk-orq-expired", source: "/login key" }, bad];
 	await h.input();
-	expect(h.notices.at(-1)).toBe(`orq still rejects every credential. ${LOGIN_HINT}`);
+	expect(h.notices).toEqual([]); // the refusal is pinned, not repeated as a notice
 	expect(h.widgets.get("orq-auth")).toEqual(authLines([{ source: "/login key", reason: "nope" }, { source: "ORQ_API_KEY", reason: "nope" }]));
 	// Same refused set: no re-knock.
 	const before = h.notices.length;
@@ -962,8 +951,7 @@ test("a rejection after a retry re-pins the widget with the new reasons", async 
 	// No candidates at all: the headline stops claiming a rejection.
 	stored = [];
 	await h.input();
-	expect(h.widgets.get("orq-auth")![0]).toBe("orq is not connected: no credential found.");
-	expect(h.notices.at(-1)).toBe(`No orq credential found. ${LOGIN_HINT}`);
+	expect(h.widgets.get("orq-auth")![0]).toBe("⚠ orq is not connected: no credential found");
 });
 
 test("/reconnect always tries, and reports already connected without knocking twice", async () => {
@@ -1023,10 +1011,9 @@ test("a failed /workspace switch says the tools are still on the previous worksp
 	// Connected boot (no rejections) switching to a workspace whose token is rejected.
 	await narrowed.commands.get("reconnect")!("", narrowed.ctx);
 	expect(calls.length).toBe(1);
-	expect(narrowed.widgets.get("orq-auth")![0]).toBe("orq is still on the previous workspace: the switch failed.");
-	expect(narrowed.widgets.get("orq-auth")).toContain(`  ${WORKSPACE_SWITCH} (acme): the new credential was rejected`);
+	expect(narrowed.widgets.get("orq-auth")).toEqual(["⚠ orq is still on acme: the switch failed (orq login session: expired)", LOGIN_CTA]);
 	expect(narrowed.status.get("orq-workspace")).toBe("orq:acme (switch failed)");
-	expect(narrowed.notices.at(-1)).toBe(`orq rejected the credential for that workspace; still on acme. ${LOGIN_HINT}`);
+	expect(narrowed.notices.at(-1)).toBe("orq rejected that credential; still on acme."); // /reconnect asked, so it answers
 	// The widget is up, so the hook engages on the next message; same set, refused: skip.
 	await narrowed.input();
 	expect(calls.length).toBe(1);
@@ -1035,7 +1022,7 @@ test("a failed /workspace switch says the tools are still on the previous worksp
 	await narrowed.commands.get("reconnect")!("", narrowed.ctx);
 	expect(calls.length).toBe(2);
 	expect(narrowed.notices.at(-1)).toBe("orq did not answer: Request timed out. Retrying on your next message, or run /reconnect.");
-	expect(narrowed.widgets.get("orq-auth")![0]).toBe("orq is still on the previous workspace: the switch failed.");
+	expect(narrowed.widgets.get("orq-auth")![0]).toStartWith("⚠ orq is still on acme: the switch failed");
 	await narrowed.input();
 	expect(calls.length).toBe(3);
 	// Accepted: everything clears and the footer moves.
@@ -1046,11 +1033,57 @@ test("a failed /workspace switch says the tools are still on the previous worksp
 	expect(narrowed.status.get("orq-workspace")).toBe("orq:other");
 });
 
+test("a refused stored /login key is one pinned line, not re-tried as a workspace switch", async () => {
+	const stale: Credential = { token: "sk-orq-stale", source: "/login key" };
+	const session: Credential = { token: "sk-orq-session", source: "orq login session", workspace: "acme" };
+	const calls: Credential[][] = [];
+	const h = recoveryHarness(
+		async (candidates) => {
+			calls.push(candidates);
+			return rejectAllBut("sk-orq-session")(candidates);
+		},
+		{ candidates: [stale, session], readCandidates: () => ({ candidates: [stale, session] }), loginRefused: true, header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" } },
+	);
+	h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
+	expect(h.widgets.get("orq-auth")).toEqual(LOGIN_REFUSED);
+	expect(h.notices).toEqual([]);
+	// The first message does not knock with the token the boot already refused.
+	await h.input();
+	expect(calls.length).toBe(0);
+});
+
+test("a stored /login key that only stalled at boot is tried on the first message", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-stalled-login-"));
+	const prior = process.env.ORQ_API_KEY;
+	try {
+		writeFileSync(join(dir, "auth.json"), JSON.stringify({ orq: { type: "api_key", key: "sk-orq-slow" } }));
+		const slow: Credential = { token: "sk-orq-slow", source: "/login key" };
+		const env: Credential = { token: "sk-orq-env", source: "ORQ_API_KEY", workspace: "acme" };
+		process.env.ORQ_API_KEY = env.token;
+		const calls: Credential[][] = [];
+		const h = recoveryHarness(
+			async (candidates) => {
+				calls.push(candidates);
+				return rejectAllBut("sk-orq-slow")(candidates);
+			},
+			{ agentDir: dir, candidates: [slow, env], readCandidates: () => ({ candidates: [slow, env] }), loginRefused: false, header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" } },
+		);
+		h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
+		expect(h.widgets.get("orq-auth")).toBeUndefined();
+		await h.input();
+		expect(calls.map((set) => set.map((c) => c.token))).toEqual([["sk-orq-slow"]]);
+	} finally {
+		if (prior === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = prior;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("authLines picks its headline from what actually happened", () => {
-	expect(authLines([{ source: "ORQ_API_KEY", reason: "x" }])[0]).toBe("orq is not connected: every credential was rejected.");
-	expect(authLines([{ source: NO_CREDENTIAL, reason: "x" }])[0]).toBe("orq is not connected: no credential found.");
+	expect(authLines([{ source: "ORQ_API_KEY", reason: "x" }])[0]).toBe("⚠ orq is not connected: every credential was rejected (ORQ_API_KEY: x)");
+	expect(authLines([{ source: NO_CREDENTIAL, reason: "x" }])[0]).toBe("⚠ orq is not connected: no credential found");
 	expect(authLines([{ source: WORKSPACE_SWITCH, workspace: "acme", reason: "x" }, { source: "orq login session", reason: "y" }])[0]).toBe(
-		"orq is still on the previous workspace: the switch failed.",
+		"⚠ orq is still on acme: the switch failed (orq login session: y)",
 	);
 });
 
@@ -1078,12 +1111,10 @@ test("authLines says what was rejected, why, and the way out", () => {
 		{ source: "ORQ_API_KEY", workspace: "acme", reason: "API key is not valid for this workspace." },
 		{ source: "orq login session", reason: "expired" },
 	]);
-	expect(lines).toEqual([
-		"orq is not connected: every credential was rejected.",
-		"  ORQ_API_KEY (acme): API key is not valid for this workspace.",
-		"  orq login session: expired",
-		LOGIN_HINT,
-	]);
+	// Two lines, not one per candidate: what happened with the server's reason, then the way out.
+	expect(lines).toEqual(["⚠ orq is not connected: every credential was rejected (ORQ_API_KEY, orq login session: API key is not valid for this workspace.)", LOGIN_CTA]);
+	expect(LOGIN_CTA).toContain("/login");
+	expect(LOGIN_CTA).toContain("/key");
 	expect(LOGIN_HINT).toContain("/login"); // the browser sign-in
 	expect(LOGIN_HINT).toContain("/key"); // the masked paste
 });

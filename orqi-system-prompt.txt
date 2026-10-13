@@ -89,7 +89,7 @@ The orq workspace tools reach you through MCP as `mcp__orq__<tool>` (for example
 
 ## Approval Gates
 
-Always ask before: any `delete_*` operation, `create_experiment` with `auto_run`, bulk trace processing (>1000), evaluator changes that invalidate historical comparisons.
+orqi confirms one-way calls (`delete_*`, `submit_*`, `invoke_*`) in a dialog before they run; proceed and let it ask. Still ask before `create_experiment` with `auto_run`, bulk trace processing (>1000) and evaluator changes that invalidate historical comparisons.
 
 ## Safety
 
