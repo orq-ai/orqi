@@ -10,7 +10,17 @@ import { normalizeCommand } from "./frontmatter.ts";
 import { expiresAt, orqOAuth, parseDeviceLogin, refreshStoredSignIn } from "./oauth.ts";
 import { headerLines } from "./branding.ts";
 import { NO_CREDENTIAL, orqCommands } from "./commands.ts";
-import { learnRows, LEARN_PROMPTS, loginUrl, MaskedInput, maskKey, plausibleKey, saveLoginKey, WELCOME_OPTIONS, welcomeChoice } from "./onboarding.ts";
+import {
+	learnRows,
+	LEARN_PROMPTS,
+	loginUrl,
+	MaskedInput,
+	maskKey,
+	plausibleKey,
+	saveLoginKey,
+	WELCOME_OPTIONS,
+	welcomeChoice,
+} from "./onboarding.ts";
 
 test("a pasted key lands where pi's /login orq keeps it, merged and owner-only", () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-auth-"));
@@ -44,7 +54,13 @@ async function runWelcome(answers: (string | undefined)[], reconnectOk = true) {
 	const drawn: string[] = [];
 	let reconnects = 0;
 	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
-	const pi = { registerEntryRenderer: () => {}, registerCommand: () => {}, registerTool: () => {}, appendEntry: () => {}, on: (name: string, fn: any) => handlers.set(name, fn) } as any;
+	const pi = {
+		registerEntryRenderer: () => {},
+		registerCommand: () => {},
+		registerTool: () => {},
+		appendEntry: () => {},
+		on: (name: string, fn: any) => handlers.set(name, fn),
+	} as any;
 	const queue = [...answers];
 	const ctx = {
 		hasUI: true,
@@ -107,7 +123,9 @@ test("welcome, no key pasted: says so and keeps the hint", async () => {
 });
 
 test("the header names the day-one views", () => {
-	const text = headerLines({ name: "orqi", version: "v0.2.0", status: "orq/auto · 44 tools", cwd: "~" }).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	const text = headerLines({ name: "orqi", version: "v0.2.0", status: "orq/auto · 44 tools", cwd: "~" })
+		.join("\n")
+		.replace(/\x1b\[[0-9;]*m/g, "");
 	expect(text).toContain("orqi (aka TonyBot) v0.2.0");
 	expect(text).toContain("/learn · /route · /cost · /trace · /agents · /whatsnew · alt+i inspector");
 	expect(text).not.toContain("changelog https://"); // /whatsnew replaces the bare URL
@@ -122,7 +140,11 @@ test("a pasted key is never drawn: dots and the last four characters only", () =
 test("the masked input takes a bracketed paste, edits, submits and cancels", () => {
 	let submitted: string | undefined;
 	let cancelled = false;
-	const input = new MaskedInput("API key", (value) => (submitted = value), () => (cancelled = true));
+	const input = new MaskedInput(
+		"API key",
+		(value) => (submitted = value),
+		() => (cancelled = true),
+	);
 	input.handleInput("\x1b[200~sk-orq-0123456789abcdef\x1b[201~");
 	input.handleInput("x");
 	input.handleInput("\x7f"); // backspace
@@ -131,16 +153,25 @@ test("the masked input takes a bracketed paste, edits, submits and cancels", () 
 	expect(screen).toContain("cdef");
 	input.handleInput("\r");
 	expect(submitted).toBe("sk-orq-0123456789abcdef");
-	new MaskedInput("API key", () => {}, () => (cancelled = true)).handleInput("\x1b");
+	new MaskedInput(
+		"API key",
+		() => {},
+		() => (cancelled = true),
+	).handleInput("\x1b");
 	expect(cancelled).toBe(true);
 });
 
 test("plugin command frontmatter that YAML rejects is quoted, everything else is left alone", () => {
-	const bad = "---\nname: orq-manage-skills\nargument-hint: [list|get|create] [name-or-id]\nallowed-tools: AskUserQuestion, orq*\n---\n# Body $ARGUMENTS\n";
+	const bad =
+		"---\nname: orq-manage-skills\nargument-hint: [list|get|create] [name-or-id]\nallowed-tools: AskUserQuestion, orq*\n---\n# Body $ARGUMENTS\n";
 	const fixed = normalizeCommand(bad);
-	expect(parse(fixed.split("---\n")[1]!)).toEqual({ name: "orq-manage-skills", "argument-hint": "[list|get|create] [name-or-id]", "allowed-tools": "AskUserQuestion, orq*" });
+	expect(parse(fixed.split("---\n")[1]!)).toEqual({
+		name: "orq-manage-skills",
+		"argument-hint": "[list|get|create] [name-or-id]",
+		"allowed-tools": "AskUserQuestion, orq*",
+	});
 	expect(fixed.endsWith("# Body $ARGUMENTS\n")).toBe(true);
-	const good = "---\ndescription: fine\nargument-hint: \"[x]\"\n---\nbody\n";
+	const good = '---\ndescription: fine\nargument-hint: "[x]"\n---\nbody\n';
 	expect(normalizeCommand(good)).toBe(good);
 	expect(normalizeCommand("no frontmatter")).toBe("no frontmatter");
 });
@@ -156,7 +187,9 @@ test("Sign in with an account: the CLI's device login, shown in pi's device-code
 	};
 	const flow = orqOAuth(() => "session-token", fakeCli(0));
 	const credentials = await flow.login({ onDeviceCode: (info) => shown.push(info) });
-	expect(shown).toEqual([{ userCode: "2YA3-ENTL", verificationUri: "https://my.orq.ai/device/approve?client_name=orq-cli&user_code=2YA3-ENTL" }]);
+	expect(shown).toEqual([
+		{ userCode: "2YA3-ENTL", verificationUri: "https://my.orq.ai/device/approve?client_name=orq-cli&user_code=2YA3-ENTL" },
+	]);
 	expect(credentials.access).toBe("session-token");
 	expect(credentials.expires).toBeGreaterThan(Date.now());
 	expect(flow.getApiKey(credentials)).toBe("session-token");
@@ -183,7 +216,14 @@ test("a connected session switches to what /login just stored, once, and learns 
 	try {
 		process.env.ORQ_API_KEY = "sk-orq-env";
 		const handlers = new Map<string, (event: any, ctx: any) => unknown>();
-		const pi = { registerEntryRenderer: () => {}, registerCommand: () => {}, registerTool: () => {}, appendEntry: () => {}, setModel: async () => true, on: (name: string, fn: any) => handlers.set(name, fn) } as any;
+		const pi = {
+			registerEntryRenderer: () => {},
+			registerCommand: () => {},
+			registerTool: () => {},
+			appendEntry: () => {},
+			setModel: async () => true,
+			on: (name: string, fn: any) => handlers.set(name, fn),
+		} as any;
 		const notices: string[] = [];
 		const ctx = { hasUI: true, ui: { notify: (m: string) => notices.push(m), setStatus: () => {}, setWidget: () => {} } };
 		const tried: string[][] = [];
@@ -197,7 +237,14 @@ test("a connected session switches to what /login just stored, once, and learns 
 			() => [],
 			header,
 			dir,
-			{ readCandidates: (() => ({ candidates: [{ token: "sess-token", source: "/login key", workspace: "orq-research" }, { token: "sk-orq-env", source: "ORQ_API_KEY" }] })) as any },
+			{
+				readCandidates: (() => ({
+					candidates: [
+						{ token: "sess-token", source: "/login key", workspace: "orq-research" },
+						{ token: "sk-orq-env", source: "ORQ_API_KEY" },
+					],
+				})) as any,
+			},
 		)(pi);
 		const input = () => handlers.get("input")!({ type: "input", text: "hi", source: "interactive" }, ctx);
 		await input();
@@ -242,7 +289,13 @@ test("a refused browser sign-in is refreshed from the session in place; a pasted
 	const dir = mkdtempSync(join(tmpdir(), "orqi-signin-"));
 	try {
 		const path = join(dir, "auth.json");
-		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "stale", refresh: "orq-cli-session", expires: 9e15 }, other: { type: "api_key", key: "k" } }));
+		writeFileSync(
+			path,
+			JSON.stringify({
+				orq: { type: "oauth", access: "stale", refresh: "orq-cli-session", expires: 9e15 },
+				other: { type: "api_key", key: "k" },
+			}),
+		);
 		expect(refreshStoredSignIn(path, "fresh")).toBe(true);
 		const data = JSON.parse(readFileSync(path, "utf8"));
 		expect(data.orq).toMatchObject({ type: "oauth", access: "fresh", refresh: "orq-cli-session" });

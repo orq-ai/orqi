@@ -29,7 +29,20 @@
  * curl, extraction, verification and same-filesystem rename path.
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { $ } from "bun";
 import { VERSION } from "./branding.ts";
@@ -122,10 +135,7 @@ function failureMarkerPath(agentDir: string): string {
 function isSuccessfulUpdateCache(value: unknown): value is SuccessfulUpdateCache {
 	if (typeof value !== "object" || value === null) return false;
 	const cache = value as Record<string, unknown>;
-	return (
-		typeof cache.checked_at === "number" &&
-		typeof cache.latest === "string"
-	);
+	return typeof cache.checked_at === "number" && typeof cache.latest === "string";
 }
 
 function readFailureMarker(agentDir: string): number | undefined {
@@ -209,10 +219,7 @@ export function checkDue(cache: UpdateCache | undefined, env: NodeJS.ProcessEnv 
  * also ride in the `" · "` status list, which said the same thing twice in one
  * screenful.
  */
-export function pendingUpdate(
-	cache: UpdateCache | undefined,
-	env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+export function pendingUpdate(cache: UpdateCache | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
 	if (env.ORQI_UPDATE_CHECK === "0") return undefined;
 	if (!cache) return undefined;
 	if (!cache.latest || !isNewer(cache.latest, VERSION)) return undefined;
@@ -396,13 +403,17 @@ export async function verifyChecksum(
 	}
 	if (answer.status === 404) {
 		if (pinned) return { ok: true, unverified: true };
-		return { ok: false, reason: `no checksum published at ${url}; refusing to install unverified (pin a release with ORQI_VERSION to override)` };
+		return {
+			ok: false,
+			reason: `no checksum published at ${url}; refusing to install unverified (pin a release with ORQI_VERSION to override)`,
+		};
 	}
 	if (answer.status !== 200) return { ok: false, reason: `could not fetch the checksum (${url}: HTTP ${answer.status})` };
 	const expected = parseChecksum(answer.body);
 	if (!expected) return { ok: false, reason: `the checksum at ${url} is not a sha256 digest (a proxy or captive portal may be answering)` };
 	const actual = sha256Hex(readFileSync(file));
-	if (actual !== expected) return { ok: false, reason: `checksum mismatch for ${file.split("/").at(-1)}: expected ${expected}, got ${actual}` };
+	if (actual !== expected)
+		return { ok: false, reason: `checksum mismatch for ${file.split("/").at(-1)}: expected ${expected}, got ${actual}` };
 	return { ok: true, unverified: false };
 }
 
@@ -673,7 +684,9 @@ function updateViaNpm(version: string, target: string): number {
 	if (result.exitCode !== 0) {
 		process.stderr.write(result.stdout);
 		process.stderr.write(result.stderr);
-		console.error(`cannot update: ${npmFailure(result.stderr.toString(), version, result.exitCode === null)}. Run it yourself:\n  ${command}`);
+		console.error(
+			`cannot update: ${npmFailure(result.stderr.toString(), version, result.exitCode === null)}. Run it yourself:\n  ${command}`,
+		);
 		return 1;
 	}
 	console.log(`Updated orqi ${VERSION} -> ${version} (npm)`);

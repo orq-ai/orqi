@@ -137,9 +137,14 @@ export class Panel implements Component {
 		const view: PanelSpec = {
 			...this.spec,
 			height,
-			rows: visible.length || !this.query ? visible.map((index) => this.spec.rows[index]!) : [this.paint.dim(`no match for "${this.query}"`)],
+			rows:
+				visible.length || !this.query ? visible.map((index) => this.spec.rows[index]!) : [this.paint.dim(`no match for "${this.query}"`)],
 			disabled: this.spec.disabled && new Set(visible.flatMap((index, position) => (this.spec.disabled!.has(index) ? [position] : []))),
-			badge: filtering ? (this.query ? `filter: ${this.query}▏ · ${visible.length}/${this.spec.rows.length}` : `${this.spec.badge ?? ""}${this.spec.badge ? " · " : ""}type to filter`) : this.spec.badge,
+			badge: filtering
+				? this.query
+					? `filter: ${this.query}▏ · ${visible.length}/${this.spec.rows.length}`
+					: `${this.spec.badge ?? ""}${this.spec.badge ? " · " : ""}type to filter`
+				: this.spec.badge,
 		};
 		return boxLines(view, width, this.selected, this.paint, this.offset);
 	}
@@ -157,7 +162,10 @@ export class Panel implements Component {
 			this.done();
 			return;
 		}
-		if (!this.spec.selectable && (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))) {
+		if (
+			!this.spec.selectable &&
+			(matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))
+		) {
 			const step = matchesKey(data, "pageUp") || matchesKey(data, "pageDown") ? this.height() : 1;
 			this.offset = Math.max(0, this.offset + (matchesKey(data, "up") || matchesKey(data, "pageUp") ? -step : step));
 			this.requestRender();

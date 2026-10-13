@@ -36,7 +36,9 @@ export function agentRow(agent: ModelInfo): string {
 	const draft = info && !["live", "published"].includes(info.status);
 	return [
 		`${draft ? "· " : ""}${key}`.padEnd(20).slice(0, 20),
-		shortModel(info?.model ?? "?").padEnd(15).slice(0, 15),
+		shortModel(info?.model ?? "?")
+			.padEnd(15)
+			.slice(0, 15),
 		(info?.status ?? "").padEnd(7),
 		draft ? "" : carries.padEnd(22),
 		draft ? "" : info?.totalCost ? dollars(info.totalCost).padStart(8) : "",
@@ -57,7 +59,9 @@ export function inspectLines(json: string): string[] {
 	const names = (list: any[] | undefined, pick: (item: any) => string | undefined) =>
 		(list ?? []).map(pick).filter(Boolean).join(" · ") || "none";
 	const model = agent?.model?.id ?? agent?.model ?? "?";
-	const fallbacks = (agent?.model?.fallback_models ?? agent?.fallback_models ?? []).map((m: any) => (typeof m === "string" ? m : m?.id)).filter(Boolean);
+	const fallbacks = (agent?.model?.fallback_models ?? agent?.fallback_models ?? [])
+		.map((m: any) => (typeof m === "string" ? m : m?.id))
+		.filter(Boolean);
 	const lines = [
 		`model      ${model}${fallbacks.length ? ` · fallback ${fallbacks.map(shortModel).join(", ")}` : ""}`,
 		`tools      ${names(agent?.settings?.tools, (tool) => tool.display_name ?? tool.key ?? tool.action_type ?? tool.id)}`,

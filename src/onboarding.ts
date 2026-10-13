@@ -63,7 +63,10 @@ export const LEARN_PROMPTS: { area: string; prompt: string }[] = [
 	{ area: "Analytics", prompt: "show cost by model for the last 7 days" },
 	{ area: "Traces", prompt: "find the slowest trace today and explain why it is slow" },
 	{ area: "Routing", prompt: "what would orq/auto have saved on this session so far? use /cost numbers if you can" },
-	{ area: "Evaluators", prompt: "create a Pass/Fail evaluator for hallucinated prices (show me the definition first, do not create it yet)" },
+	{
+		area: "Evaluators",
+		prompt: "create a Pass/Fail evaluator for hallucinated prices (show me the definition first, do not create it yet)",
+	},
 	{ area: "Docs", prompt: "how do memory stores differ from knowledge bases" },
 ];
 

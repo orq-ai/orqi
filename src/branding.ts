@@ -40,8 +40,7 @@ export function color(text: string, rgb: Rgb): string {
 	const mode = palette();
 	if (mode === "plain") return text;
 	const role = rgb === PULSE_ORANGE ? "orange" : rgb === TURQUOISE ? "turquoise" : "neutral";
-	const code = mode === "truecolor" ? `38;2;${rgb[0]};${rgb[1]};${rgb[2]}` :
-		mode === "256" ? `38;5;${ANSI256[role]}` : `38;${BASIC[role]}`;
+	const code = mode === "truecolor" ? `38;2;${rgb[0]};${rgb[1]};${rgb[2]}` : mode === "256" ? `38;5;${ANSI256[role]}` : `38;${BASIC[role]}`;
 	return `\x1b[${code}m${text}\x1b[0m`;
 }
 
@@ -61,10 +60,7 @@ const ORQI_LOGO = [
 ];
 
 /** Onboarding line: what to actually ask for. Kept short to stay out of the way. */
-const PITCH = [
-	"Ask me to: investigate a failing agent · check workspace health · cut cost ·",
-	"build evaluators · explain the platform.",
-];
+const PITCH = ["Ask me to: investigate a failing agent · check workspace health · cut cost ·", "build evaluators · explain the platform."];
 
 // pi's own header is silenced (it advertises pi, not orq), so its key hints
 // are restated here. Keep in step with pi's defaults if they change.
@@ -114,7 +110,9 @@ export function headerLines(info: HeaderInfo): string[] {
 	const indent = "  ";
 	// Workspace leads the detail line and keeps its colour: it is the one piece
 	// of state that silently changes what every tool call returns.
-	const workspace = info.workspace ? `${color(info.workspace, TURQUOISE)}${info.project ? ` ${dim("·")} ${color(info.project, TURQUOISE)}` : ""} ${dim("·")} ` : "";
+	const workspace = info.workspace
+		? `${color(info.workspace, TURQUOISE)}${info.project ? ` ${dim("·")} ${color(info.project, TURQUOISE)}` : ""} ${dim("·")} `
+		: "";
 	const detail = [
 		`${workspace}${color(info.status, MUTED)}`,
 		color(info.cwd, MUTED),

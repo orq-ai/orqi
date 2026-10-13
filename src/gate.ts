@@ -32,7 +32,9 @@ const SECRET_KEY = /key|token|secret|password|passwd|authorization|credential/i;
 export function maskSecrets(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(maskSecrets);
 	if (!value || typeof value !== "object") return value;
-	return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, SECRET_KEY.test(key) && typeof v !== "object" ? "•••" : maskSecrets(v)]));
+	return Object.fromEntries(
+		Object.entries(value).map(([key, v]) => [key, SECRET_KEY.test(key) && typeof v !== "object" ? "•••" : maskSecrets(v)]),
+	);
 }
 
 export const ALLOW_ONCE = "Allow once";
@@ -49,7 +51,10 @@ export function orqGate(trajectory: { gate(toolCallId: string, door: Door, gate?
 		endTurn: () => {
 			turnAllowed = false;
 		},
-		onToolCall: async (event: Pick<ToolCallEvent, "toolCallId" | "toolName" | "input">, ctx: Pick<ExtensionContext, "hasUI" | "ui">): Promise<ToolCallEventResult | undefined> => {
+		onToolCall: async (
+			event: Pick<ToolCallEvent, "toolCallId" | "toolName" | "input">,
+			ctx: Pick<ExtensionContext, "hasUI" | "ui">,
+		): Promise<ToolCallEventResult | undefined> => {
 			if (!event.toolName.startsWith(TOOL_PREFIX)) return undefined;
 			const tool = bareName(event.toolName);
 			const door = doorOf(tool);
@@ -63,10 +68,17 @@ export function orqGate(trajectory: { gate(toolCallId: string, door: Door, gate?
 			}
 			if (!ctx.hasUI) {
 				trajectory.gate(event.toolCallId, door, "denied");
-				return { block: true, reason: `${tool} is a one-way call (it cannot be undone) and this run has no one to confirm it. Tell the user to rerun orqi interactively to confirm.` };
+				return {
+					block: true,
+					reason: `${tool} is a one-way call (it cannot be undone) and this run has no one to confirm it. Tell the user to rerun orqi interactively to confirm.`,
+				};
 			}
 			trajectory.gate(event.toolCallId, door, "waiting");
-			const choice = await ctx.ui.select(`${tool} · one-way: cannot be undone\n${canonical(maskSecrets(event.input))}`, [ALLOW_ONCE, ALLOW_TURN, DENY]);
+			const choice = await ctx.ui.select(`${tool} · one-way: cannot be undone\n${canonical(maskSecrets(event.input))}`, [
+				ALLOW_ONCE,
+				ALLOW_TURN,
+				DENY,
+			]);
 			if (choice === ALLOW_ONCE || choice === ALLOW_TURN) {
 				if (choice === ALLOW_TURN) turnAllowed = true;
 				trajectory.gate(event.toolCallId, door, "allowed");

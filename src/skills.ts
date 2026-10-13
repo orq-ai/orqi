@@ -80,7 +80,10 @@ export function readLive(agentDir: string): LivePlugin | undefined {
 }
 
 /** Live wins only when it is strictly newer than what the binary carries. */
-export function liveIsNewer(live: LivePlugin | undefined, bundled: Pick<PluginLock, "committed" | "sha"> = SKILLS_LOCK): live is LivePlugin {
+export function liveIsNewer(
+	live: LivePlugin | undefined,
+	bundled: Pick<PluginLock, "committed" | "sha"> = SKILLS_LOCK,
+): live is LivePlugin {
 	if (!live || live.sha === bundled.sha) return false;
 	const a = Date.parse(live.committed);
 	const b = Date.parse(bundled.committed);
@@ -89,7 +92,9 @@ export function liveIsNewer(live: LivePlugin | undefined, bundled: Pick<PluginLo
 
 function dirsIn(path: string): string[] {
 	try {
-		return readdirSync(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+		return readdirSync(path, { withFileTypes: true })
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name);
 	} catch {
 		return [];
 	}
@@ -97,7 +102,9 @@ function dirsIn(path: string): string[] {
 
 function markdownIn(path: string): string[] {
 	try {
-		return readdirSync(path).filter((name) => /^[a-z0-9-]+\.md$/.test(name)).sort();
+		return readdirSync(path)
+			.filter((name) => /^[a-z0-9-]+\.md$/.test(name))
+			.sort();
 	} catch {
 		return [];
 	}
@@ -158,7 +165,11 @@ export function updateDue(agentDir: string, env: NodeJS.ProcessEnv = process.env
  * What the daily check does with upstream main: nothing, drop the live copy
  * (the binary already carries main, or something newer), or install it.
  */
-export function updateAction(upstream: { sha: string; committed: string }, live: LivePlugin | undefined, bundled: Pick<PluginLock, "sha" | "committed"> = SKILLS_LOCK): "none" | "drop" | "install" {
+export function updateAction(
+	upstream: { sha: string; committed: string },
+	live: LivePlugin | undefined,
+	bundled: Pick<PluginLock, "sha" | "committed"> = SKILLS_LOCK,
+): "none" | "drop" | "install" {
 	const newerThanBundled = liveIsNewer({ dir: "", ...upstream }, bundled);
 	if (!newerThanBundled) return live ? "drop" : "none";
 	return live?.sha === upstream.sha ? "none" : "install";
@@ -231,7 +242,9 @@ async function downloadAndSwap(root: string, upstream: { sha: string; committed:
 		// No --wildcards flag: it is GNU-only, bsdtar on macOS rejects it, and the
 		// failure would land in the silent catch above and never update anything.
 		// Both tars treat a bare pattern as a wildcard when extracting.
-		await $`tar -xzf ${tarball} -C ${staging} --strip-components=1 ${"*/skills/*"} ${"*/commands/*"} ${"*/.claude-plugin/plugin.json"}`.quiet().nothrow();
+		await $`tar -xzf ${tarball} -C ${staging} --strip-components=1 ${"*/skills/*"} ${"*/commands/*"} ${"*/.claude-plugin/plugin.json"}`
+			.quiet()
+			.nothrow();
 
 		const names = vendoredNames(dirsIn(join(staging, "skills")));
 		if (names.length === 0) return; // an empty or reshaped upstream must not wipe the live copy

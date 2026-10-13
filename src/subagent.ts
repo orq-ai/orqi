@@ -80,7 +80,14 @@ function tagged(name: string) {
 }
 
 function zeroUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
 }
 
 /** The child session's spend, summed, so the parent's /session and footer count it. */
@@ -115,7 +122,9 @@ export function createSubagentTool(deps: SubagentDeps) {
 			const def = Object.hasOwn(AGENT_TYPES, agent) ? AGENT_TYPES[agent] : undefined;
 			if (!managed && !def) {
 				return {
-					content: [{ type: "text" as const, text: `unknown subagent "${agent}": use ${Object.keys(AGENT_TYPES).join(", ")} or agent/<key>` }],
+					content: [
+						{ type: "text" as const, text: `unknown subagent "${agent}": use ${Object.keys(AGENT_TYPES).join(", ")} or agent/<key>` },
+					],
 					details: { agent } satisfies SubagentDetails,
 					isError: true,
 				};
@@ -124,7 +133,9 @@ export function createSubagentTool(deps: SubagentDeps) {
 			const model = managed ? deps.modelRuntime.getModel("orq", agent) : (deps.modelFor?.(def!, parentModel) ?? deps.model);
 			if (!model) {
 				return {
-					content: [{ type: "text" as const, text: `no model for subagent "${agent}"${managed ? ": not a live agent in this workspace" : ""}` }],
+					content: [
+						{ type: "text" as const, text: `no model for subagent "${agent}"${managed ? ": not a live agent in this workspace" : ""}` },
+					],
 					details: { agent } satisfies SubagentDetails,
 					isError: true,
 				};
@@ -133,23 +144,29 @@ export function createSubagentTool(deps: SubagentDeps) {
 			// The orq tools live on the parent session (pi's MCP connected them there),
 			// so the child gets proxies that run each call through the parent's
 			// executeTool: same connection, same hooks, no second MCP handshake.
-			const parent = ctx as unknown as { tools?: readonly { name: string; label?: string; description: string; parameters: any }[]; executeTool?: (name: string, args: unknown, options?: { signal?: AbortSignal }) => Promise<{ result: any; isError: boolean }> } | undefined;
-			const proxies = managed || !parent?.executeTool
-				? []
-				: (parent.tools ?? [])
-						.filter((tool) => allowed.has(tool.name))
-						.map((tool) =>
-							defineTool({
-								name: tool.name,
-								label: tool.label ?? tool.name,
-								description: tool.description,
-								parameters: tool.parameters,
-								execute: async (_callId, args, callSignal) => {
-									const outcome = await parent.executeTool!(tool.name, args, { signal: callSignal ?? signal });
-									return { ...outcome.result, isError: outcome.isError };
-								},
-							}),
-						);
+			const parent = ctx as unknown as
+				| {
+						tools?: readonly { name: string; label?: string; description: string; parameters: any }[];
+						executeTool?: (name: string, args: unknown, options?: { signal?: AbortSignal }) => Promise<{ result: any; isError: boolean }>;
+				  }
+				| undefined;
+			const proxies =
+				managed || !parent?.executeTool
+					? []
+					: (parent.tools ?? [])
+							.filter((tool) => allowed.has(tool.name))
+							.map((tool) =>
+								defineTool({
+									name: tool.name,
+									label: tool.label ?? tool.name,
+									description: tool.description,
+									parameters: tool.parameters,
+									execute: async (_callId, args, callSignal) => {
+										const outcome = await parent.executeTool!(tool.name, args, { signal: callSignal ?? signal });
+										return { ...outcome.result, isError: outcome.isError };
+									},
+								}),
+							);
 			// Bare loader: the specialist prompt only (none for a managed agent,
 			// which carries its own), no skills or context files.
 			const resourceLoader = new DefaultResourceLoader({
@@ -201,8 +218,14 @@ export function createSubagentTool(deps: SubagentDeps) {
 		},
 		renderCall: (args, theme, context) => {
 			const seconds = context.durationMs !== undefined ? `  ${(context.durationMs / 1000).toFixed(1)} s` : "";
-			const task = String(args.task ?? "").replace(/\s+/g, " ").slice(0, 60);
-			return new Text(`${theme.fg("accent", "▌")} ${theme.fg("toolTitle", `subagent ${args.agent ?? ""}`)} ${theme.fg("muted", task)}${theme.fg("dim", seconds)}`, 0, 0);
+			const task = String(args.task ?? "")
+				.replace(/\s+/g, " ")
+				.slice(0, 60);
+			return new Text(
+				`${theme.fg("accent", "▌")} ${theme.fg("toolTitle", `subagent ${args.agent ?? ""}`)} ${theme.fg("muted", task)}${theme.fg("dim", seconds)}`,
+				0,
+				0,
+			);
 		},
 		renderResult: (result, options, theme) => {
 			const text = (result.content as any[]).map((block) => block.text ?? "").join("\n");

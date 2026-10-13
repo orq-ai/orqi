@@ -9,7 +9,16 @@ import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
 import { brandTitle, contextRows, contextSplit, costLines, exitSummary, repoOf, repriced, topModel } from "./harness.ts";
-import { contextLines, minimapRow, minimapRows, minimapSummary, peekLines, sectionLines, signalLines, type ContextSplit } from "./minimap.ts";
+import {
+	contextLines,
+	minimapRow,
+	minimapRows,
+	minimapSummary,
+	peekLines,
+	sectionLines,
+	signalLines,
+	type ContextSplit,
+} from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
 import { hintsSection, schemaLines } from "./mcp.ts";
@@ -47,7 +56,15 @@ function session(): any[] {
 			stopReason: "toolUse",
 			timestamp: 2_000,
 		},
-		{ role: "toolResult", toolCallId: "c1", toolName: "orq_list_traces", content: [{ type: "text", text: '{"items":[1,2,3]}' }], isError: false, durationMs: 800, timestamp: 3_000 },
+		{
+			role: "toolResult",
+			toolCallId: "c1",
+			toolName: "orq_list_traces",
+			content: [{ type: "text", text: '{"items":[1,2,3]}' }],
+			isError: false,
+			durationMs: 800,
+			timestamp: 3_000,
+		},
 		{
 			role: "toolResult",
 			toolCallId: "c2",
@@ -61,14 +78,45 @@ function session(): any[] {
 				model: "openai/gpt-5.6-luna",
 				steps: stepsOf([
 					{ role: "user", content: "find the first failure", timestamp: 1 },
-					{ role: "assistant", provider: "orq", model: "openai/gpt-5.6-luna", content: [{ type: "toolCall", id: "s1", name: "orq_get_span", arguments: { span_id: "ab" } }], usage: usage(3_000, 200, 0.002), stopReason: "toolUse", timestamp: 2 },
-					{ role: "toolResult", toolCallId: "s1", toolName: "orq_get_span", content: [{ type: "text", text: "{}" }], isError: false, timestamp: 3 },
-					{ role: "assistant", provider: "orq", model: "openai/gpt-5.6-luna", content: [{ type: "text", text: "timeout in tool.search_kb" }], usage: usage(3_100, 210, 0.002), stopReason: "stop", timestamp: 4 },
+					{
+						role: "assistant",
+						provider: "orq",
+						model: "openai/gpt-5.6-luna",
+						content: [{ type: "toolCall", id: "s1", name: "orq_get_span", arguments: { span_id: "ab" } }],
+						usage: usage(3_000, 200, 0.002),
+						stopReason: "toolUse",
+						timestamp: 2,
+					},
+					{
+						role: "toolResult",
+						toolCallId: "s1",
+						toolName: "orq_get_span",
+						content: [{ type: "text", text: "{}" }],
+						isError: false,
+						timestamp: 3,
+					},
+					{
+						role: "assistant",
+						provider: "orq",
+						model: "openai/gpt-5.6-luna",
+						content: [{ type: "text", text: "timeout in tool.search_kb" }],
+						usage: usage(3_100, 210, 0.002),
+						stopReason: "stop",
+						timestamp: 4,
+					},
 				]),
 			},
 			timestamp: 7_000,
 		},
-		{ role: "assistant", provider: "orq", model: "openai/gpt-5.6-terra", content: [{ type: "text", text: "Three traces timed out in tool.search_kb." }], usage: usage(12_000, 120, 0.025), stopReason: "stop", timestamp: 8_000 },
+		{
+			role: "assistant",
+			provider: "orq",
+			model: "openai/gpt-5.6-terra",
+			content: [{ type: "text", text: "Three traces timed out in tool.search_kb." }],
+			usage: usage(12_000, 120, 0.025),
+			stopReason: "stop",
+			timestamp: 8_000,
+		},
 	];
 }
 
@@ -172,7 +220,9 @@ test("the footer degrades by width band", () => {
 	// Never wider than the terminal, whatever is in it.
 	expect(visibleWidth(footerLine(state, 40))).toBeLessThanOrEqual(40);
 	// Selection equal to the physical model shows once.
-	expect(footerLine({ ...state, selection: "openai/gpt-5.6-terra", physical: "openai/gpt-5.6-terra" }, 140)).toContain("· gpt-5.6-terra · ");
+	expect(footerLine({ ...state, selection: "openai/gpt-5.6-terra", physical: "openai/gpt-5.6-terra" }, 140)).toContain(
+		"· gpt-5.6-terra · ",
+	);
 });
 
 test("tokens and dollars read like the wireframes", () => {
@@ -203,7 +253,15 @@ test("minimap rows: one glyph per role, +N for a subagent's steps, a gutter on t
 });
 
 test("minimap rows stay pinned to the newest step unless a row is selected", () => {
-	const steps: Step[] = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, turn: 1, role: "tool", label: `t${i + 1}`, detail: "", status: "ok", ts: 0 }));
+	const steps: Step[] = Array.from({ length: 30 }, (_, i) => ({
+		id: i + 1,
+		turn: 1,
+		role: "tool",
+		label: `t${i + 1}`,
+		detail: "",
+		status: "ok",
+		ts: 0,
+	}));
 	const pinned = minimapRows(steps, 30, 10).map(bare);
 	expect(pinned).toHaveLength(10);
 	expect(pinned.at(-1)).toStartWith("▌⚙ tool   t30");
@@ -274,20 +332,43 @@ test("the model catalogue keeps prices, the intelligence index and classifiers",
 		cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0 },
 		intelligence: 38.1,
 	});
-	expect(modelInfo({ enabled: true, model_type: "classify", refId: "typesafe/jev-latest", metadata: {} })).toEqual({ id: "typesafe/jev-latest", kind: "classifier", contextWindow: undefined });
+	expect(modelInfo({ enabled: true, model_type: "classify", refId: "typesafe/jev-latest", metadata: {} })).toEqual({
+		id: "typesafe/jev-latest",
+		kind: "classifier",
+		contextWindow: undefined,
+	});
 	expect(modelInfo({ enabled: true, model_type: "embedding", provider: "x", model_id: "y" })).toBeUndefined();
 	expect(modelInfo({ enabled: false, model_type: "chat", has_functions: true })).toBeUndefined();
 	// Smart routers keep their refId.
-	expect(modelInfo({ enabled: true, model_type: "chat", has_functions: true, refId: "acme@orq/support-router", metadata: {} })?.id).toBe("acme@orq/support-router");
+	expect(modelInfo({ enabled: true, model_type: "chat", has_functions: true, refId: "acme@orq/support-router", metadata: {} })?.id).toBe(
+		"acme@orq/support-router",
+	);
 });
 
 test("agents become models with their model's window; drafts are kept but not talkable", () => {
-	const chat: ModelInfo[] = [{ id: "openai/gpt-5.6-terra", contextWindow: 272_000, cost: { input: 1, output: 8, cacheRead: 0.1, cacheWrite: 0 } }];
+	const chat: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-terra", contextWindow: 272_000, cost: { input: 1, output: 8, cacheRead: 0.1, cacheWrite: 0 } },
+	];
 	const live = agentInfo(
-		{ key: "support-triage", display_name: "Support triage", status: "live", model: { id: "openai/gpt-5.6-terra" }, settings: { tools: [1, 2, 3, 4, 5] }, knowledge_bases: [1, 2], memory_stores: [1], metrics: { total_cost: 41.2 } },
+		{
+			key: "support-triage",
+			display_name: "Support triage",
+			status: "live",
+			model: { id: "openai/gpt-5.6-terra" },
+			settings: { tools: [1, 2, 3, 4, 5] },
+			knowledge_bases: [1, 2],
+			memory_stores: [1],
+			metrics: { total_cost: 41.2 },
+		},
 		chat,
 	)!;
-	expect(live).toMatchObject({ id: "agent/support-triage", kind: "agent", name: "Support triage (agent)", responses: true, contextWindow: 272_000 });
+	expect(live).toMatchObject({
+		id: "agent/support-triage",
+		kind: "agent",
+		name: "Support triage (agent)",
+		responses: true,
+		contextWindow: 272_000,
+	});
 	expect(talkable(live)).toBe(true);
 	const draft = agentInfo({ key: "kb-test", status: "draft", model: "openai/gpt-5.6-luna" }, chat)!;
 	expect(talkable(draft)).toBe(false);
@@ -303,7 +384,13 @@ test("agents become models with their model's window; drafts are kept but not ta
 
 test("the inspect view reads get_agent's JSON", () => {
 	const lines = inspectLines(
-		JSON.stringify({ model: { id: "openai/gpt-5.6-terra" }, settings: { tools: [{ display_name: "Web Scraper" }] }, knowledge_bases: [{ knowledge_id: "support-docs" }], memory_stores: [], instructions: "Answer from the KB.\nBe brief." }),
+		JSON.stringify({
+			model: { id: "openai/gpt-5.6-terra" },
+			settings: { tools: [{ display_name: "Web Scraper" }] },
+			knowledge_bases: [{ knowledge_id: "support-docs" }],
+			memory_stores: [],
+			instructions: "Answer from the KB.\nBe brief.",
+		}),
 	);
 	expect(lines).toContain("model      openai/gpt-5.6-terra");
 	expect(lines).toContain("tools      Web Scraper");
@@ -325,8 +412,26 @@ test("Studio links: thread, trace and agent, on the my. host", () => {
 
 test("the trace summary leads with the smart router's decision", () => {
 	const spans = [
-		{ name: "auto-router", attributes: { orq: { auto_router: { profile: "balanced", tier: "medium", selected_band: "medium", selected_model: "openai/gpt-5.6-terra", fallback_used: false } } } },
-		{ name: "chat.openai", duration: 1_900, total_cost: 0.019, attributes: { gen_ai: { usage: { prompt_tokens: 11_200, completion_tokens: 640 } } } },
+		{
+			name: "auto-router",
+			attributes: {
+				orq: {
+					auto_router: {
+						profile: "balanced",
+						tier: "medium",
+						selected_band: "medium",
+						selected_model: "openai/gpt-5.6-terra",
+						fallback_used: false,
+					},
+				},
+			},
+		},
+		{
+			name: "chat.openai",
+			duration: 1_900,
+			total_cost: 0.019,
+			attributes: { gen_ai: { usage: { prompt_tokens: 11_200, completion_tokens: 640 } } },
+		},
 	];
 	expect(autoRouter(spans)?.tier).toBe("medium");
 	expect(traceSummary(spans)).toEqual([
@@ -338,7 +443,12 @@ test("the trace summary leads with the smart router's decision", () => {
 });
 
 test("the conversation view renders orq traces conversation output", () => {
-	const json = JSON.stringify({ messages: [{ role: "user", content: [{ type: "text", text: "list my agents" }] }, { role: "assistant", content: [{ type: "tool_call", name: "orq_search_entities" }] }] });
+	const json = JSON.stringify({
+		messages: [
+			{ role: "user", content: [{ type: "text", text: "list my agents" }] },
+			{ role: "assistant", content: [{ type: "tool_call", name: "orq_search_entities" }] },
+		],
+	});
 	expect(conversationLines(json)).toEqual(["user       list my agents", "assistant  [tool_call orq_search_entities]"]);
 	expect(conversationLines("Error: 403")).toEqual(["Error: 403"]);
 });
@@ -355,7 +465,14 @@ test("/cost reprices the session's tokens at the most capable model", () => {
 	expect(lines[0]).toEndWith("$0.113   (14 turns)");
 	expect(lines[2]).toContain("openai/gpt-5.6-terra");
 	expect(lines.at(-1)).toMatch(/^always gpt-5\.6-sol would have cost +\$0\.422 {3}\(-73%\)$/);
-	expect(topModel([{ id: "a/b", cost: sol.cost, intelligence: 30 }, sol, { id: "acme@orq/r", cost: sol.cost, intelligence: 99 }, { id: "google/eu.claude-opus-5", cost: sol.cost, intelligence: 99 }])?.id).toBe("openai/gpt-5.6-sol");
+	expect(
+		topModel([
+			{ id: "a/b", cost: sol.cost, intelligence: 30 },
+			sol,
+			{ id: "acme@orq/r", cost: sol.cost, intelligence: 99 },
+			{ id: "google/eu.claude-opus-5", cost: sol.cost, intelligence: 99 },
+		])?.id,
+	).toBe("openai/gpt-5.6-sol");
 	expect(costLines(new Map(), 0)).toContain("no model calls yet");
 });
 
@@ -372,7 +489,18 @@ test("the changelog parser reads the release title and one row per headline", ()
 });
 
 test("panels draw a box that fits the width, selection and disabled rows included", () => {
-	const lines = boxLines({ title: "agents", badge: "2", rows: ["support-triage", "· kb-test"], selectable: true, disabled: new Set([1]), hint: "enter talk · esc close" }, 40, 0);
+	const lines = boxLines(
+		{
+			title: "agents",
+			badge: "2",
+			rows: ["support-triage", "· kb-test"],
+			selectable: true,
+			disabled: new Set([1]),
+			hint: "enter talk · esc close",
+		},
+		40,
+		0,
+	);
 	expect(lines[0]).toStartWith("┌─ agents ");
 	expect(lines[0]).toEndWith(" 2 ┐");
 	expect(lines[1]).toBe("│ ▌ support-triage                     │");
@@ -393,12 +521,22 @@ test("a replayed tool call with no result is interrupted, not running forever", 
 	const trajectory = new Trajectory();
 	trajectory.fromMessages([
 		{ role: "user", content: "go", timestamp: 1 },
-		{ role: "assistant", content: [{ type: "toolCall", id: "c9", name: "orq_list_traces", arguments: {} }], stopReason: "toolUse", timestamp: 2 },
+		{
+			role: "assistant",
+			content: [{ type: "toolCall", id: "c9", name: "orq_list_traces", arguments: {} }],
+			stopReason: "toolUse",
+			timestamp: 2,
+		},
 	]);
 	expect(trajectory.steps.at(-1)?.status).toBe("error");
 	// Live, the same call is running until its result lands.
 	const live = new Trajectory();
-	live.message({ role: "assistant", content: [{ type: "toolCall", id: "c9", name: "orq_list_traces", arguments: {} }], stopReason: "toolUse", timestamp: 2 });
+	live.message({
+		role: "assistant",
+		content: [{ type: "toolCall", id: "c9", name: "orq_list_traces", arguments: {} }],
+		stopReason: "toolUse",
+		timestamp: 2,
+	});
 	expect(live.steps.at(-1)?.status).toBe("running");
 });
 
@@ -414,7 +552,9 @@ test("long panel bodies scroll instead of losing their bottom", () => {
 
 test("the orq.ai mark stays even without a workspace, and the title says orqi", () => {
 	expect(footerLine({ input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(" orq.ai · $0");
-	expect(footerLine({ workspace: "orq:not connected", input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(" orq.ai · not connected");
+	expect(footerLine({ workspace: "orq:not connected", input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(
+		" orq.ai · not connected",
+	);
 	const titles: string[] = [];
 	const tui = { terminal: { setTitle: (title: string) => titles.push(title) } };
 	brandTitle(tui, "/home/me/repo");
@@ -425,17 +565,45 @@ test("the orq.ai mark stays even without a workspace, and the title says orqi", 
 });
 
 test("a turn recorded at $0 is repriced from the catalogue", () => {
-	const trajectory = new Trajectory(undefined, (id) => (id === "openai/gpt-5.6-terra" ? { input: 2, output: 12, cacheRead: 0.2 } : undefined));
-	trajectory.message({ role: "assistant", provider: "orq", model: "openai/gpt-5.6-terra", content: [{ type: "text", text: "ok" }], usage: usage(26_000, 100, 0), stopReason: "stop", timestamp: 1 });
+	const trajectory = new Trajectory(undefined, (id) =>
+		id === "openai/gpt-5.6-terra" ? { input: 2, output: 12, cacheRead: 0.2 } : undefined,
+	);
+	trajectory.message({
+		role: "assistant",
+		provider: "orq",
+		model: "openai/gpt-5.6-terra",
+		content: [{ type: "text", text: "ok" }],
+		usage: usage(26_000, 100, 0),
+		stopReason: "stop",
+		timestamp: 1,
+	});
 	expect(trajectory.totals().cost).toBeCloseTo((26_000 * 2 + 100 * 12) / 1e6, 9);
 	// A recorded cost is never second-guessed.
-	trajectory.message({ role: "assistant", provider: "orq", model: "openai/gpt-5.6-terra", content: [{ type: "text", text: "ok" }], usage: usage(10, 10, 0.5), stopReason: "stop", timestamp: 2 });
+	trajectory.message({
+		role: "assistant",
+		provider: "orq",
+		model: "openai/gpt-5.6-terra",
+		content: [{ type: "text", text: "ok" }],
+		usage: usage(10, 10, 0.5),
+		stopReason: "stop",
+		timestamp: 2,
+	});
 	expect(trajectory.steps.at(-1)?.usage?.cost).toBe(0.5);
 });
 
 test("the fixed header says who and where, dropping segments from the right as it narrows", () => {
-	const state = { workspace: "acme", project: "Arian", agent: "support-triage", routing: "orq/auto", connected: true, thread: "01a1…ed4f", plugin: "orq plugin 3.10.0 (updated)" };
-	expect(headerBar(state, 200)).toBe(" orqi  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)");
+	const state = {
+		workspace: "acme",
+		project: "Arian",
+		agent: "support-triage",
+		routing: "orq/auto",
+		connected: true,
+		thread: "01a1…ed4f",
+		plugin: "orq plugin 3.10.0 (updated)",
+	};
+	expect(headerBar(state, 200)).toBe(
+		" orqi  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)",
+	);
 	const narrow = headerBar(state, 70);
 	expect(narrow).toBe(" orqi  workspace acme · agent support-triage · project Arian");
 	expect(headerBar({ connected: false }, 80)).toBe(" orqi  not signed in · /login");
@@ -475,7 +643,13 @@ test("/tools filters as you type, and enter opens the tool you see, not the one 
 	let opened = -1;
 	let closed = false;
 	const panel = new Panel(
-		{ title: "orq tools", rows: ["create_agent", "get_span", "list_spans", "list_traces"], selectable: true, filterable: true, keys: { enter: (i) => void (opened = i) } },
+		{
+			title: "orq tools",
+			rows: ["create_agent", "get_span", "list_spans", "list_traces"],
+			selectable: true,
+			filterable: true,
+			keys: { enter: (i) => void (opened = i) },
+		},
 		plainPanel,
 		() => (closed = true),
 		() => {},
@@ -493,7 +667,13 @@ test("/tools filters as you type, and enter opens the tool you see, not the one 
 	expect(panel.render(60).map(bare).join("\n")).toContain("type to filter");
 	panel.handleInput("\x1b"); // then closes
 	expect(closed).toBe(true);
-	for (const ch of "zzz") new Panel({ title: "t", rows: ["a"], selectable: true, filterable: true }, plainPanel, () => {}, () => {}).handleInput(ch);
+	for (const ch of "zzz")
+		new Panel(
+			{ title: "t", rows: ["a"], selectable: true, filterable: true },
+			plainPanel,
+			() => {},
+			() => {},
+		).handleInput(ch);
 });
 
 test("/skills knows where each skill came from and reads its SKILL.md", () => {
@@ -509,11 +689,31 @@ test("/skills knows where each skill came from and reads its SKILL.md", () => {
 });
 
 test("signals: a loop is the same tool with the same arguments three times in this turn", () => {
-	const call = (id: number, turn: number, args: Record<string, unknown>, extra: Partial<Step> = {}): Step => ({ id, turn, role: "tool", label: "get_span", toolName: "mcp__orq__get_span", detail: "", status: "ok", ts: 0, args, ...extra });
+	const call = (id: number, turn: number, args: Record<string, unknown>, extra: Partial<Step> = {}): Step => ({
+		id,
+		turn,
+		role: "tool",
+		label: "get_span",
+		toolName: "mcp__orq__get_span",
+		detail: "",
+		status: "ok",
+		ts: 0,
+		args,
+		...extra,
+	});
 	expect(canonical({ b: 1, a: { d: 2, c: 3 } })).toBe(canonical({ a: { c: 3, d: 2 }, b: 1 }));
-	const steps = [call(1, 1, { span_id: "x" }), call(2, 1, { span_id: "x" }), call(3, 2, { span_id: "x" }), call(4, 2, { span_id: "x" }), call(5, 2, { span_id: "y" })];
+	const steps = [
+		call(1, 1, { span_id: "x" }),
+		call(2, 1, { span_id: "x" }),
+		call(3, 2, { span_id: "x" }),
+		call(4, 2, { span_id: "x" }),
+		call(5, 2, { span_id: "y" }),
+	];
 	expect(signals(steps)).toEqual({ errors: 0, tools: 5, oneWay: 0, pending: 0 }); // two in turn 1, two in turn 2: no loop
-	steps.push(call(6, 2, { span_id: "x" }, { status: "error" }), call(7, 2, { span_id: "z" }, { label: "delete_dataset", toolName: "mcp__orq__delete_dataset", door: "one_way", gate: "waiting" }));
+	steps.push(
+		call(6, 2, { span_id: "x" }, { status: "error" }),
+		call(7, 2, { span_id: "z" }, { label: "delete_dataset", toolName: "mcp__orq__delete_dataset", door: "one_way", gate: "waiting" }),
+	);
 	expect(signals(steps)).toEqual({ loop: { tool: "get_span", count: 3 }, errors: 1, tools: 7, oneWay: 0, pending: 1 });
 	// The gate fields land on the live step; a call with no step is ignored.
 	const trajectory = new Trajectory();
@@ -526,18 +726,34 @@ test("signals: a loop is the same tool with the same arguments three times in th
 
 test("panel sections: a rule, an indented body, one calm line when empty", () => {
 	expect(sectionLines("teach", [], 36)).toEqual([" ─ teach ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
-	const split: ContextSplit = { prompt: 4_440, hints: 680, project: 0, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: [], skills: 24, hinted: 1, turns: 2, results: 2 } };
+	const split: ContextSplit = {
+		prompt: 4_440,
+		hints: 680,
+		project: 0,
+		tools: 17_810,
+		hidden: 1_540,
+		skills: 1_930,
+		messages: 2_410,
+		window: 1_050_000,
+		cache: 0.94,
+		counts: { orq: 44, builtin: 4, hidden: [], skills: 24, hinted: 1, turns: 2, results: 2 },
+	};
 	expect(contextLines(split, 36)).toEqual([
 		" ─ context ".padEnd(36, "─"),
 		"  prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k",
 		"  tools  ▇▇▇▇▇▇▁▁ 17.8k msgs    2.4k",
 		"  cache 94% · 27.3k/1.1M · /context ",
 	]);
-	expect(signalLines({ errors: 0, tools: 6, oneWay: 0, pending: 0 }, 36).slice(1).map((line) => line.trimEnd())).toEqual(["  no warnings · 0 one-way calls"]);
-	expect(signalLines({ loop: { tool: "get_span", count: 4 }, errors: 1, tools: 6, oneWay: 0, pending: 0 }, 40).slice(1).map((line) => line.trimEnd())).toEqual([
-		"  ⚠ tool loop  get_span ×4 same args",
-		"  errors 1/6 · one-way calls 0",
-	]);
+	expect(
+		signalLines({ errors: 0, tools: 6, oneWay: 0, pending: 0 }, 36)
+			.slice(1)
+			.map((line) => line.trimEnd()),
+	).toEqual(["  no warnings · 0 one-way calls"]);
+	expect(
+		signalLines({ loop: { tool: "get_span", count: 4 }, errors: 1, tools: 6, oneWay: 0, pending: 0 }, 40)
+			.slice(1)
+			.map((line) => line.trimEnd()),
+	).toEqual(["  ⚠ tool loop  get_span ×4 same args", "  errors 1/6 · one-way calls 0"]);
 	expect(signalLines({ errors: 0, tools: 2, oneWay: 0, pending: 1 }, 36)[1]!.trimEnd()).toBe("  one-way calls 0 · pending 1");
 	expect(minimapSummary([], 2, 0.014, 1)).toBe("0 steps · turn 2 · $0.014 · ⚠ 1");
 });
@@ -549,7 +765,16 @@ test("minimap rows mark a call waiting on the gate and the step a teach card is 
 	expect(bare(minimapRow(done, 36, false, 0, undefined, true)).trimEnd()).toBe(" ⚙ tool   delete_dataset ✓ ▸");
 	expect(bare(minimapRows([done], 36, 3, undefined, 0, undefined, 5)[0]!)).toContain("✓ ▸");
 	// A managed agent's reply is labelled as the agent's.
-	const reply: Step = { id: 6, turn: 1, role: "assistant", label: "assist", detail: "I can help", status: "ok", ts: 0, model: "agent/qa-val-agent" };
+	const reply: Step = {
+		id: 6,
+		turn: 1,
+		role: "assistant",
+		label: "assist",
+		detail: "I can help",
+		status: "ok",
+		ts: 0,
+		model: "agent/qa-val-agent",
+	};
 	expect(bare(minimapRow(reply, 36, false)).trimEnd()).toBe(" ▌ agent  I can help");
 });
 
@@ -562,7 +787,26 @@ test("the context split: prompt and skills index apart, active schemas, the rest
 		{ name: "read", description: "z".repeat(40), parameters: {} },
 		{ name: "write", description: "w".repeat(40), parameters: {} },
 	];
-	const split = contextSplit({ systemPrompt: prompt, tools, active: ["mcp__orq__list_traces", "mcp__orq__invoke_model", "read"], used: 10_000, window: 272_000, steps: [{ id: 1, turn: 1, role: "assistant", label: "assist", detail: "", status: "ok", ts: 0, usage: { input: 1_000, output: 10, cacheRead: 9_000, cost: 0 } }], turns: 1 });
+	const split = contextSplit({
+		systemPrompt: prompt,
+		tools,
+		active: ["mcp__orq__list_traces", "mcp__orq__invoke_model", "read"],
+		used: 10_000,
+		window: 272_000,
+		steps: [
+			{
+				id: 1,
+				turn: 1,
+				role: "assistant",
+				label: "assist",
+				detail: "",
+				status: "ok",
+				ts: 0,
+				usage: { input: 1_000, output: 10, cacheRead: 9_000, cost: 0 },
+			},
+		],
+		turns: 1,
+	});
 	expect(split.hints).toBe(Math.ceil(hintsSection().length / 4));
 	expect(split.tools).toBe(Math.ceil(402 / 4) + Math.ceil(42 / 4)); // description + "{}"
 	expect(split.hidden).toBe(Math.ceil(402 / 4));
@@ -578,12 +822,52 @@ test("the context split: prompt and skills index apart, active schemas, the rest
 
 /** The orq server's tools on 2026-10-13 (46): the list a new verb or concept must be checked against. */
 export const ORQ_TOOLS = [
-	"create_agent", "create_datapoints", "create_dataset", "create_deployment", "create_experiment", "create_llm_eval", "create_python_eval", "create_skill",
-	"delete_datapoints", "delete_dataset", "delete_entity", "delete_skill", "find_log_patterns", "get_agent", "get_analytics_overview", "get_deployment",
-	"get_experiment_run", "get_llm_eval", "get_log", "get_log_context", "get_python_eval", "get_skill", "get_span", "invoke_agent", "invoke_model",
-	"list_datapoints", "list_experiment_runs", "list_log_facet_values", "list_log_facets", "list_models", "list_skills", "list_spans", "list_trace_logs",
-	"list_traces", "query_analytics", "query_log_aggregates", "retrieve_agent_response", "search_directories", "search_docs", "search_entities",
-	"submit_feedback", "update_agent", "update_datapoint", "update_llm_eval", "update_python_eval", "update_skill",
+	"create_agent",
+	"create_datapoints",
+	"create_dataset",
+	"create_deployment",
+	"create_experiment",
+	"create_llm_eval",
+	"create_python_eval",
+	"create_skill",
+	"delete_datapoints",
+	"delete_dataset",
+	"delete_entity",
+	"delete_skill",
+	"find_log_patterns",
+	"get_agent",
+	"get_analytics_overview",
+	"get_deployment",
+	"get_experiment_run",
+	"get_llm_eval",
+	"get_log",
+	"get_log_context",
+	"get_python_eval",
+	"get_skill",
+	"get_span",
+	"invoke_agent",
+	"invoke_model",
+	"list_datapoints",
+	"list_experiment_runs",
+	"list_log_facet_values",
+	"list_log_facets",
+	"list_models",
+	"list_skills",
+	"list_spans",
+	"list_trace_logs",
+	"list_traces",
+	"query_analytics",
+	"query_log_aggregates",
+	"retrieve_agent_response",
+	"search_directories",
+	"search_docs",
+	"search_entities",
+	"submit_feedback",
+	"update_agent",
+	"update_datapoint",
+	"update_llm_eval",
+	"update_python_eval",
+	"update_skill",
 ];
 
 test("teach: every orq tool has a concept, and a card is shown once per session", () => {
@@ -593,8 +877,22 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(conceptOf("mcp__orq__delete_dataset")).toBe("one-way door");
 	expect(conceptOf("mcp__orq__submit_feedback")).toBe("feedback");
 	expect(conceptOf("read")).toBeUndefined();
-	const tool = (id: number, name: string): Step => ({ id, turn: 1, role: "tool", label: name, toolName: `mcp__orq__${name}`, detail: "", status: "ok", ts: 0 });
-	const run = [{ id: 1, turn: 1, role: "user", label: "user", detail: "", status: "ok", ts: 0 } as Step, tool(2, "list_traces"), tool(3, "get_span"), tool(4, "get_agent")];
+	const tool = (id: number, name: string): Step => ({
+		id,
+		turn: 1,
+		role: "tool",
+		label: name,
+		toolName: `mcp__orq__${name}`,
+		detail: "",
+		status: "ok",
+		ts: 0,
+	});
+	const run = [
+		{ id: 1, turn: 1, role: "user", label: "user", detail: "", status: "ok", ts: 0 } as Step,
+		tool(2, "list_traces"),
+		tool(3, "get_span"),
+		tool(4, "get_agent"),
+	];
 	const shown = new Set<string>();
 	const first = pickCard(run, shown)!;
 	expect([first.key, first.step.id, first.used]).toEqual(["trace", 2, ["list_traces", "get_span"]]);
@@ -607,11 +905,32 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(lines.slice(-2)).toEqual(["used  list_traces · get_span", "docs  observability/traces"]);
 	expect(cardLine(first)).toStartWith("▸ teach  trace: One request through your agent or deployment, kept as a tree of spans:");
 	expect(cardLine(first)).toEndWith("used list_traces · get_span · https://docs.orq.ai/docs/observability/traces");
-	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(" orqi  workspace acme · routing orq/auto · teach · thread 01a1…6b7b");
+	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(
+		" orqi  workspace acme · routing orq/auto · teach · thread 01a1…6b7b",
+	);
 });
 
 test("/context: a row per part with tokens, share and cache, one bar, then the levers", () => {
-	const split: ContextSplit = { prompt: 4_440, hints: 680, project: 0, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: ["invoke_model", "invoke_agent", "retrieve_agent_response"], skills: 24, hinted: 1, turns: 2, results: 2 } };
+	const split: ContextSplit = {
+		prompt: 4_440,
+		hints: 680,
+		project: 0,
+		tools: 17_810,
+		hidden: 1_540,
+		skills: 1_930,
+		messages: 2_410,
+		window: 1_050_000,
+		cache: 0.94,
+		counts: {
+			orq: 44,
+			builtin: 4,
+			hidden: ["invoke_model", "invoke_agent", "retrieve_agent_response"],
+			skills: 24,
+			hinted: 1,
+			turns: 2,
+			results: 2,
+		},
+	};
 	const rows = contextRows(split);
 	expect(rows[0]).toBe("what the model reads on every turn                    tokens  share cache");
 	expect(rows[1]).toBe("system prompt   orqi-system-prompt.txt                 4,440    16%     ✓");
@@ -630,7 +949,11 @@ test("/context: a row per part with tokens, share and cache, one bar, then the l
 	expect(withProject.length).toBe(rows[0]!.length);
 	// Agent mode: the agent's own prompt and tools are not ours to count; say so, and the way back.
 	expect(contextRows({ ...split, agent: "qa-val-agent" })[0]).toStartWith("agent mode: qa-val-agent's instructions");
-	expect(contextLines({ ...split, agent: "qa-val-agent" }, 36).slice(1).map((line) => line.trim())).toEqual(["agent qa-val-agent: its prompt", "and tools run on orq.ai", "msgs 2.4k/1.1M · /context"]);
+	expect(
+		contextLines({ ...split, agent: "qa-val-agent" }, 36)
+			.slice(1)
+			.map((line) => line.trim()),
+	).toEqual(["agent qa-val-agent: its prompt", "and tools run on orq.ai", "msgs 2.4k/1.1M · /context"]);
 	// Nothing hidden, nothing measured from the cache: those levers are not offered.
 	const bare = contextRows({ ...split, cache: undefined, hidden: 0, counts: { ...split.counts, hidden: [] } });
 	expect(bare.some((row) => row.includes("ORQI_ALL_TOOLS") || row.includes("hidden:") || row.includes("cache hit"))).toBe(false);
@@ -644,7 +967,11 @@ test("the gate: a verb table, unknown never benign, every server tool has a know
 	expect(doorOf("delete_dataset")).toBe("one_way");
 	expect(doorOf("submit_feedback")).toBe("one_way");
 	expect(doorOf("archive_everything")).toBe("one_way"); // a verb nobody listed asks first
-	expect(maskSecrets({ name: "x", api_key: "sk-1", nested: { Authorization: "Bearer y", list: [{ token: "t" }] } })).toEqual({ name: "x", api_key: "•••", nested: { Authorization: "•••", list: [{ token: "•••" }] } });
+	expect(maskSecrets({ name: "x", api_key: "sk-1", nested: { Authorization: "Bearer y", list: [{ token: "t" }] } })).toEqual({
+		name: "x",
+		api_key: "•••",
+		nested: { Authorization: "•••", list: [{ token: "•••" }] },
+	});
 });
 
 test("the gate asks before a one-way call, remembers 'this turn' until the answer lands, and blocks without a UI", async () => {
@@ -693,7 +1020,12 @@ test("the exit summary: who, how long, what it cost, what it changed, where to f
 	trajectory.toolStart("g3", "mcp__orq__delete_skill", { key: "old" });
 	trajectory.gate("g3", "one_way", "denied");
 	trajectory.toolEnd("g3", true);
-	const lines = exitSummary(trajectory, { workspace: "acme", startedAt: 0, now: 18 * 60_000, thread: "https://my.orq.ai/acme/traces/threads?id=7c1e" });
+	const lines = exitSummary(trajectory, {
+		workspace: "acme",
+		startedAt: 0,
+		now: 18 * 60_000,
+		thread: "https://my.orq.ai/acme/traces/threads?id=7c1e",
+	});
 	expect(lines).toEqual([
 		"orqi · acme · 18 min · 1 turn · $0.049",
 		"  models    gpt-5.6-terra ×2  $0.045  ·  gpt-5.6-luna ×2  $0.004",
@@ -702,5 +1034,10 @@ test("the exit summary: who, how long, what it cost, what it changed, where to f
 		"  context   peak 12k of 272k · cache hit 0%",
 		"  thread    https://my.orq.ai/acme/traces/threads?id=7c1e",
 	]);
-	expect(exitSummary(new Trajectory(), { startedAt: 0, now: 1, thread: "7c1e" })).toEqual(["orqi · <1 min · 0 turns · $0", "  tools     none", "  changes   none", "  thread    7c1e"]);
+	expect(exitSummary(new Trajectory(), { startedAt: 0, now: 1, thread: "7c1e" })).toEqual([
+		"orqi · <1 min · 0 turns · $0",
+		"  tools     none",
+		"  changes   none",
+		"  thread    7c1e",
+	]);
 });

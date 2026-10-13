@@ -83,33 +83,50 @@ export interface Credential {
 	workspace?: string;
 }
 
-interface Project { id?: string; name?: string; key?: string; default?: boolean; is_default?: boolean }
+interface Project {
+	id?: string;
+	name?: string;
+	key?: string;
+	default?: boolean;
+	is_default?: boolean;
+}
 
 /** Resolve the project label from the authenticated Projects REST API. */
 export async function projectForCredential(token: string): Promise<string | undefined> {
 	try {
 		const response = await fetch(`${apiBaseUrl()}/v2/projects?limit=200`, {
-			headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
+			headers: { Authorization: `Bearer ${token}` },
+			signal: AbortSignal.timeout(5000),
 		});
 		if (!response.ok) return undefined;
-		const body = await response.json() as unknown;
+		const body = (await response.json()) as unknown;
 		const projects = Array.isArray(body) ? body : (body as { data?: unknown })?.data;
 		if (!Array.isArray(projects)) return undefined;
 		const valid = projects.filter((project): project is Project => Boolean(project && typeof project === "object"));
 		const claims = token.replace(/^sk-orq-/, "").split(".")[1];
 		let projectId: string | undefined;
 		if (claims) {
-			try { projectId = JSON.parse(Buffer.from(claims, "base64url").toString("utf8"))?.project_id; } catch { /* opaque token */ }
+			try {
+				projectId = JSON.parse(Buffer.from(claims, "base64url").toString("utf8"))?.project_id;
+			} catch {
+				/* opaque token */
+			}
 		}
-		const project = valid.find((item) => projectId && (item.id === projectId || item.key === projectId))
-			?? (valid.length === 1 ? valid[0] : valid.find((item) => item.default || item.is_default));
+		const project =
+			valid.find((item) => projectId && (item.id === projectId || item.key === projectId)) ??
+			(valid.length === 1 ? valid[0] : valid.find((item) => item.default || item.is_default));
 		return project?.name ?? project?.key ?? project?.id;
 	} catch {
 		return undefined;
 	}
 }
 
-interface Session { activeWorkspaceKey?: string; activeProjectId?: string; workspaceTokens?: Record<string, { token?: string }>; workspaces?: { id: string; key: string }[] }
+interface Session {
+	activeWorkspaceKey?: string;
+	activeProjectId?: string;
+	workspaceTokens?: Record<string, { token?: string }>;
+	workspaces?: { id: string; key: string }[];
+}
 
 /**
  * Token for the active workspace.
@@ -124,8 +141,9 @@ export function sessionToken(session: Session | undefined): string | undefined {
 	const workspace = session?.activeWorkspaceKey;
 	const tokens = session?.workspaceTokens;
 	if (!workspace || !tokens) return undefined;
-	const key = [`${workspace}#${session.activeProjectId}`, workspace].find((candidate) => tokens[candidate]?.token)
-		?? Object.keys(tokens).find((name) => name.startsWith(`${workspace}#`) && tokens[name]?.token);
+	const key =
+		[`${workspace}#${session.activeProjectId}`, workspace].find((candidate) => tokens[candidate]?.token) ??
+		Object.keys(tokens).find((name) => name.startsWith(`${workspace}#`) && tokens[name]?.token);
 	const token = key ? tokens[key]?.token : undefined;
 	return typeof token === "string" && token ? token : undefined;
 }
@@ -351,13 +369,15 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 	const { session, apiKeyLogin, failure } = readSession();
 	const login = loginKey(authPath);
 	// A browser sign-in stores the CLI session's own token: its workspace is the session's active one.
-	const loginWorkspace = login && login === sessionToken(session) ? session?.activeWorkspaceKey : login ? workspaceOfKey(login, session) : undefined;
+	const loginWorkspace =
+		login && login === sessionToken(session) ? session?.activeWorkspaceKey : login ? workspaceOfKey(login, session) : undefined;
 	if (login) candidates.push({ token: login, source: "/login key", workspace: loginWorkspace });
 	// A profile outranks an exported key, because it does for the CLI: it warns
 	// and uses the profile (applyProfileAPIKey), and orqi disagreeing would put
 	// the two on different credentials for the same command.
 	const profile = cliProfile ? profileKey(cliProfile) : undefined;
-	if (profile && profile !== login) candidates.push({ token: profile, source: `orq profile ${cliProfile}`, workspace: workspaceOfKey(profile, session) });
+	if (profile && profile !== login)
+		candidates.push({ token: profile, source: `orq profile ${cliProfile}`, workspace: workspaceOfKey(profile, session) });
 	if (process.env.ORQ_API_KEY && process.env.ORQ_API_KEY !== profile && process.env.ORQ_API_KEY !== login) {
 		const token = process.env.ORQ_API_KEY;
 		candidates.push({ token, source: "ORQ_API_KEY", workspace: workspaceOfKey(token, session) });
@@ -370,9 +390,10 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 	if (token) candidates.push({ token, source: SESSION_SOURCE, workspace });
 	// Only when the file moved or the profile is keyless: `orq orqi` has already
 	// put the profile's key in ORQ_API_KEY, so that launch never gets here.
-	const profileGap = cliProfile && !profile && !process.env.ORQ_API_KEY
-		? `orq profile "${cliProfile}" is in force but ${credentialsFile()} has no key for it; using ${candidates[0]?.source ?? "no credential"} instead.`
-		: undefined;
+	const profileGap =
+		cliProfile && !profile && !process.env.ORQ_API_KEY
+			? `orq profile "${cliProfile}" is in force but ${credentialsFile()} has no key for it; using ${candidates[0]?.source ?? "no credential"} instead.`
+			: undefined;
 	return { candidates, failure, profileGap };
 }
 

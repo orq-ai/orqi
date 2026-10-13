@@ -83,12 +83,22 @@ const fit = (text: string, width: number) => {
  * The rows that fit `height`, pinned to the newest step unless `selected`
  * scrolls further back. Returns rows plus which step index is current.
  */
-export function minimapRows(steps: Step[], width: number, height: number, selected?: number, frame = 0, paint: RowPaint = plainRows, marked?: number): string[] {
+export function minimapRows(
+	steps: Step[],
+	width: number,
+	height: number,
+	selected?: number,
+	frame = 0,
+	paint: RowPaint = plainRows,
+	marked?: number,
+): string[] {
 	if (steps.length === 0) return [paint.dim(fit(" no steps yet", width))];
 	const current = selected ?? steps.length - 1;
 	const end = Math.max(Math.min(steps.length, current + 1), Math.min(steps.length, height));
 	const start = Math.max(0, Math.min(current, end - height));
-	return steps.slice(start, start + height).map((step, i) => minimapRow(step, width, start + i === current, frame, paint, step.id === marked));
+	return steps
+		.slice(start, start + height)
+		.map((step, i) => minimapRow(step, width, start + i === current, frame, paint, step.id === marked));
 }
 
 /** The panel's own footer: `15 steps · turn 3 · $0.113`, and `· ⚠ N` while a warning fires. */
@@ -99,7 +109,10 @@ export function minimapSummary(steps: Step[], turn: number, cost: number, warnin
 /** A panel section under the minimap: a ` ─ title ───` rule, then the body indented. */
 export function sectionLines(title: string, body: string[], width: number, empty = "nothing yet"): string[] {
 	const rule = ` ─ ${title} `;
-	return [rule + "─".repeat(Math.max(0, width - visibleWidth(rule))), ...(body.length ? body : [empty]).map((line) => fit(`  ${line}`, width))];
+	return [
+		rule + "─".repeat(Math.max(0, width - visibleWidth(rule))),
+		...(body.length ? body : [empty]).map((line) => fit(`  ${line}`, width)),
+	];
 }
 
 /** Where the context goes, in tokens (chars / 4). What the context section and /context read. */
@@ -125,7 +138,8 @@ export interface ContextSplit {
 /** `5.1k`, one decimal up to a million: the section is narrow and 17.8k reads better than 18k. */
 const k = (n: number) => (n < 1000 ? `${n}` : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : tokens(n));
 
-export const contextUsed = (split: ContextSplit) => split.prompt + split.hints + split.project + split.tools + split.skills + split.messages;
+export const contextUsed = (split: ContextSplit) =>
+	split.prompt + split.hints + split.project + split.tools + split.skills + split.messages;
 
 /**
  *   prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k
@@ -134,7 +148,12 @@ export const contextUsed = (split: ContextSplit) => split.prompt + split.hints +
  */
 export function contextLines(split: ContextSplit, width: number): string[] {
 	const used = contextUsed(split);
-	if (split.agent) return sectionLines("context", [`agent ${split.agent}: its prompt`, "and tools run on orq.ai", `msgs ${k(split.messages)}/${tokens(split.window)} · /context`], width);
+	if (split.agent)
+		return sectionLines(
+			"context",
+			[`agent ${split.agent}: its prompt`, "and tools run on orq.ai", `msgs ${k(split.messages)}/${tokens(split.window)} · /context`],
+			width,
+		);
 	const bar = (n: number) => contextBar(used ? n / used : 0);
 	const prompt = split.prompt + split.hints + split.project;
 	return sectionLines(
@@ -142,7 +161,9 @@ export function contextLines(split: ContextSplit, width: number): string[] {
 		[
 			`prompt ${bar(prompt)}${k(prompt).padStart(6)} skills${k(split.skills).padStart(6)}`,
 			`tools  ${bar(split.tools)}${k(split.tools).padStart(6)} msgs  ${k(split.messages).padStart(6)}`,
-			[split.cache !== undefined ? `cache ${Math.round(split.cache * 100)}%` : "", `${k(used)}/${tokens(split.window)}`, "/context"].filter(Boolean).join(" · "),
+			[split.cache !== undefined ? `cache ${Math.round(split.cache * 100)}%` : "", `${k(used)}/${tokens(split.window)}`, "/context"]
+				.filter(Boolean)
+				.join(" · "),
 		],
 		width,
 	);
@@ -153,7 +174,16 @@ export function signalLines(signals: Signals, width: number): string[] {
 	const body: string[] = [];
 	if (signals.loop) body.push(`⚠ tool loop  ${signals.loop.tool} ×${signals.loop.count} same args`);
 	if (!signals.loop && !signals.errors && !signals.pending) body.push(`no warnings · ${signals.oneWay} one-way calls`);
-	else body.push([signals.errors ? `errors ${signals.errors}/${signals.tools}` : "", `one-way calls ${signals.oneWay}`, signals.pending ? `pending ${signals.pending}` : ""].filter(Boolean).join(" · "));
+	else
+		body.push(
+			[
+				signals.errors ? `errors ${signals.errors}/${signals.tools}` : "",
+				`one-way calls ${signals.oneWay}`,
+				signals.pending ? `pending ${signals.pending}` : "",
+			]
+				.filter(Boolean)
+				.join(" · "),
+		);
 	return sectionLines("signals", body, width);
 }
 
