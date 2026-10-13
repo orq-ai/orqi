@@ -44,7 +44,7 @@ import {
 	pickForWorkspace,
 	WORKSPACE_SWITCH,
 	type Boot,
-} from "./commands.ts";
+} from "./connection.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { orqHarness } from "./harness.ts";
 import { checksumLine, parseChecksum, sha256Hex, sidecar } from "./checksum.ts";
@@ -896,7 +896,7 @@ test("no orq call asks for --json, which the CLI dropped in 8.4", () => {
 	// orqi's own `update --json` is a different flag and stays untouched, so
 	// this scrapes the runOrq call sites rather than the whole file.
 	expect(WHOAMI_ARGS).toEqual(["auth", "whoami", "-o", "json"]);
-	for (const file of ["auth.ts", "commands.ts", "main.ts"]) {
+	for (const file of ["auth.ts", "connection.ts", "main.ts"]) {
 		const calls = [...readFileSync(join(import.meta.dir, file), "utf8").matchAll(/runOrq\(([^)]*)\)/g)].map((m) => m[1]);
 		for (const call of calls) expect(call).not.toContain("--json");
 	}

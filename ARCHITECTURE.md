@@ -13,9 +13,9 @@ orqi
 │   ├── subagent tool            recursive in-process sessions   src/subagent.ts
 │   ├── skills                   bundled skills/                 (additionalSkillPaths)
 │   ├── system prompt            src/system-prompt.txt
-│   ├── slash commands           auth, workspace, update        src/commands.ts
+│   ├── slash commands           auth, workspace, update        src/connection.ts
 │   │                            the harness views                src/harness.ts
-│   └── startup header           session entry, not stdout        src/commands.ts
+│   └── startup header           session entry, not stdout        src/connection.ts
 ├── model            orq AI Router as a pi provider              src/model.ts
 ├── credentials       orq profile, ORQ_API_KEY or the login session  src/auth.ts
 └── self-update       `orqi update`, daily check, header note     src/update.ts
@@ -28,7 +28,7 @@ orqi
 | `src/mcp.ts` | The `orq` server registered with pi's MCP, credential choice, result rendering, hints |
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
-| `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, the first-run welcome, plus `/key /whoami /workspace /reconnect /doctor /update` |
+| `src/connection.ts` | The connection half of the pi extension (a command goes here only if it is about the connection; the rest are `harness.ts`'s): startup header entry, the not-connected warning and reconnect, the first-run welcome, plus `/key /whoami /workspace /reconnect /doctor /update` |
 | `src/oauth.ts` | "Sign in with an account → orq.ai (browser)" in pi's `/login`, running `orq auth login` |
 | `src/onboarding.ts` | `MaskedInput` for `/key`, the welcome's options, the `/learn` prompts |
 | `src/skills.ts` | `pluginResources` (one copy of the orq plugin, `DROPPED_COMMANDS`), the daily plugin update, `/skills` details |
