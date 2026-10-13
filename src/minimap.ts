@@ -67,7 +67,9 @@ export function minimapRow(step: Step, width: number, current: boolean, frame = 
 	if (marked) body += " ▸";
 	const gutter = current ? paint.bright("▌") : " ";
 	const tone = step.status === "error" ? paint.error : step.role === "user" ? paint.bright : step.role === "tool" ? paint.dim : paint.text;
-	const line = `${gutter}${tone(glyph)} ${paint.dim(ROLE[step.role].padEnd(6))} ${tone(body)}`;
+	// A managed agent's reply reads as the agent's, not orqi's.
+	const role = step.role === "assistant" && step.model?.startsWith("agent/") ? "agent" : ROLE[step.role];
+	const line = `${gutter}${tone(glyph)} ${paint.dim(role.padEnd(6))} ${tone(body)}`;
 	const fitted = truncateToWidth(line, width, "…");
 	return fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted)));
 }
@@ -115,6 +117,8 @@ export interface ContextSplit {
 	window: number;
 	/** Share of the last request's input that came from the cache, 0..1. */
 	cache?: number;
+	/** Agent mode: the agent's key. Its instructions and tools run on orq.ai, so nothing here is fixed. */
+	agent?: string;
 	counts: { orq: number; builtin: number; hidden: string[]; skills: number; hinted: number; turns: number; results: number };
 }
 
@@ -130,6 +134,7 @@ export const contextUsed = (split: ContextSplit) => split.prompt + split.hints +
  */
 export function contextLines(split: ContextSplit, width: number): string[] {
 	const used = contextUsed(split);
+	if (split.agent) return sectionLines("context", [`agent ${split.agent}: its prompt`, "and tools run on orq.ai", `msgs ${k(split.messages)}/${tokens(split.window)} · /context`], width);
 	const bar = (n: number) => contextBar(used ? n / used : 0);
 	const prompt = split.prompt + split.hints + split.project;
 	return sectionLines(

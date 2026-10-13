@@ -107,7 +107,7 @@ test("welcome, no key pasted: says so and keeps the hint", async () => {
 });
 
 test("the header names the day-one views", () => {
-	const text = headerLines({ name: "orqi", version: "v0.2.0", status: "orq/auto · 44 tools", cwd: "~" }, { cols: 100, rows: 40 }).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	const text = headerLines({ name: "orqi", version: "v0.2.0", status: "orq/auto · 44 tools", cwd: "~" }).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 	expect(text).toContain("orqi (aka TonyBot) v0.2.0");
 	expect(text).toContain("/learn · /route · /cost · /trace · /agents · /whatsnew · alt+m minimap");
 	expect(text).not.toContain("changelog https://"); // /whatsnew replaces the bare URL
@@ -218,10 +218,10 @@ test("a connected session switches to what /login just stored, once, and learns 
 test("signed out, the opening screen invites a sign-in instead of the pitch", () => {
 	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 	const base = { name: "orqi", version: "v0", status: "not signed in", cwd: "~" };
-	const out = strip(headerLines({ ...base, signedOut: true }, { cols: 100, rows: 40 }));
+	const out = strip(headerLines({ ...base, signedOut: true }));
 	expect(out).toContain("You're not signed in to an orq.ai workspace yet. Sign in to start:");
 	expect(out).toContain("/login  →  Sign in with an account  →  orq.ai (browser)");
 	expect(out).toContain("/key");
 	expect(out).not.toContain("Ask me to:");
-	expect(strip(headerLines(base, { cols: 100, rows: 40 }))).toContain("Ask me to:");
+	expect(strip(headerLines(base))).toContain("Ask me to:");
 });

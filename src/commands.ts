@@ -74,41 +74,6 @@ function report(ctx: { ui: { notify(message: string, type?: "info" | "warning" |
 	return result.ok;
 }
 
-/** Group tool names by the entity they act on: list_traces/get_span -> traces. */
-export function groupTools(names: string[]): string {
-	const groups = new Map<string, string[]>();
-	for (const name of [...names].sort()) {
-		const bare = name.replace(/^orq_/, "");
-		const subject = bare.replace(/^(create|get|list|update|delete|search|query|find|invoke|retrieve)_/, "");
-		// Everything trace-shaped (spans, logs, log facets) reads as one group.
-		const key = subject.replace(/s$/, "").replace(/^(trace|span|log).*/, "trace");
-		groups.set(key, [...(groups.get(key) ?? []), name]);
-	}
-	return [...groups]
-		.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-		.map(([key, tools]) => `${key}s: ${tools.join(", ")}`)
-		.join("\n");
-}
-
-/**
- * The system prompt's tool table, built at boot from the catalogue the session
- * actually wrapped. It used to be written by hand and went stale twice ("30
- * tools", tools that no longer existed); now a server-side change reaches the
- * prompt with the next catalogue refresh, like the tools themselves.
- */
-export function toolTable(names: string[]): string {
-	const bare = names.map((name) => name.replace(/^orq_/, ""));
-	if (bare.length === 0) return "**MCP tools:** not connected yet; they are listed to you as `orq_*` tools once orqi connects.";
-	const rows = groupTools(bare)
-		.split("\n")
-		.map((line) => {
-			const [subject, tools] = line.split(": ");
-			const label = subject!.charAt(0).toUpperCase() + subject!.slice(1);
-			return `| ${label} | ${tools!.split(", ").map((tool) => `\`${tool}\``).join(", ")} |`;
-		});
-	return [`**Available MCP tools (${bare.length} tools, ${rows.length} categories):**`, "", "| Category | Tools |", "|---|---|", ...rows].join("\n");
-}
-
 const HEADER_ENTRY = "orqi-header";
 const WORKSPACE_STATUS = "orq-workspace";
 const AUTH_WIDGET = "orq-auth";

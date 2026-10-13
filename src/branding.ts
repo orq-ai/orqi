@@ -103,11 +103,6 @@ export interface HeaderInfo {
 	updateCommand?: string;
 }
 
-/** Terminal size at render time, or a safe default when it cannot be read. */
-export function terminalSize(): { cols: number; rows: number } {
-	return { cols: process.stdout.columns ?? 80, rows: process.stdout.rows ?? 24 };
-}
-
 /**
  * Startup header: the six-row orq CLI splash followed by runtime details.
  *
@@ -115,7 +110,7 @@ export function terminalSize(): { cols: number; rows: number } {
  * below so the splash remains intact in narrow panes. Returned as lines so it
  * can be rendered to stdout or as a TUI entry.
  */
-export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
+export function headerLines(info: HeaderInfo): string[] {
 	const indent = "  ";
 	// Workspace leads the detail line and keeps its colour: it is the one piece
 	// of state that silently changes what every tool call returns.

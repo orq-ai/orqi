@@ -548,6 +548,9 @@ test("minimap rows mark a call waiting on the gate and the step a teach card is 
 	const done: Step = { ...step, status: "ok", gate: "allowed" };
 	expect(bare(minimapRow(done, 36, false, 0, undefined, true)).trimEnd()).toBe(" ⚙ tool   delete_dataset ✓ ▸");
 	expect(bare(minimapRows([done], 36, 3, undefined, 0, undefined, 5)[0]!)).toContain("✓ ▸");
+	// A managed agent's reply is labelled as the agent's.
+	const reply: Step = { id: 6, turn: 1, role: "assistant", label: "assist", detail: "I can help", status: "ok", ts: 0, model: "agent/qa-val-agent" };
+	expect(bare(minimapRow(reply, 36, false)).trimEnd()).toBe(" ▌ agent  I can help");
 });
 
 test("the context split: prompt and skills index apart, active schemas, the rest is messages", () => {
@@ -625,6 +628,9 @@ test("/context: a row per part with tokens, share and cache, one bar, then the l
 	const withProject = contextRows({ ...split, project: 3_000 }).find((row) => row.startsWith("  project files"))!;
 	expect(withProject).toEndWith("3,000    10%     ✓");
 	expect(withProject.length).toBe(rows[0]!.length);
+	// Agent mode: the agent's own prompt and tools are not ours to count; say so, and the way back.
+	expect(contextRows({ ...split, agent: "qa-val-agent" })[0]).toStartWith("agent mode: qa-val-agent's instructions");
+	expect(contextLines({ ...split, agent: "qa-val-agent" }, 36).slice(1).map((line) => line.trim())).toEqual(["agent qa-val-agent: its prompt", "and tools run on orq.ai", "msgs 2.4k/1.1M · /context"]);
 	// Nothing hidden, nothing measured from the cache: those levers are not offered.
 	const bare = contextRows({ ...split, cache: undefined, hidden: 0, counts: { ...split.counts, hidden: [] } });
 	expect(bare.some((row) => row.includes("ORQI_ALL_TOOLS") || row.includes("hidden:") || row.includes("cache hit"))).toBe(false);

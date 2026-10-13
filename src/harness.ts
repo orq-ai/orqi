@@ -18,7 +18,7 @@ import { apiBaseUrl, runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
 import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
 import { contextLines, contextUsed, sectionLines, MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, signalLines, SPINNER, type ContextSplit } from "./minimap.ts";
-import { talkable, type ModelInfo } from "./model.ts";
+import { DEFAULT_MODEL, talkable, type ModelInfo } from "./model.ts";
 import { bareName, hintsSection, schemaLines, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
@@ -189,6 +189,7 @@ export function contextSplit(input: {
 	window: number;
 	steps: Step[];
 	turns: number;
+	agent?: string;
 }): ContextSplit {
 	const tok = (text: string) => Math.ceil(text.length / 4);
 	const schema = (tool: (typeof input.tools)[number]) => tok(`${tool.description ?? ""}${JSON.stringify(tool.parameters ?? {})}`);
@@ -212,6 +213,7 @@ export function contextSplit(input: {
 		hidden: hidden.reduce((n, tool) => n + schema(tool), 0),
 		messages: Math.max(0, input.used - fixed.prompt - fixed.hints - fixed.project - fixed.tools - fixed.skills),
 		window: input.window,
+		...(input.agent ? { agent: input.agent } : {}),
 		...(last?.usage ? { cache: last.usage.cacheRead / (last.usage.input + last.usage.cacheRead) } : {}),
 		counts: {
 			orq: live.filter((tool) => tool.name.startsWith(TOOL_PREFIX)).length,
@@ -250,6 +252,7 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 	const legend = (cached: boolean) => parts.filter((part) => part.cached === cached && part.n).map((part) => `${part.label} ${tokens(part.n)}`).join(" · ");
 	const lever = (name: string, what: string, effect = "") => `· ${name.padEnd(19)}${what.padEnd(48)}${effect}`.trimEnd();
 	return [
+		...(split.agent ? [`agent mode: ${split.agent}'s instructions and tools run on orq.ai; only the messages go from here.`, "/agent off returns to orqi.", ""] : []),
 		`${"what the model reads on every turn".padEnd(52)}${"tokens".padStart(8)}${"share".padStart(7)}${"cache".padStart(6)}`,
 		row("system prompt", "orqi-system-prompt.txt", split.prompt, true),
 		...(split.hints ? [row("  tool hints", `TOOL_HINTS, ${c.hinted} tool${c.hinted === 1 ? "" : "s"}`, split.hints, true)] : []),
@@ -325,6 +328,19 @@ export function orqHarness(deps: HarnessDeps) {
 		let resolvedWorkspace: string | undefined;
 		let workspaceAskedFor: string | undefined;
 		let savedTools: string[] | undefined;
+		/** The chat model agent mode was entered from: where /agent off goes back to. */
+		let returnTo: { provider: string; id: string } | undefined;
+		const agentKey = (id: string | undefined) => (isAgentModel(id) ? id!.slice(6) : undefined);
+		/** Agent mode says so above the editor, with the way back, for as long as it lasts. */
+		const syncAgent = (ctx: ExtensionContext) => {
+			if (ctx.mode !== "tui") return;
+			const key = agentKey(ctx.model?.id);
+			const theme = ctx.ui.theme;
+			ctx.ui.setWidget(
+				"orqi-agent",
+				key ? [`${theme.fg("warning", `▌ talking to agent ${key}`)}${theme.fg("dim", " · its own prompt and tools · /agent off returns to orqi")}`] : undefined,
+			);
+		};
 		let reserveTokens = 16_384;
 		let headerShown = false;
 		let statusOf: (key: string) => string | undefined = () => undefined;
@@ -350,6 +366,7 @@ export function orqHarness(deps: HarnessDeps) {
 					window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
 					steps: trajectory.steps,
 					turns: trajectory.turn,
+					agent: agent ? ctx.model!.id.slice(6) : undefined,
 				});
 			} catch {
 				// A stale handle: keep the last split.
@@ -640,6 +657,7 @@ export function orqHarness(deps: HarnessDeps) {
 			trajectory.fromMessages(branchMessages(ctx));
 			traces.length = 0;
 			measure(ctx);
+			syncAgent(ctx);
 			card = undefined;
 			shownConcepts.clear();
 			startedAt = Date.now();
@@ -688,7 +706,8 @@ export function orqHarness(deps: HarnessDeps) {
 		 * teach and signals fall back to one dim widget line each above the
 		 * editor. Widgets, not entries, so /trajectory and a resume stay clean.
 		 */
-		const panelShown = () => Boolean(sideRoot) && minimapVisible();
+		// The fullscreen side panel or, in regular mode, the overlay that stands in for it.
+		const panelShown = () => Boolean(sideRoot || overlay) && minimapVisible();
 		const syncWidgets = (ctx: ExtensionContext, teachLine?: string) => {
 			if (ctx.mode !== "tui") return;
 			const loop = signals(trajectory.steps, trajectory.turn).loop;
@@ -716,7 +735,14 @@ export function orqHarness(deps: HarnessDeps) {
 			syncWidgets(ctx, teachLine);
 			render();
 		});
-		pi.on("model_select", (_event, ctx) => {
+		pi.on("model_select", (event, ctx) => {
+			if (isAgentModel(event.model.id) && event.previousModel && !isAgentModel(event.previousModel.id)) returnTo = { provider: event.previousModel.provider, id: event.previousModel.id };
+			// Leaving agent mode gives the tools back now, not on the next turn, so the panel counts them.
+			if (!isAgentModel(event.model.id) && savedTools) {
+				pi.setActiveTools(savedTools);
+				savedTools = undefined;
+			}
+			syncAgent(ctx);
 			measure(ctx);
 			render();
 		});
@@ -1191,18 +1217,39 @@ export function orqHarness(deps: HarnessDeps) {
 				return;
 			}
 			await pi.setModel(model);
-			ctx.ui.notify(`Talking to ${key} (agent). orqi tools are off; the agent uses its own. /model to leave.`);
+			ctx.ui.notify(`Now talking to ${key}, a managed agent: its own instructions and tools, run on orq.ai. orqi's tools are off. /agent off brings orqi back.`);
+		};
+
+		/** Back from agent mode to the chat model it was entered from, else the configured default. */
+		const leaveAgent = async (ctx: ExtensionContext) => {
+			const key = agentKey(ctx.model?.id);
+			if (!key) {
+				ctx.ui.notify("Already talking to orqi. /agents lists the workspace's agents.");
+				return;
+			}
+			const fallback = DEFAULT_MODEL.startsWith("orq/") ? DEFAULT_MODEL.slice(4) : DEFAULT_MODEL;
+			const target = (returnTo && ctx.modelRegistry.find(returnTo.provider, returnTo.id)) ?? ctx.modelRegistry.find("orq", fallback);
+			if (!target) {
+				ctx.ui.notify("No chat model to return to: pick one with /model.", "warning");
+				return;
+			}
+			await pi.setModel(target);
+			ctx.ui.notify(`Back to orqi on ${selectionName(target)}, with its tools. /agent ${key} to talk to the agent again.`);
 		};
 
 		pi.registerCommand("agent", {
-			description: "talk to a managed orq agent: /agent <key> (same as /model agent/<key>)",
+			description: "talk to a managed orq agent: /agent <key>; /agent off returns to orqi",
 			handler: async (args, ctx) => {
-				const key = args.trim().replace(/^agent\//, "");
-				if (!key) {
-					ctx.ui.notify("usage: /agent <key>. /agents lists them.", "warning");
+				const arg = args.trim().replace(/^agent\//, "");
+				if (arg === "off" || arg === "orqi" || (!arg && agentKey(ctx.model?.id))) {
+					await leaveAgent(ctx);
 					return;
 				}
-				await talkTo(key, ctx);
+				if (!arg) {
+					ctx.ui.notify("usage: /agent <key> to talk to a managed agent, /agent off to come back. /agents lists them.", "warning");
+					return;
+				}
+				await talkTo(arg, ctx);
 			},
 		});
 

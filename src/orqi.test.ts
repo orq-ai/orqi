@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { apiBaseUrl, credentialCandidates, credentialsFile, readWhoami, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
-import { authLines, groupTools, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
+import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { orqHarness } from "./harness.ts";
 import { authReason, CredentialsRejected, DENYLISTED_TOOLS, hintsSection, isAuthError, keptTools, orqServerConfig, pickCredential, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
@@ -96,21 +96,6 @@ function catalogueNames(): Set<string> {
 	expect(Array.isArray(parsed)).toBe(true);
 	return new Set(parsed.map((tool: { name: string }) => tool.name));
 }
-
-test("groupTools buckets tools by the entity they act on", () => {
-	const grouped = groupTools(["orq_list_traces", "orq_get_span", "orq_create_agent", "orq_get_agent"]);
-	const lines = grouped.split("\n");
-	expect(lines).toContain("traces: orq_get_span, orq_list_traces");
-	expect(lines).toContain("agents: orq_create_agent, orq_get_agent");
-});
-
-test("groupTools keeps every tool exactly once", () => {
-	const names = ["orq_query_analytics", "orq_search_docs", "orq_list_models", "orq_delete_entity"];
-	const listed = groupTools(names)
-		.split("\n")
-		.flatMap((line) => line.split(": ")[1].split(", "));
-	expect(listed.sort()).toEqual([...names].sort());
-});
 
 test("every subagent tool exists in the orq catalogue", () => {
 	// Guards against silently handing a subagent an empty tool set.
@@ -449,7 +434,7 @@ test("the header uses the ORQI splash", () => {
 	const info = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
 	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 
-	const output = strip(headerLines(info, { cols: 100, rows: 40 }));
+	const output = strip(headerLines(info));
 	expect(output).toContain("██████╗ ██████╗  ██████╗  ████");
 	// AGENTS.md's TUI drive waits for this exact string.
 	expect(output).toContain("orqi (aka TonyBot) v0");
@@ -470,10 +455,10 @@ test("the header shows an update line only when a newer release is cached", () =
 	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 	const base = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
 
-	const withoutUpdate = strip(headerLines(base, { cols: 100, rows: 40 }));
+	const withoutUpdate = strip(headerLines(base));
 	expect(withoutUpdate).not.toContain("update available");
 
-	const withUpdate = strip(headerLines({ ...base, updateCommand: "orqi update" }, { cols: 100, rows: 40 }));
+	const withUpdate = strip(headerLines({ ...base, updateCommand: "orqi update" }));
 	expect(withUpdate).toContain("update available · run: orqi update");
 
 	const art = withUpdate.split("\n").filter((line) => /[█▀▄]/.test(line));

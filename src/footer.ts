@@ -148,7 +148,8 @@ export function headerBar(state: HeaderBarState, width: number, paint: Paint = p
 	const segments: string[] = [];
 	if (!state.connected) segments.push(paint.hot("not signed in · /login"));
 	else if (state.workspace) segments.push(label("workspace", state.workspace));
-	if (state.agent) segments.push(label("agent", state.agent));
+	// Agent mode changes who answers: the agent stands out, it is not just another fact.
+	if (state.agent) segments.push(`${paint.dim("agent")} ${paint.hot(state.agent)}`);
 	if (state.project) segments.push(label("project", state.project));
 	if (state.routing) segments.push(label("routing", state.routing));
 	if (state.teach) segments.push(paint.text("teach"));
