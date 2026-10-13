@@ -26,6 +26,7 @@ import {
 	profileOf,
 	serverOf,
 	sessionFileOf,
+	SESSION_SOURCE,
 	sessionToken,
 	spawnFailure,
 	WHOAMI_ARGS,
@@ -1287,6 +1288,60 @@ test("a stored /login key that only stalled at boot is tried on the first messag
 		expect(h.widgets.get("orq-auth")).toBeUndefined();
 		await h.input();
 		expect(calls.map((set) => set.map((c) => c.token))).toEqual([["sk-orq-slow"]]);
+	} finally {
+		if (prior === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = prior;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an expired browser sign-in is refreshed from the login session, not tried as a switch", async () => {
+	// pi refreshes the stored sign-in only at the model call, which runs after
+	// the input hook: an hour-old session read the expired copy, knocked with it,
+	// and pinned "the switch failed" while the model, refreshed a moment later, worked.
+	const dir = mkdtempSync(join(tmpdir(), "orqi-expired-signin-"));
+	const prior = process.env.ORQ_API_KEY;
+	try {
+		const path = join(dir, "auth.json");
+		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "sk-orq-expired", refresh: "orq-cli-session", expires: 1 } }));
+		const session: Credential = { token: "sk-orq-fresh", source: SESSION_SOURCE, workspace: "acme" };
+		process.env.ORQ_API_KEY = "sk-orq-adopted-earlier";
+		const calls: Credential[][] = [];
+		const h = recoveryHarness(
+			async (candidates) => {
+				calls.push(candidates);
+				return rejectAllBut("sk-orq-fresh")(candidates);
+			},
+			{
+				agentDir: dir,
+				candidates: [session],
+				readCandidates: () => ({ candidates: [{ token: loginKey(path)!, source: "/login key" }, session] }),
+				header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" },
+			},
+		);
+		h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
+		await h.input();
+		expect(calls.map((set) => set.map((c) => c.token))).toEqual([["sk-orq-fresh"]]);
+		expect(loginKey(path)).toBe("sk-orq-fresh");
+		expect(h.widgets.get("orq-auth")).toBeUndefined();
+
+		// No login session to refresh from: leave it to pi, knock with nothing.
+		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "sk-orq-expired-2", refresh: "orq-cli-session", expires: 1 } }));
+		const h2 = recoveryHarness(
+			async (candidates) => {
+				calls.push(candidates);
+				return rejectAllBut("sk-orq-fresh")(candidates);
+			},
+			{
+				agentDir: dir,
+				readCandidates: () => ({ candidates: [{ token: loginKey(path)!, source: "/login key" }] }),
+				header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" },
+			},
+		);
+		h2.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h2.ctx);
+		await h2.input();
+		expect(calls.length).toBe(1);
+		expect(h2.widgets.get("orq-auth")).toBeUndefined();
 	} finally {
 		if (prior === undefined) delete process.env.ORQ_API_KEY;
 		else process.env.ORQ_API_KEY = prior;

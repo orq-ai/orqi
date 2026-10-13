@@ -249,7 +249,10 @@ test("a connected session switches to what /login just stored, once, and learns 
 		const input = () => handlers.get("input")!({ type: "input", text: "hi", source: "interactive" }, ctx);
 		await input();
 		expect(tried).toEqual([]); // nothing stored yet
-		writeFileSync(join(dir, "auth.json"), JSON.stringify({ orq: { type: "oauth", access: "sess-token", refresh: "r", expires: 1 } }));
+		writeFileSync(
+			join(dir, "auth.json"),
+			JSON.stringify({ orq: { type: "oauth", access: "sess-token", refresh: "r", expires: Date.now() + 3_600_000 } }),
+		);
 		await input();
 		expect(tried).toEqual([["sess-token"]]);
 		expect(header.workspace).toBe("orq-research");
