@@ -1054,7 +1054,7 @@ test("authLines picks its headline from what actually happened", () => {
 	);
 });
 
-test("loginKey reads the key pi's /login stored, and nothing else", () => {
+test("loginKey reads what pi's /login stored: a pasted key or a browser sign-in", () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-auth-"));
 	try {
 		const path = join(dir, "auth.json");
@@ -1062,6 +1062,8 @@ test("loginKey reads the key pi's /login stored, and nothing else", () => {
 		writeFileSync(path, JSON.stringify({ orq: { type: "api_key", key: "sk-orq-stored" } }));
 		expect(loginKey(path)).toBe("sk-orq-stored");
 		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "x", refresh: "y", expires: 0 } }));
+		expect(loginKey(path)).toBe("x"); // "Sign in with an account" (orq.ai browser login)
+		writeFileSync(path, JSON.stringify({ orq: { type: "oauth" } }));
 		expect(loginKey(path)).toBeUndefined();
 		writeFileSync(path, "{garbage");
 		expect(loginKey(path)).toBeUndefined();

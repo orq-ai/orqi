@@ -23,7 +23,8 @@ import {
 	SessionManager,
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
-import { credentialCandidates, LOGIN_HINT_ONESHOT, mcpUrl, projectForCredential, type Credential } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
+import { orqOAuth } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./commands.ts";
 import { callOrqTool, CredentialsRejected, firstLine, hintsSection, orqMcp, pickCredential, type Reconnected, type Rejection } from "./mcp.ts";
@@ -149,6 +150,11 @@ const mcp = orqMcp();
 process.env.ORQI_REPO ??= repoName();
 const models = await createOrqModelRuntime(AGENT_DIR, credential?.token ?? candidates[0]?.token ?? "");
 const modelRuntime = models.runtime;
+// "Sign in with an account" in pi's /login: the orq CLI's browser login, so a
+// key never has to be pasted. Its token is the login session's (via whoami).
+modelRuntime.registerProvider("orq", {
+	oauth: orqOAuth(() => credentialCandidates().candidates.find((candidate) => candidate.source === SESSION_SOURCE)?.token),
+} as never);
 // `orq/auto` and the Decisions API classifiers, on the runtime itself so the
 // boot model can be `orq/auto` and subagents can resolve its rungs.
 const routing = registerRouting(

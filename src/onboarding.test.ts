@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { loginKey } from "./auth.ts";
 import { normalizeCommand } from "./frontmatter.ts";
+import { orqOAuth, parseDeviceLogin } from "./oauth.ts";
 import { headerLines } from "./branding.ts";
 import { NO_CREDENTIAL, orqCommands } from "./commands.ts";
 import { learnRows, LEARN_PROMPTS, loginUrl, MaskedInput, maskKey, plausibleKey, saveLoginKey, WELCOME_OPTIONS, welcomeChoice } from "./onboarding.ts";
@@ -142,4 +143,36 @@ test("plugin command frontmatter that YAML rejects is quoted, everything else is
 	const good = "---\ndescription: fine\nargument-hint: \"[x]\"\n---\nbody\n";
 	expect(normalizeCommand(good)).toBe(good);
 	expect(normalizeCommand("no frontmatter")).toBe("no frontmatter");
+});
+
+test("Sign in with an account: the CLI's device login, shown in pi's device-code view", async () => {
+	const shown: { userCode: string; verificationUri: string }[] = [];
+	const fakeCli = (exit: number) => async (args: string[], onOutput: (chunk: string) => void) => {
+		expect(args).toEqual(["auth", "login", "--no-input"]);
+		onOutput("- Open: https://my.orq.ai/device/approve?client_name=orq-cli&user_code=2YA3-ENTL\n");
+		onOutput("- Code: 2YA3-ENTL\n- Waiting for browser approval...\n");
+		if (exit !== 0) onOutput("Error: context canceled\n");
+		return exit;
+	};
+	const flow = orqOAuth(() => "session-token", fakeCli(0));
+	const credentials = await flow.login({ onDeviceCode: (info) => shown.push(info) });
+	expect(shown).toEqual([{ userCode: "2YA3-ENTL", verificationUri: "https://my.orq.ai/device/approve?client_name=orq-cli&user_code=2YA3-ENTL" }]);
+	expect(credentials.access).toBe("session-token");
+	expect(credentials.expires).toBeGreaterThan(Date.now());
+	expect(flow.getApiKey(credentials)).toBe("session-token");
+	expect(flow.name).toBe("orq.ai (browser)");
+	await expect(orqOAuth(() => "t", fakeCli(1)).login({ onDeviceCode: () => {} })).rejects.toThrow("context canceled");
+	await expect(orqOAuth(() => undefined, fakeCli(0)).login({ onDeviceCode: () => {} })).rejects.toThrow("no login session");
+	expect(parseDeviceLogin("nothing here")).toEqual({ url: undefined, code: undefined });
+});
+
+test("the credential reader takes a browser sign-in as readily as a pasted key", () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-oauth-"));
+	try {
+		const path = join(dir, "auth.json");
+		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "sess-123", refresh: "orq-cli-session", expires: 1 } }));
+		expect(loginKey(path)).toBe("sess-123");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
