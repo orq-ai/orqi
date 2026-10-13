@@ -27,7 +27,7 @@ import { shortTool, signals, toAtif, Trajectory, type Step, type StepUsage } fro
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
 import { cardLines, pickCard, type Concept } from "./teach.ts";
-import { DIFFICULTY_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
+import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 
 export interface HarnessDeps {
@@ -57,11 +57,14 @@ export const selectionName = (model: { provider: string; id: string } | undefine
  * The route entry above a turn:
  *   route › medium  ▁▅▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003
  */
-export function routeLine(decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow">): string {
+export function routeLine(decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP">): string {
 	const tier = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(8);
 	const p = decision.probabilities;
+	const short = (n: number) => n.toFixed(2).replace(/^0/, "");
+	// A door that sent the turn to hard reads with its confidence: `door: one_way .94`.
+	if (decision.door && decision.door !== "benign" && decision.doorP !== undefined) decision = { ...decision, why: `door: ${decision.door} ${short(decision.doorP)}` };
 	const middle = p
-		? `${TIERS.map((t) => BARS[Math.min(7, Math.floor((p[t] ?? 0) * 8))]).join("")}   ${TIERS.map((t) => `${t} ${(p[t] ?? 0).toFixed(2).replace(/^0/, "")}`).join(" · ")}`
+		? `${TIERS.map((t) => BARS[Math.min(7, Math.floor((p[t] ?? 0) * 8))]).join("")}   ${TIERS.map((t) => `${t} ${short(p[t] ?? 0)}`).join(" · ")}`
 		: (decision.why ?? "");
 	const why = p && decision.why ? `   ${decision.why}` : "";
 	const classifier = decision.classifier ? decision.classifier.split("/").at(-1)!.replace(/-latest$/, "") : "";
@@ -714,10 +717,14 @@ export function orqHarness(deps: HarnessDeps) {
 							"route question (general_v2 · orq-smart-router RES-1619)",
 							`  ${DIFFICULTY_QUESTION.instructions}`,
 							...Object.entries(DIFFICULTY_QUESTION.criteria).map(([tier, text]) => `  ${tier.padEnd(7)} ${text}`),
+							"door question (evaluatorq's door criteria, asked in the same call)",
+							`  ${DOOR_QUESTION.instructions}`,
+							...Object.entries(DOOR_QUESTION.criteria).map(([door, text]) => `  ${door.padEnd(7)} ${text}`),
 							`pool  ${pool}`,
 							`classifier  ${routing.classifier ?? "none"}${routing.unavailable ? ` (${routing.unavailable})` : ""}`,
 							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
-							"       goes one rung up; delete / auto_run / agent or evaluator changes never go below hard",
+							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
+							"       cannot answer, a keyword floor (delete / auto_run / agent or evaluator changes) stands in",
 							"select it with /model orq/auto, or ORQI_MODEL=orq/auto",
 						].join("\n"),
 					);
