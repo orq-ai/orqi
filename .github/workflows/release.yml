@@ -4,16 +4,29 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
+# One release per tag at a time, and never cancel one that is mid-publish.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions: {}
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      # "true" when the tag's release was already published with every asset:
+      # the later jobs still run (a re-run may be retrying npm), but nothing
+      # here is rebuilt or re-uploaded.
+      published: ${{ steps.existing.outputs.published }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # The binary users download is whatever this compiles, so the compiler
           # is pinned and bumped deliberately.
@@ -31,57 +44,124 @@ jobs:
             exit 1
           }
 
+      # A published release is never modified: if every asset is there this
+      # run has nothing to upload (a re-run retrying npm, say), and if one is
+      # missing it fails rather than replacing files users may already hold. A
+      # draft is what a failed earlier run leaves behind, and is safe to redo.
+      - name: Look for an existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Unset means "not published": the steps below test != 'true'.
+          if ! json=$(gh release view "$GITHUB_REF_NAME" --json isDraft,assets 2>/dev/null); then
+            exit 0
+          fi
+          if [ "$(jq -r .isDraft <<<"$json")" = true ]; then
+            gh release delete "$GITHUB_REF_NAME" --yes
+            exit 0
+          fi
+          for asset in orqi-macos-arm64.tar.gz orqi-macos-x64.tar.gz orqi-linux-x64.tar.gz; do
+            for name in "$asset" "$asset.sha256"; do
+              jq -e --arg n "$name" '.assets[] | select(.name == $n and .size > 0)' <<<"$json" >/dev/null || {
+                echo "::error::release $GITHUB_REF_NAME is published but $name is missing; delete the release to rebuild it" >&2
+                exit 1
+              }
+            done
+          done
+          echo "release $GITHUB_REF_NAME is already published with every asset; nothing to upload"
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
       - run: bun test
+        if: steps.existing.outputs.published != 'true'
 
       # bun build --compile does not type-check, so without this a tag can ship
       # code that does not compile under tsc.
       - run: bun run typecheck
+        if: steps.existing.outputs.published != 'true'
 
       - run: bun run dist
+        if: steps.existing.outputs.published != 'true'
 
-      # Proves one of the three tarballs actually runs. --version needs no
-      # credentials and no network, so it exercises the real startup path.
-      - name: Smoke test the linux binary
+      # Proves one of the three tarballs actually runs, and that its sidecar
+      # matches it. --version needs no credentials and no network, so it
+      # exercises the real startup path.
+      - name: Smoke test the linux binary and its checksum
+        if: steps.existing.outputs.published != 'true'
         run: |
+          (cd dist && sha256sum -c orqi-linux-x64.tar.gz.sha256)
           mkdir -p /tmp/smoke
           tar -xzf dist/orqi-linux-x64.tar.gz -C /tmp/smoke
           [ "$(/tmp/smoke/orqi --version)" = "$(bun -e 'console.log(require("./package.json").version)')" ]
 
-      - name: Create GitHub release
+      # Build provenance: `gh attestation verify orqi-linux-x64.tar.gz -R orq-ai/orqi`
+      # proves which run of this workflow built a tarball someone is holding.
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        if: steps.existing.outputs.published != 'true'
+        with:
+          subject-path: dist/*.tar.gz
+
+      # Draft first: a draft is not returned by releases/latest, so install.sh
+      # cannot resolve "latest" to a release whose assets are still uploading.
+      # A tag with a "-" is a prerelease, which releases/latest also skips.
+      - name: Create the release as a draft and upload the assets
+        if: steps.existing.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Re-running the job for a tag that already has a release replaces the
-        # assets instead of failing with "release already exists".
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes --verify-tag \
-            || gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber
+          flags="--draft --verify-tag --generate-notes"
+          case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
+          # shellcheck disable=SC2086
+          gh release create "$GITHUB_REF_NAME" $flags dist/*.tar.gz dist/*.tar.gz.sha256
 
-      # npm packs the tarballs just uploaded, so the three platform packages
-      # carry the same bytes install.sh downloads. npm versions cannot be
-      # republished, so the packed files are installed on every supported
-      # platform (test-npm) before anything reaches the registry, and
-      # publish-npm uploads exactly those files. Prerelease tags stop here:
-      # stage.mjs only takes x.y.z and nothing sets an npm dist-tag other than
-      # latest.
-      - name: Stage and pack the npm packages
-        if: ${{ !contains(github.ref_name, '-') }}
+      - name: Publish the release
+        if: steps.existing.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+
+  # npm is built from the published assets, never from this run's build:
+  # whatever reaches npm is byte-for-byte what install.sh downloads, and a
+  # re-run of any job rebuilds nothing users can see. Prerelease tags stop
+  # here: stage.mjs only takes x.y.z and nothing sets an npm dist-tag other
+  # than latest.
+  stage-npm:
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Download the published assets and check them against their sidecars
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          node npm/stage.mjs "${GITHUB_REF_NAME#v}" dist /tmp/npm
-          mkdir -p dist/packs
+          mkdir -p release
+          gh release download "$GITHUB_REF_NAME" --pattern 'orqi-*.tar.gz' --pattern 'orqi-*.tar.gz.sha256' --dir release
+          (cd release && sha256sum -c ./*.sha256)
+
+      - name: Stage and pack the npm packages
+        run: |
+          node npm/stage.mjs "${GITHUB_REF_NAME#v}" release /tmp/npm
+          mkdir -p packs
           for pkg in /tmp/npm/*/; do
-            npm pack "$pkg" --pack-destination dist/packs
+            npm pack "$pkg" --pack-destination packs
           done
 
-      - uses: actions/upload-artifact@v4
-        if: ${{ !contains(github.ref_name, '-') }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: npm-packs
-          path: dist/packs
+          path: packs
           if-no-files-found: error
 
   test-npm:
-    needs: release
-    if: ${{ !contains(github.ref_name, '-') }}
+    needs: stage-npm
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +169,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions: {}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: npm-packs
           path: packs
@@ -115,12 +195,9 @@ jobs:
           [ "$code" = 1 ]
 
   # Trusted publishing checks the workflow file the job runs in, so this stays
-  # in release.yml; a workflow_dispatch retry from another file would be
-  # refused. A failed publish is retried with "Re-run failed jobs", and
-  # versions already on npm with identical files are skipped. Never use
-  # "Re-run all jobs" once npm has a version: it re-runs release, which
-  # rebuilds and clobbers the GitHub tarballs, and the file comparison below
-  # then fails with GitHub and npm shipping different binaries.
+  # in release.yml. A failed publish is retried by re-running the workflow:
+  # nothing upstream rebuilds, and versions already on npm with identical
+  # files are skipped.
   publish-npm:
     needs: test-npm
     runs-on: ubuntu-latest
@@ -129,12 +206,12 @@ jobs:
     steps:
       # Trusted publishing needs npm 11.5.1 or later, which ships with Node
       # 24.5 and up; check-latest keeps a cached older 24.x off the runner.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
           check-latest: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: npm-packs
           path: packs

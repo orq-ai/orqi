@@ -162,6 +162,15 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   or a failed `--version` verification never touches `target`, so there is nothing to roll back to.
   The daily background check (`maybeCheckUpdate`) only ever writes a cache entry the header reads -
   it never runs the swap itself.
+- **A download without a checksum is refused on `latest` and allowed on a pinned version.** Every
+  release from 0.2.0 on publishes `<asset>.sha256` beside the tarball (`src/checksum.ts` owns the
+  name and the `shasum -c` line format), and `install.sh` and `runUpdate` verify it with the same
+  policy: a mismatch, a body that is not a 64-hex digest (a captive portal answering 200 with HTML)
+  or any status but 200 and 404 refuses the install. A 404 on `latest` is a broken fetch, so it is
+  refused with a hint to pin; a 404 on a pinned version is the release's age, so it installs with
+  `installing UNVERIFIED` on stderr. The sidecar comes from the same host as the tarball: it catches
+  corruption and truncation, not a compromised release host; the build-provenance attestation
+  (`gh attestation verify <tarball> -R orq-ai/orqi`) is the answer to that.
 - **An npm install is updated by npm, never by the rename swap.** npm owns the files under
   `node_modules`, so `orqi update` runs `npm install -g @orq-ai/orqi@<version>`, pinned to the exact
   version it reported rather than `latest`. It only does so when the running binary sits under
@@ -204,17 +213,21 @@ capture with `script` and `grep -c 1049h` (the alternate-screen sequence).
 
 Bump `version` in `package.json` first, then push the matching tag. CI does the rest:
 `.github/workflows/release.yml` checks the tag against `package.json`, runs the tests and the
-typecheck, builds the three tarballs, runs the linux one to prove it starts, and creates the GitHub
-Release that `install.sh` downloads from. It then packs `@orq-ai/orqi` and its three platform
-packages from those same tarballs (wrapper template in `npm/orqi`, all four written by `npm/stage.mjs`), installs the
-packed files on macOS arm64, macOS x64 and linux x64, publishes them, and installs the published
-version on the same three platforms. Prerelease tags (anything with a `-`) skip npm. Publishing uses
-npm trusted publishing, so there is no token: each of the four packages must list `release.yml` in
-this repo as its trusted publisher on npmjs.com (first-time setup in
-`docs/distribution/npm-install.md`). A failed npm job is retried with "Re-run failed jobs", and
-versions already on npm with identical files are skipped. Never use "Re-run all jobs" once npm has the
-version: it re-runs `release`, which rebuilds the tarballs and clobbers the GitHub release assets, and
-`publish-npm` then fails its file comparison, leaving GitHub and npm shipping different binaries.
+typecheck, builds the three tarballs with a `.sha256` sidecar each (`bun run dist`), runs the linux
+one to prove it starts, attests the tarballs, and creates the GitHub Release as a draft that is
+published only once every asset is attached, so `releases/latest` never points at a half-uploaded
+release. A tag with a `-` is published as a prerelease and skips npm. The npm packages are staged
+by a separate job from the published assets, after `sha256sum -c`, never from the build job's own
+output (`npm/stage.mjs` writes `@orq-ai/orqi` and its three platform packages; the wrapper template
+is `npm/orqi`). They are installed on macOS arm64, macOS x64 and linux x64, published with npm
+trusted publishing (no token: each of the four packages must list `release.yml` in this repo as
+its trusted publisher on npmjs.com, first-time setup in `docs/distribution/npm-install.md`), and
+installed again from the registry on the same three platforms.
+
+Re-running the workflow is safe at any point. A published release is never modified: with every
+asset present the release job uploads nothing and the npm jobs run again, and with an asset missing
+it fails rather than replacing files users may hold (delete the release to rebuild it). A draft left
+by a failed run is deleted and recreated. Versions already on npm with identical files are skipped.
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0

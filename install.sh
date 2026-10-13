@@ -108,6 +108,16 @@ else
 	exit 1
 fi
 
+# Downloads are checked against the .sha256 published beside each tarball.
+if command -v sha256sum >/dev/null 2>&1; then
+	SHA_CMD=sha256sum
+elif command -v shasum >/dev/null 2>&1; then
+	SHA_CMD="shasum -a 256"
+else
+	err "required command not found: sha256sum or shasum (needed to verify the download)"
+	exit 1
+fi
+
 case "$(uname -s)-$(uname -m)" in
 	Darwin-arm64) PLATFORM=macos-arm64 ;;
 	Darwin-x86_64) PLATFORM=macos-x64 ;;
@@ -120,6 +130,9 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 asset="orqi-$PLATFORM.tar.gz"
+# Empty means latest. Cleared first so an exported lowercase `version` from the
+# caller's shell cannot pass for a pin (the checksum 404 policy reads it).
+version=''
 if [ -n "${ORQI_VERSION:-}" ]; then
 	# Normalized and interpolated into the release URL below, same as
 	# src/update.ts does for the equivalent env var: an unchecked
@@ -167,6 +180,52 @@ if ! curl -fSL --max-time 120 --progress-bar -o "$tmp/$asset" "$url"; then
 	err "check https://github.com/$REPO/releases for available versions"
 	exit 1
 fi
+
+# --- Verify checksum -------------------------------------------------------
+
+# Same host as the tarball: this catches corruption and truncation, not a
+# compromised release host. It fails closed: anything but a real 200 or a
+# real 404 refuses the install, because failing open would skip the check
+# exactly when the network is least trustworthy. -w prints the status even
+# when curl exits non-zero (000 on a connection failure); `|| true` only keeps
+# that exit from ending the script under set -e.
+sum_url="$url.sha256"
+sum_file="$tmp/$asset.sha256"
+sum_status=$(curl -sSL --max-time 30 -o "$sum_file" -w '%{http_code}' "$sum_url" || true)
+case "${sum_status:-000}" in
+	200)
+		expected=$(awk '{print $1; exit}' "$sum_file" 2>/dev/null || true)
+		# A captive portal answers 200 with HTML; compared as a hash that would
+		# read as a mismatch and hide the real cause.
+		if ! printf '%s' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+			err "the checksum at $sum_url is not a sha256 digest (a proxy or captive portal may be answering)"
+			exit 1
+		fi
+		actual=$($SHA_CMD "$tmp/$asset" | awk '{print $1}')
+		if [ "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" != "$actual" ]; then
+			err "checksum mismatch for $asset"
+			err "  expected $expected"
+			err "  actual   $actual"
+			err "refusing to install; report this at https://github.com/$REPO/issues"
+			exit 1
+		fi
+		printf '  %s✓%s checksum verified (sha256)\n' "$ORANGE" "$RESET"
+		;;
+	404)
+		# Every release from 0.2.0 on publishes a sidecar, so a 404 on latest is
+		# a broken fetch; on a pinned older release it is the release's age.
+		if [ -z "$version" ]; then
+			err "no checksum published for $asset at the latest release"
+			err "refusing to install unverified; pin a release with ORQI_VERSION if that is what you want"
+			exit 1
+		fi
+		err "warning: installing UNVERIFIED: v$version publishes no checksum"
+		;;
+	*)
+		err "could not fetch the checksum ($sum_url returned HTTP ${sum_status:-000})"
+		exit 1
+		;;
+esac
 
 tar -xzf "$tmp/$asset" -C "$tmp"
 
