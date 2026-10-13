@@ -8,20 +8,27 @@
  */
 
 import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { parse as parseYaml } from "yaml";
 import { resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { HStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
+import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { apiBaseUrl, runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
-import { dollars, footerLine, shortModel, tokens, type Paint } from "./footer.ts";
-import { MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, SPINNER } from "./minimap.ts";
-import { talkable, type ModelInfo } from "./model.ts";
+import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
+import { contextLines, contextUsed, sectionLines, MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, signalLines, SPINNER, type ContextSplit } from "./minimap.ts";
+import { DEFAULT_MODEL, talkable, type ModelInfo } from "./model.ts";
+import { bareName, hintsSection, schemaLines, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { readSkill, skillOrigin } from "./skills.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
-import { toAtif, Trajectory, type StepUsage } from "./trajectory.ts";
+import { argSummary, shortTool, signals, toAtif, Trajectory, type Step, type StepUsage } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
-import { DIFFICULTY_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
+import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
+import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
+import { orqGate } from "./gate.ts";
+import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 
 export interface HarnessDeps {
@@ -33,6 +40,8 @@ export interface HarnessDeps {
 	callTool: (name: string, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>;
 	/** The workspace the header shows: a key, or a short id when only an API key is known. */
 	workspace: () => string | undefined;
+	/** The project the credential is scoped to, when the Projects API names one. */
+	project?: () => string | undefined;
 	/** `orq/auto`: its pool and decision feed. */
 	routing?: Routing;
 }
@@ -49,11 +58,14 @@ export const selectionName = (model: { provider: string; id: string } | undefine
  * The route entry above a turn:
  *   route › medium  ▁▅▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003
  */
-export function routeLine(decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow">): string {
+export function routeLine(decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP">): string {
 	const tier = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(8);
 	const p = decision.probabilities;
+	const short = (n: number) => n.toFixed(2).replace(/^0/, "");
+	// A door that sent the turn to hard reads with its confidence: `door: one_way .94`.
+	if (decision.door && decision.door !== "benign" && decision.doorP !== undefined) decision = { ...decision, why: `door: ${decision.door} ${short(decision.doorP)}` };
 	const middle = p
-		? `${TIERS.map((t) => BARS[Math.min(7, Math.floor((p[t] ?? 0) * 8))]).join("")}   ${TIERS.map((t) => `${t} ${(p[t] ?? 0).toFixed(2).replace(/^0/, "")}`).join(" · ")}`
+		? `${TIERS.map((t) => BARS[Math.min(7, Math.floor((p[t] ?? 0) * 8))]).join("")}   ${TIERS.map((t) => `${t} ${short(p[t] ?? 0)}`).join(" · ")}`
 		: (decision.why ?? "");
 	const why = p && decision.why ? `   ${decision.why}` : "";
 	const classifier = decision.classifier ? decision.classifier.split("/").at(-1)!.replace(/-latest$/, "") : "";
@@ -62,6 +74,48 @@ export function routeLine(decision: Pick<Decision, "tier" | "probabilities" | "w
 }
 
 const WORKSPACE_STATUS = "orq-workspace";
+
+/** Marks orqi's HStack around pi's layout root, so a later session or /reload unwraps it instead of nesting. */
+const SIDE = Symbol.for("orqi.minimap.side");
+
+/**
+ * `owner/repo` from a git remote, credentials never included: it is sent as a
+ * header on every router call and stored in traces. Anything that does not
+ * parse sends nothing.
+ */
+export function repoOf(remote: string): string {
+	const scp = remote.match(/^[\w.-]+@[\w.-]+:(.+)$/); // git@github.com:owner/repo.git
+	let path: string;
+	if (scp) path = scp[1]!;
+	else {
+		try {
+			path = new URL(remote).pathname; // user:pass@ lives in the URL's auth part, not here
+		} catch {
+			return "";
+		}
+	}
+	const parts = path.replace(/\.git$/, "").split("/").filter(Boolean);
+	return parts.length >= 2 ? parts.slice(-2).join("/") : (parts[0] ?? "");
+}
+
+const TITLE = Symbol.for("orqi.title");
+
+/**
+ * The terminal title says orqi, not pi. pi writes `π - <dir>` itself at
+ * startup and on session changes, from a name baked into its own package, so
+ * there is no setting; the terminal's setTitle is wrapped once (marked, so a
+ * new session or /reload does not wrap it again) to swap the mark.
+ */
+export function brandTitle(tui: unknown, cwd = process.cwd()): void {
+	const terminal = (tui as { terminal?: { setTitle?(title: string): void; [TITLE]?: boolean } })?.terminal;
+	if (!terminal?.setTitle) return;
+	if (!terminal[TITLE]) {
+		const original = terminal.setTitle.bind(terminal);
+		terminal.setTitle = (title: string) => original(title.replace(/^π(?= |$)/, "orqi"));
+		terminal[TITLE] = true;
+	}
+	terminal.setTitle(`orqi - ${cwd.split("/").filter(Boolean).at(-1) ?? ""}`);
+}
 
 /** Open a URL in the browser; false when there is no opener. */
 export function openUrl(url: string): boolean {
@@ -93,7 +147,7 @@ export function costLines(rows: Map<string, StepUsage & { calls: number }>, turn
 	const rule = "─".repeat(66);
 	const lines = [`session cost${dollars(total).padStart(42)}   (${turns} ${turns === 1 ? "turn" : "turns"})`, rule];
 	for (const [model, row] of [...rows].sort((a, b) => b[1].cost - a[1].cost)) {
-		const toks = `↑${tokens(row.input + row.cacheRead)}${row.output ? ` ↓${tokens(row.output)}` : ""}`;
+		const toks = row.input + row.cacheRead + row.output ? `↑${tokens(row.input + row.cacheRead)}${row.output ? ` ↓${tokens(row.output)}` : ""}` : "";
 		lines.push(`${model.padEnd(28).slice(0, 28)} ${String(row.calls).padStart(3)} calls  ${toks.padEnd(16)} ${dollars(row.cost).padStart(9)}`);
 	}
 	if (rows.size === 0) lines.push("no model calls yet");
@@ -108,8 +162,156 @@ export function costLines(rows: Map<string, StepUsage & { calls: number }>, turn
 /** The most capable chat model the workspace offers: the "always" baseline for /cost. */
 export function topModel(catalogue: ModelInfo[]): ModelInfo | undefined {
 	return catalogue
-		.filter((model) => !model.kind && model.cost && !model.id.includes("@"))
+		// Not a smart router, and not a regional copy of a model already listed.
+		.filter((model) => !model.kind && model.cost && !model.id.includes("@") && !/\/(eu|us|global|apac)\./.test(model.id))
 		.sort((a, b) => (b.intelligence ?? 0) - (a.intelligence ?? 0) || (b.cost?.output ?? 0) - (a.cost?.output ?? 0))[0];
+}
+
+/** A `<name>…</name>` section of pi's system prompt, or "". */
+const section = (prompt: string, name: string) => {
+	const start = prompt.indexOf(`<${name}>`);
+	const end = prompt.indexOf(`</${name}>`, start);
+	return start >= 0 && end >= 0 ? prompt.slice(start, end + name.length + 3) : "";
+};
+
+/**
+ * Where the context goes, from what pi will send: the system prompt (with
+ * the skills index and the project's context files taken out), the active
+ * tools' schemas, and whatever the last request counted beyond those, which
+ * is the messages. Characters over four: an estimate, which is all the panel
+ * claims.
+ */
+export function contextSplit(input: {
+	systemPrompt: string;
+	tools: { name: string; description?: string; parameters?: unknown; exposure?: string }[];
+	active: string[];
+	used: number;
+	window: number;
+	steps: Step[];
+	turns: number;
+	agent?: string;
+}): ContextSplit {
+	const tok = (text: string) => Math.ceil(text.length / 4);
+	const schema = (tool: (typeof input.tools)[number]) => tok(`${tool.description ?? ""}${JSON.stringify(tool.parameters ?? {})}`);
+	const skills = section(input.systemPrompt, "skills");
+	const project = section(input.systemPrompt, "project_context");
+	const base = input.systemPrompt.replace(skills, "").replace(project, "");
+	const hinted = base && base.includes(hintsSection()) ? hintsSection() : "";
+	const active = new Set(input.active);
+	const live = input.tools.filter((tool) => active.has(tool.name) && tool.exposure !== "hidden");
+	const hidden = input.tools.filter((tool) => tool.exposure === "hidden" && tool.name.startsWith(TOOL_PREFIX));
+	const fixed = {
+		prompt: tok(base) - tok(hinted),
+		hints: tok(hinted),
+		project: tok(project),
+		tools: live.reduce((n, tool) => n + schema(tool), 0),
+		skills: tok(skills),
+	};
+	const last = [...input.steps].reverse().find((step) => step.role === "assistant" && step.usage && step.usage.input + step.usage.cacheRead > 0);
+	return {
+		...fixed,
+		hidden: hidden.reduce((n, tool) => n + schema(tool), 0),
+		messages: Math.max(0, input.used - fixed.prompt - fixed.hints - fixed.project - fixed.tools - fixed.skills),
+		window: input.window,
+		...(input.agent ? { agent: input.agent } : {}),
+		...(last?.usage ? { cache: last.usage.cacheRead / (last.usage.input + last.usage.cacheRead) } : {}),
+		counts: {
+			orq: live.filter((tool) => tool.name.startsWith(TOOL_PREFIX)).length,
+			builtin: live.filter((tool) => !tool.name.startsWith(TOOL_PREFIX)).length,
+			hidden: hidden.map((tool) => bareName(tool.name)),
+			skills: (skills.match(/<skill>/g) ?? []).length,
+			hinted: hinted ? Object.keys(TOOL_HINTS).length : 0,
+			turns: input.turns,
+			results: input.steps.filter((step) => step.role === "tool" || step.role === "subagent").length,
+		},
+	};
+}
+
+/**
+ * The /context table: where the tokens of every request go, one stacked bar,
+ * then what would move them. Cached means the part sits in the prompt
+ * prefix the provider can cache; the messages grow every turn.
+ */
+export function contextRows(split: ContextSplit, barWidth = 60): string[] {
+	const used = contextUsed(split);
+	const num = (n: number) => n.toLocaleString("en-US");
+	const share = (n: number) => `${used ? Math.round((n / used) * 100) : 0}%`;
+	const c = split.counts;
+	const row = (name: string, what: string, n: number, cached: boolean) => `${name.padEnd(16)}${what.padEnd(36)}${num(n).padStart(8)}${share(n).padStart(7)}${(cached ? "✓" : "✗").padStart(6)}`;
+	const parts = [
+		{ label: "prompt", n: split.prompt + split.hints + split.project, cached: true },
+		{ label: "tools", n: split.tools, cached: true },
+		{ label: "skills", n: split.skills, cached: true },
+		{ label: "msgs", n: split.messages, cached: false },
+	];
+	// Each part gets its share of the bar, at least one cell when it is there at all.
+	const cells = parts.map((part) => (part.n ? Math.max(1, Math.round((part.n / Math.max(1, used)) * barWidth)) : 0));
+	// Rounding leaves the bar a cell short or long: the largest part absorbs it.
+	if (used) cells[cells.indexOf(Math.max(...cells))]! += barWidth - cells.reduce((a, b) => a + b, 0);
+	const bar = parts.map((part, i) => (part.cached ? "▇" : "▁").repeat(cells[i]!)).join("");
+	const legend = (cached: boolean) => parts.filter((part) => part.cached === cached && part.n).map((part) => `${part.label} ${tokens(part.n)}`).join(" · ");
+	const lever = (name: string, what: string, effect = "") => `· ${name.padEnd(19)}${what.padEnd(48)}${effect}`.trimEnd();
+	return [
+		...(split.agent ? [`agent mode: ${split.agent}'s instructions and tools run on orq.ai; only the messages go from here.`, "/agent off returns to orqi.", ""] : []),
+		`${"what the model reads on every turn".padEnd(52)}${"tokens".padStart(8)}${"share".padStart(7)}${"cache".padStart(6)}`,
+		row("system prompt", "orqi-system-prompt.txt", split.prompt, true),
+		...(split.hints ? [row("  tool hints", `TOOL_HINTS, ${c.hinted} tool${c.hinted === 1 ? "" : "s"}`, split.hints, true)] : []),
+		...(split.project ? [row("  project files", "AGENTS.md, CLAUDE.md in the cwd", split.project, true)] : []),
+		row("tool schemas", `${c.orq} orq tools · ${c.builtin} built-in`, split.tools, true),
+		...(c.hidden.length ? [`  hidden: ${c.hidden.join(", ")}  saves ${num(split.hidden)}`] : []),
+		row("skills index", `${c.skills} skills, name + description`, split.skills, true),
+		row("messages", `${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.results} tool result${c.results === 1 ? "" : "s"}`, split.messages, false),
+		"",
+		bar,
+		`▇ cached  ${legend(true)}${split.messages ? `   ▁ ${legend(false)}` : ""}`,
+		"",
+		"what would change it",
+		lever("/agent <key>", "agent mode sends no prompt and no tools", `→ ~${tokens(split.messages)}`),
+		...(c.hidden.length ? [lever("ORQI_ALL_TOOLS=1", `show the ${c.hidden.length} hidden tools`, `→ +${tokens(split.hidden)}`)] : []),
+		lever("/compact", "summarise the messages into one"),
+		...(split.project ? [lever("another directory", "the project files ride along from the cwd", `→ -${tokens(split.project)}`)] : []),
+		...(split.cache !== undefined ? [lever(`cache hit ${Math.round(split.cache * 100)}%`, "the prefix is cached; routing keeps it (/route explain)")] : []),
+	];
+}
+
+/**
+ * What a session did, printed after the alternate screen closes:
+ *
+ *   orqi · acme · 18 min · 4 turns · $0.047
+ *     models    gpt-5.6-luna ×3  $0.011  ·  gpt-5.6-sol ×1  $0.036  ·  jev-latest ×4  $0.00008
+ *     tools     9 calls · list_traces ×2, get_span ×3, delete_dataset ×1 (allowed)
+ *     changes   1 one-way  delete_dataset dataset_id=01M4  ·  1 two-way  update_agent key=qa
+ *     context   peak 29k of 1.1M · cache hit 94%
+ *     thread    https://my.orq.ai/acme/traces/threads?id=…
+ */
+export function exitSummary(trajectory: Trajectory, meta: { workspace?: string; startedAt: number; now?: number; thread: string }): string[] {
+	const minutes = Math.round(((meta.now ?? Date.now()) - meta.startedAt) / 60_000);
+	const turns = `${trajectory.turn} turn${trajectory.turn === 1 ? "" : "s"}`;
+	const head = ["orqi", meta.workspace, minutes < 1 ? "<1 min" : `${minutes} min`, turns, dollars(trajectory.totals().cost)].filter(Boolean).join(" · ");
+	const rows = [...trajectory.byModel()].sort((a, b) => b[1].cost - a[1].cost);
+	const tools = trajectory.steps.filter((step) => step.role === "tool");
+	const byTool = new Map<string, { n: number; verdicts: Set<string> }>();
+	for (const step of tools) {
+		const entry = byTool.get(step.label) ?? { n: 0, verdicts: new Set<string>() };
+		entry.n++;
+		if (step.door === "one_way" && (step.gate === "allowed" || step.gate === "denied")) entry.verdicts.add(step.gate);
+		byTool.set(step.label, entry);
+	}
+	const change = (step: Step) => `${step.label}${argSummary(step.args, 1) ? ` ${argSummary(step.args, 1)}` : ""}`;
+	const oneWay = tools.filter((step) => step.door === "one_way" && step.gate === "allowed" && step.status === "ok");
+	const twoWay = tools.filter((step) => step.door === "two_way" && step.status === "ok");
+	const peak = trajectory.samples.reduce<(typeof trajectory.samples)[number] | undefined>((max, sample) => (!max || sample.used > max.used ? sample : max), undefined);
+	const totals = trajectory.totals();
+	const cache = totals.input + totals.cacheRead ? Math.round((totals.cacheRead / (totals.input + totals.cacheRead)) * 100) : undefined;
+	const row = (name: string, text: string) => `  ${name.padEnd(10)}${text}`;
+	return [
+		head,
+		...(rows.length ? [row("models", rows.map(([model, usage]) => `${shortModel(model)} ×${usage.calls}  ${dollars(usage.cost)}`).join("  ·  "))] : []),
+		row("tools", tools.length ? `${tools.length} call${tools.length === 1 ? "" : "s"} · ${[...byTool].map(([name, { n, verdicts }]) => `${name} ×${n}${verdicts.size ? ` (${[...verdicts].join(", ")})` : ""}`).join(", ")}` : "none"),
+		row("changes", oneWay.length || twoWay.length ? [oneWay.length ? `${oneWay.length} one-way  ${oneWay.map(change).join(", ")}` : "", twoWay.length ? `${twoWay.length} two-way  ${twoWay.map(change).join(", ")}` : ""].filter(Boolean).join("  ·  ") : "none"),
+		...(peak ? [row("context", `peak ${tokens(peak.used)} of ${tokens(peak.window)}${cache !== undefined ? ` · cache hit ${cache}%` : ""}`)] : []),
+		row("thread", meta.thread),
+	];
 }
 
 export function orqHarness(deps: HarnessDeps) {
@@ -118,13 +320,60 @@ export function orqHarness(deps: HarnessDeps) {
 		let tuiRef: TUI | undefined;
 		const windowOf = (provider: string, id: string) =>
 			ctxRef?.modelRegistry.find(provider, id)?.contextWindow ?? deps.catalogue().find((model) => model.id === id)?.contextWindow;
-		const trajectory = new Trajectory(windowOf);
+		const priceOf = (id: string) => deps.catalogue().find((model) => model.id === id)?.cost;
+		const trajectory = new Trajectory(windowOf, priceOf);
 		const traces: TraceRef[] = [];
 		let frame = 0;
 		let spinTimer: ReturnType<typeof setInterval> | undefined;
 		let resolvedWorkspace: string | undefined;
-		let workspaceAsked = false;
+		let workspaceAskedFor: string | undefined;
 		let savedTools: string[] | undefined;
+		/** The chat model agent mode was entered from: where /agent off goes back to. */
+		let returnTo: { provider: string; id: string } | undefined;
+		/** The thinking level on the last chat model: an agent model has none, so pi drops it to off, and leaving must restore it. */
+		let chatLevel: ReturnType<ExtensionAPI["getThinkingLevel"]> | undefined;
+		const agentKey = (id: string | undefined) => (isAgentModel(id) ? id!.slice(6) : undefined);
+		/** Agent mode says so above the editor, with the way back, for as long as it lasts. */
+		const syncAgent = (ctx: ExtensionContext) => {
+			if (ctx.mode !== "tui") return;
+			const key = agentKey(ctx.model?.id);
+			const theme = ctx.ui.theme;
+			ctx.ui.setWidget(
+				"orqi-agent",
+				key ? [`${theme.fg("warning", `▌ talking to agent ${key}`)}${theme.fg("dim", " · its own prompt and tools · /agent off returns to orqi")}`] : undefined,
+			);
+		};
+		let reserveTokens = 16_384;
+		let headerShown = false;
+		let statusOf: (key: string) => string | undefined = () => undefined;
+		let lastFooter = "";
+		let split: ContextSplit | undefined;
+		// ── teach state: the card lives in the panel, never the transcript ──
+		let teachOn = false;
+		let card: { concept: Concept; used: string[]; step: number } | undefined;
+		const shownConcepts = new Set<string>();
+		/** The last step id a previous run reached: steering advances `turn` more than once per run. */
+		let runFrom = 0;
+		let startedAt = Date.now();
+		/** Read on session start, after each run and on a model switch: never in a render, where a handle may be stale. */
+		const measure = (ctx: ExtensionContext) => {
+			try {
+				const agent = isAgentModel(ctx.model?.id);
+				const usage = ctx.getContextUsage();
+				split = contextSplit({
+					systemPrompt: agent ? "" : ctx.getSystemPrompt(),
+					tools: pi.getAllTools(),
+					active: agent ? [] : pi.getActiveTools(),
+					used: usage?.tokens ?? 0,
+					window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
+					steps: trajectory.steps,
+					turns: trajectory.turn,
+					agent: agent ? ctx.model!.id.slice(6) : undefined,
+				});
+			} catch {
+				// A stale handle: keep the last split.
+			}
+		};
 
 		// ── minimap state ─────────────────────────────────────────────────────
 		let minimapForced: boolean | undefined; // undefined = auto by width
@@ -156,8 +405,9 @@ export function orqHarness(deps: HarnessDeps) {
 			const host = studioHost(apiBaseUrl());
 			const known = process.env.ORQI_WORKSPACE ?? resolvedWorkspace ?? deps.workspace();
 			if (looksLikeKey(known)) return { host, workspace: known };
-			if (workspaceAsked) return { host, workspace: resolvedWorkspace };
-			workspaceAsked = true;
+			// Asked once per credential: a /login or the welcome changes the answer.
+			if (workspaceAskedFor === process.env.ORQ_API_KEY) return { host, workspace: resolvedWorkspace };
+			workspaceAskedFor = process.env.ORQ_API_KEY;
 			// An API key alone names its workspace by id; the key comes from the API, when the key may read it.
 			try {
 				const res = await fetch(`${apiBaseUrl()}/v2/workspace-settings`, {
@@ -196,7 +446,10 @@ export function orqHarness(deps: HarnessDeps) {
 				// The footer factory is the one place an extension is handed the TUI.
 				attachMinimap(tui, theme, ctx);
 				const unsub = footerData.onBranchChange(() => tui.requestRender());
+				statusOf = (key) => footerData.getExtensionStatuses().get(key);
+				brandTitle(tui);
 				const paint: Paint = {
+					brand: (s) => theme.bold(theme.fg("accent", s)),
 					dim: (s) => theme.fg("dim", s),
 					text: (s) => theme.fg("muted", s),
 					hot: (s) => theme.fg("error", s),
@@ -205,15 +458,25 @@ export function orqHarness(deps: HarnessDeps) {
 					dispose: unsub,
 					invalidate() {},
 					render(width: number): string[] {
+						// Rendering must never throw: an exception here takes the whole TUI down.
+						try {
+							lastFooter = footerFrame(width);
+						} catch {
+							// Keep the last good frame.
+						}
+						return [lastFooter];
+					},
+				};
+				function footerFrame(width: number): string {
 						const totals = trajectory.totals();
 						const lastAnswer = [...trajectory.steps].reverse().find((step) => step.role === "assistant" && step.model);
 						const sample = trajectory.samples.at(-1);
-						const reserve = pi.getSettings().compaction?.reserveTokens ?? 16384;
+						const reserve = reserveTokens;
 						const physical = lastAnswer?.model;
-						return [
-							footerLine(
+						return footerLine(
 								{
-									workspace: footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
+									// The workspace lives in the fixed header now; the footer keeps the orq.ai mark.
+									workspace: headerShown ? undefined : footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
 									selection: selectionName(ctxRef?.model),
 									physical: physical && physical !== ctxRef?.model?.id ? physical : undefined,
 									input: totals.input + totals.cacheRead,
@@ -227,39 +490,118 @@ export function orqHarness(deps: HarnessDeps) {
 								},
 								width,
 								paint,
-							),
-						];
-					},
-				};
+							);
+				}
 			});
 		};
 
-		// ── minimap ───────────────────────────────────────────────────────────
-		/** The panel itself: a box as tall as the screen, one row per step. */
-		const minimapView = (theme: { fg(token: string, text: string): string }): Component => ({
-			invalidate() {},
-			render(width: number): string[] {
+		// ── the inspector ─────────────────────────────────────────────────────
+		/**
+		 * The side panel, called the inspector on screen: a box as tall as the
+		 * screen, the trajectory (one row per step, `minimapRows`) on top and the
+		 * teach, context and signals sections under it.
+		 */
+		const minimapView = (theme: { fg(token: string, text: string): string }): Component => {
+			// Rendering must never throw: an exception here takes the whole TUI down.
+			// A frame that fails keeps the last good one, as the footer does.
+			let lastFrame: string[] = [];
+			return {
+				invalidate() {},
+				// The wheel scrolls the trajectory (fullscreen routes mouse events to the component under
+				// the pointer). Back at the newest step it follows new steps again.
+				handleMouse(event) {
+					if (event.type !== "wheel" || !event.wheelDelta) return undefined;
+					const last = trajectory.steps.length - 1;
+					if (last < 0) return { handled: true };
+					const next = (minimapSelected ?? last) + event.wheelDelta;
+					minimapSelected = next >= last ? undefined : Math.max(0, next);
+					return { handled: true };
+				},
+				render(width: number): string[] {
+					try {
+						lastFrame = inspectorFrame(width);
+					} catch {
+						// Keep the last good frame.
+					}
+					return lastFrame;
+				},
+			};
+			function inspectorFrame(width: number): string[] {
 				const inner = Math.max(10, width - 2);
-				const height = Math.max(6, (process.stdout.rows ?? 30) - 5);
 				const rowPaint = {
 					bright: (text: string) => theme.fg("accent", text),
 					text: (text: string) => theme.fg("text", text),
 					dim: (text: string) => theme.fg("dim", text),
 					error: (text: string) => theme.fg("error", text),
 				};
-				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
+				const found = signals(trajectory.steps, trajectory.turn);
+				const teach = teachOn ? [sectionLines("teach", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")] : [];
+				// Under the trajectory: what needs attention, then where the context goes, then the lesson.
+				const sections = [signalLines(found, inner), ...(split ? [contextLines(split, inner)] : []), ...teach];
+				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
+				const height = Math.max(3, (process.stdout.rows ?? 30) - 6 - below);
+				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, teachOn ? card?.step : undefined);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
-				const title = " minimap ";
+				const blank = side(" ".repeat(inner));
+				const paintSection = (lines: string[]) => [
+					blank,
+					side(theme.fg("dim", lines[0]!)),
+					...lines.slice(1).map((line, i) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : lines === teach[0] && i === 0 && card ? "accent" : "muted", line))),
+				];
+				const title = " inspector ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
-				const hint = minimapFocused ? "↑↓ move · enter peek · esc" : "alt+m hide · /panel focus";
+				const hint = minimapFocused
+					? "↑↓ move · enter peek · esc"
+					: minimapSelected !== undefined
+						? "scrolled back · wheel down follows"
+						: `alt+i · /panel focus · /teach ${teachOn ? "off" : "on"}`;
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
+					side(theme.fg("dim", sectionLines("trajectory", [], inner)[0]!)),
 					...rows.map(side),
-					...Array.from({ length: Math.max(0, height - rows.length) }, () => side(" ".repeat(inner))),
-					side(theme.fg("dim", fit(minimapSummary(trajectory.steps, trajectory.turn, trajectory.totals().cost)))),
+					...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
+					...sections.flatMap(paintSection),
+					side(theme.fg("dim", fit(minimapSummary(trajectory.steps, trajectory.turn, trajectory.totals().cost, found.loop ? 1 : 0)))),
 					side(theme.fg("dim", fit(hint))),
 					theme.fg("border", `└${"─".repeat(inner)}┘`),
 				];
+			}
+		};
+
+		/** The fixed header's facts, read at draw time. */
+		const headerState = () => {
+			const status = statusOf(WORKSPACE_STATUS) ?? "";
+			const model = ctxRef?.model;
+			const agent = isAgentModel(model?.id)
+				? (deps.catalogue().find((m) => m.id === model!.id)?.name?.replace(/ \(agent\)$/, "") ?? model!.id.slice(6))
+				: undefined;
+			const thread = ctxRef?.sessionManager.getSessionId();
+			return {
+				workspace: deps.workspace() ?? resolvedWorkspace,
+				project: deps.project?.(),
+				agent,
+				routing: model?.provider === "orq" && model.id === "auto" ? "orq/auto" : undefined,
+				connected: !/not connected/.test(status),
+				teach: teachOn,
+				thread: thread ? shortId(thread) : undefined,
+			};
+		};
+
+		const headerView = (theme: { fg(token: string, text: string): string; bold(text: string): string }): Component => ({
+			invalidate() {},
+			render(width: number): string[] {
+				let line = "";
+				try {
+					line = headerBar(headerState(), width, {
+						brand: (t) => theme.bold(theme.fg("accent", t)),
+						dim: (t) => theme.fg("dim", t),
+						text: (t) => theme.fg("muted", t),
+						hot: (t) => theme.fg("warning", t),
+					});
+				} catch {
+					// A render must never throw.
+				}
+				return [line, theme.fg("borderMuted", "─".repeat(Math.max(0, width)))];
 			},
 		});
 
@@ -272,13 +614,24 @@ export function orqHarness(deps: HarnessDeps) {
 		 * that renamed it) the panel falls back to an overlay.
 		 */
 		const attachMinimap = (tui: TUI, theme: { fg(token: string, text: string): string }, ctx: ExtensionContext) => {
-			const host = tui as unknown as { layoutRoot?: Component; setLayoutRoot?(root: Component | undefined): void };
+			const host = tui as unknown as { layoutRoot?: Component & { [SIDE]?: Component }; setLayoutRoot?(root: Component | undefined): void };
 			if (host.layoutRoot === sideRoot && sideRoot) return;
 			if (host.layoutRoot && typeof host.setLayoutRoot === "function") {
+				// A previous session or /reload left its own wrapper: wrap pi's root, not that.
+				const inner = host.layoutRoot[SIDE] ?? host.layoutRoot;
 				const panelEntry = { component: minimapView(theme), basis: MINIMAP_WIDTH, shrink: 0, visible: (viewport: { width: number }) => minimapVisible(viewport.width) };
-				sideRoot = new HStack([{ component: host.layoutRoot, grow: 1, shrink: 1, basis: 0 }, panelEntry]);
-				host.setLayoutRoot(sideRoot as Component);
+				const body = new HStack([{ component: inner, grow: 1, shrink: 1, basis: 0 }, panelEntry]);
+				// The fixed header sits above both: who and where, while the footer says what and how much.
+				const wrapper = new VStack([{ component: headerView(theme as never), basis: 2, shrink: 0 }, { component: body, grow: 1, shrink: 1, basis: 0 }]) as VStack & { [SIDE]?: Component };
+				wrapper[SIDE] = inner;
+				headerShown = true;
+				sideRoot = wrapper;
+				host.setLayoutRoot(wrapper);
 				return;
+			}
+			// Regular mode has no layout root: the header rides above the editor as a widget.
+			if (ctx.mode === "tui" && !headerShown) {
+				ctx.ui.setWidget("orqi-header", (_tui, widgetTheme) => headerView(widgetTheme as never), { placement: "aboveEditor" });
 			}
 			if (overlay || ctx.mode !== "tui") return;
 			void ctx.ui.custom<void>((_tui, overlayTheme) => minimapView(overlayTheme), {
@@ -290,6 +643,13 @@ export function orqHarness(deps: HarnessDeps) {
 			});
 		};
 
+		/** Hand the keyboard back to the editor (and to any dialog over it). */
+		const blurMinimap = () => {
+			minimapFocused = false;
+			releaseKeys?.();
+			releaseKeys = undefined;
+		};
+
 		/** Keyboard focus without stealing the editor: raw input is intercepted only while focused. */
 		const focusMinimap = (ctx: ExtensionContext) => {
 			minimapForced = true;
@@ -298,16 +658,14 @@ export function orqHarness(deps: HarnessDeps) {
 			releaseKeys = ctx.ui.onTerminalInput((data) => {
 				const steps = trajectory.steps;
 				const current = minimapSelected ?? steps.length - 1;
-				if (data === "\x1b") {
-					minimapFocused = false;
+				if (matchesKey(data, "escape")) {
 					minimapSelected = undefined;
-					releaseKeys?.();
-					releaseKeys = undefined;
-				} else if (data === "\x1b[A" || data === "\x1bOA") {
+					blurMinimap();
+				} else if (matchesKey(data, "up")) {
 					minimapSelected = Math.max(0, current - 1);
-				} else if (data === "\x1b[B" || data === "\x1bOB") {
+				} else if (matchesKey(data, "down")) {
 					minimapSelected = current + 1 >= steps.length ? undefined : current + 1;
-				} else if ((data === "\r" || data === "\n") && steps[current]) {
+				} else if (matchesKey(data, "enter") && steps[current]) {
 					const { title, body } = peekLines(steps[current]!);
 					void panel(ctx, { title, rows: body, hint: "esc close" });
 				} else {
@@ -321,11 +679,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		const toggleMinimap = () => {
 			minimapForced = !minimapVisible();
-			if (!minimapForced && minimapFocused) {
-				minimapFocused = false;
-				releaseKeys?.();
-				releaseKeys = undefined;
-			}
+			if (!minimapForced && minimapFocused) blurMinimap();
 			render();
 		};
 
@@ -335,11 +689,39 @@ export function orqHarness(deps: HarnessDeps) {
 			// Every session is a thread: /new and /fork mint a new id, /resume keeps
 			// the file's own. The provider headers read this per request.
 			process.env.ORQI_THREAD_ID = ctx.sessionManager.getSessionId();
+			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
 			trajectory.fromMessages(branchMessages(ctx));
 			traces.length = 0;
+			measure(ctx);
+			syncAgent(ctx);
+			if (!isAgentModel(ctx.model?.id)) chatLevel = pi.getThinkingLevel();
+			card = undefined;
+			shownConcepts.clear();
+			startedAt = Date.now();
+			runFrom = trajectory.steps.at(-1)?.id ?? 0;
 			if (ctx.mode !== "tui") return;
 			installFooter(ctx);
 			ctx.ui.setWorkingIndicator({ frames: SPINNER.map((f) => ctx.ui.theme.fg("accent", f)), intervalMs: 80 });
+		});
+		// This handle dies with its session: stop everything that would outlive it.
+		pi.on("session_shutdown", (event, ctx) => {
+			// On quit pi has left the alternate screen by now and prints "To resume" next,
+			// so these lines land just above it. Never studio() here: it fetches.
+			if (event.reason === "quit" && ctx.mode === "tui" && trajectory.turn > 0) {
+				try {
+					const workspace = process.env.ORQI_WORKSPACE ?? resolvedWorkspace ?? deps.workspace();
+					const id = ctx.sessionManager.getSessionId();
+					const thread = looksLikeKey(workspace) ? threadUrl(studioHost(apiBaseUrl()), workspace, id) : id;
+					process.stdout.write(`\n${exitSummary(trajectory, { workspace, startedAt, thread }).join("\n")}\n\n`);
+				} catch {
+					// A summary is never worth a failed exit.
+				}
+			}
+			if (spinTimer) clearInterval(spinTimer);
+			spinTimer = undefined;
+			releaseKeys?.();
+			releaseKeys = undefined;
+			stopDecisions?.();
 		});
 		pi.on("session_tree", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
 		pi.on("session_compact", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
@@ -348,15 +730,75 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("tool_execution_start", (event, ctx) => {
 			if (event.parentToolCallId) return;
 			trajectory.toolStart(event.toolCallId, event.toolName, event.args ?? {});
-			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : event.toolName);
+			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : shortTool(event.toolName));
 		});
 		pi.on("tool_execution_end", (event, ctx) => {
 			if (event.parentToolCallId) return;
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
+			syncWidgets(ctx);
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
 		});
-		pi.on("agent_end", (_event, ctx) => ctx.ui.setWorkingMessage());
-		pi.on("model_select", () => render());
+		/**
+		 * Without the side panel (regular mode, or hidden on a narrow terminal),
+		 * teach and signals fall back to one dim widget line each above the
+		 * editor. Widgets, not entries, so /trajectory and a resume stay clean.
+		 */
+		// The fullscreen side panel or, in regular mode, the overlay that stands in for it.
+		const panelShown = () => Boolean(sideRoot || overlay) && minimapVisible();
+		const syncWidgets = (ctx: ExtensionContext, teachLine?: string) => {
+			if (ctx.mode !== "tui") return;
+			const loop = signals(trajectory.steps, trajectory.turn).loop;
+			const dim = (line: string) => ctx.ui.theme.fg("dim", line);
+			ctx.ui.setWidget("orqi-signals", loop && !panelShown() ? [ctx.ui.theme.fg("warning", `⚠ tool loop: ${loop.tool} ×${loop.count} same args · /panel for details`)] : undefined);
+			if (teachLine !== undefined || !teachOn || panelShown()) ctx.ui.setWidget("orqi-teach", teachLine && teachOn && !panelShown() ? [dim(teachLine)] : undefined);
+		};
+
+		// The one-way gate. Registered here so its verdicts reach the trajectory;
+		// pi's own MCP handler only waits for the server, so a block here still wins.
+		// A one-way dialog needs the keys /panel focus would otherwise swallow, so
+		// focus is released the moment the gate starts waiting.
+		const gate = orqGate({
+			gate: (toolCallId, door, verdict) => {
+				if (verdict === "waiting" && minimapFocused) {
+					blurMinimap();
+					render();
+				}
+				trajectory.gate(toolCallId, door, verdict);
+			},
+		});
+		pi.on("tool_call", (event, ctx) => gate.onToolCall(event, ctx));
+		pi.on("agent_end", (_event, ctx) => {
+			gate.endTurn();
+			ctx.ui.setWorkingMessage();
+			measure(ctx);
+			const run = trajectory.steps.filter((step) => step.id > runFrom);
+			runFrom = trajectory.steps.at(-1)?.id ?? runFrom;
+			let teachLine = "";
+			if (teachOn && ctx.mode === "tui") {
+				const picked = pickCard(run, shownConcepts);
+				if (picked) card = { concept: picked.concept, used: picked.used, step: picked.step.id };
+				if (picked) teachLine = cardLine(card!);
+			}
+			syncWidgets(ctx, teachLine);
+			render();
+		});
+		pi.on("thinking_level_select", (event, ctx) => {
+			if (!isAgentModel(ctx.model?.id)) chatLevel = event.level;
+		});
+		pi.on("model_select", (event, ctx) => {
+			if (isAgentModel(event.model.id) && event.previousModel && !isAgentModel(event.previousModel.id)) returnTo = { provider: event.previousModel.provider, id: event.previousModel.id };
+			// Leaving agent mode gives the tools back now, not on the next turn, so the panel counts them,
+			// and the thinking level the agent model forced off: without it the chat model stops reasoning
+			// and the editor border takes thinkingOff's colour.
+			if (!isAgentModel(event.model.id) && event.previousModel && isAgentModel(event.previousModel.id)) {
+				if (savedTools) pi.setActiveTools(savedTools);
+				savedTools = undefined;
+				if (chatLevel && pi.getThinkingLevel() !== chatLevel) pi.setThinkingLevel(chatLevel);
+			}
+			syncAgent(ctx);
+			measure(ctx);
+			render();
+		});
 		pi.on("after_provider_response", (event) => {
 			const header = (name: string) => event.headers[name] ?? event.headers[name.toLowerCase()];
 			const traceId = header("x-orq-trace-id");
@@ -386,7 +828,7 @@ export function orqHarness(deps: HarnessDeps) {
 			if (!routeShown || !entry.data) return undefined;
 			return new Text(theme.fg("dim", routeLine(entry.data)), 1, 0);
 		});
-		deps.routing?.onDecision((decision) => {
+		const stopDecisions = deps.routing?.onDecision((decision) => {
 			const usage = decision.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: decision.cost } : undefined;
 			const label = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`;
 			trajectory.route(label, `→ ${shortModel(decision.model)}`, usage, decision.latencyMs, decision.classifier);
@@ -442,10 +884,14 @@ export function orqHarness(deps: HarnessDeps) {
 							"route question (general_v2 · orq-smart-router RES-1619)",
 							`  ${DIFFICULTY_QUESTION.instructions}`,
 							...Object.entries(DIFFICULTY_QUESTION.criteria).map(([tier, text]) => `  ${tier.padEnd(7)} ${text}`),
+							"door question (evaluatorq's door criteria, asked in the same call)",
+							`  ${DOOR_QUESTION.instructions}`,
+							...Object.entries(DOOR_QUESTION.criteria).map(([door, text]) => `  ${door.padEnd(7)} ${text}`),
 							`pool  ${pool}`,
 							`classifier  ${routing.classifier ?? "none"}${routing.unavailable ? ` (${routing.unavailable})` : ""}`,
 							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
-							"       goes one rung up; delete / auto_run / agent or evaluator changes never go below hard",
+							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
+							"       cannot answer, a keyword floor (delete / auto_run / agent or evaluator changes) stands in",
 							"select it with /model orq/auto, or ORQI_MODEL=orq/auto",
 						].join("\n"),
 					);
@@ -456,10 +902,25 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		// ── commands ──────────────────────────────────────────────────────────
-		pi.registerShortcut("alt+m", { description: "toggle the orqi minimap", handler: () => toggleMinimap() });
+		pi.registerCommand("teach", {
+			description: "/teach on|off: after each answer, a card in the inspector about a concept the run touched",
+			handler: async (args, ctx) => {
+				const arg = args.trim();
+				if (arg && arg !== "on" && arg !== "off") {
+					ctx.ui.notify("usage: /teach on|off", "warning");
+					return;
+				}
+				teachOn = arg ? arg === "on" : !teachOn;
+				ctx.ui.notify(teachOn ? `Teach mode on: a card follows each answer, ${panelShown() ? "in the inspector" : "above the editor"}.` : "Teach mode off.");
+				syncWidgets(ctx);
+				render();
+			},
+		});
+
+		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
 
 		pi.registerCommand("panel", {
-			description: "minimap: /panel toggles it, /panel focus moves through steps with ↑↓ and enter",
+			description: "the inspector: /panel toggles it, /panel focus moves through the trajectory with ↑↓ and enter",
 			handler: async (args, ctx) => {
 				if (args.trim() === "focus") {
 					focusMinimap(ctx);
@@ -557,6 +1018,215 @@ export function orqHarness(deps: HarnessDeps) {
 			},
 		});
 
+		pi.registerCommand("learn", {
+			description: "guided prompts, one per platform area: pick one and it is sent as if you typed it",
+			handler: async (_args, ctx) => {
+				await panel(ctx, (close) => ({
+					title: "learn orq.ai",
+					rows: learnRows(),
+					selectable: true,
+					hint: "enter send · esc close",
+					keys: {
+						enter: (i) => {
+							close();
+							const prompt = LEARN_PROMPTS[i]!.prompt;
+							// While the model is working a message is steering, which needs deliverAs.
+							if (ctx.isIdle()) pi.sendUserMessage(prompt);
+							else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+						},
+					},
+				}));
+			},
+		});
+
+		// Borrowed from oh-my-pi: a side question on the cheap rung, answered in an
+		// overlay and never added to the conversation, so it costs no context.
+		pi.registerCommand("btw", {
+			description: "/btw <question>: a side answer on the cheapest rung, not added to the conversation",
+			handler: async (args, ctx) => {
+				const question = args.trim();
+				if (!question) {
+					ctx.ui.notify("usage: /btw <question>", "warning");
+					return;
+				}
+				const easy = deps.routing?.pool.easy;
+				const model = (easy && ctx.modelRegistry.find("orq", easy)) ?? (ctx.model?.provider === "orq" && ctx.model.id !== "auto" ? ctx.model : undefined);
+				if (!model) {
+					ctx.ui.notify("No model for /btw.", "warning");
+					return;
+				}
+				let live: Panel | undefined;
+				const title = `btw · ${shortModel(model.id)} · not added to the conversation`;
+				const shown = panel(ctx, { title, rows: ["…"], hint: "esc close" }, "70%", (p) => (live = p));
+				try {
+					const stream = ctx.modelRegistry.streamSimple(
+						model,
+						{ systemPrompt: "Answer the question briefly and directly, in plain prose. You are orqi, the orq.ai assistant.", messages: [{ role: "user", content: question, timestamp: Date.now() }] },
+						{ reasoning: "low" } as any,
+					);
+					let text = "";
+					for await (const event of stream as AsyncIterable<any>) {
+						if (event.type === "text_delta") {
+							text += event.delta;
+							live?.update({ title, rows: text.split("\n"), hint: "esc close" });
+						}
+					}
+					const result = await stream.result();
+					const cost = result.usage?.cost?.total;
+					live?.update({ title, rows: (text || result.errorMessage || "(no answer)").split("\n"), hint: `${cost ? `${dollars(cost)} · ` : ""}esc close` });
+				} catch (error) {
+					live?.update({ title, rows: [`failed: ${error instanceof Error ? error.message : error}`], hint: "esc close" });
+				}
+				await shown;
+			},
+		});
+
+		// pi's /mcp lists the tools but enter only goes back; this one opens each.
+		pi.registerCommand("tools", {
+			description: "browse the orq tools: enter shows a tool's definition, j its raw schema",
+			handler: async (_args, ctx) => showTools(ctx),
+		});
+
+		pi.registerCommand("context", {
+			description: "where the context goes: prompt, tool schemas, skills, messages, and what would change each",
+			handler: async (_args, ctx) => {
+				measure(ctx);
+				if (!split) {
+					ctx.ui.notify("Context is not measured yet: send a message first.", "warning");
+					return;
+				}
+				const used = contextUsed(split);
+				await panel(ctx, {
+					title: "context",
+					badge: `${tokens(used)} of ${tokens(split.window)}${split.window ? ` · ${Math.round((used / split.window) * 100)}%` : ""}`,
+					rows: contextRows(split),
+					hint: "t open /tools · esc close",
+					keys: { t: () => void showTools(ctx) },
+				}, 84);
+			},
+		});
+
+		const showTools = async (ctx: ExtensionContext) => {
+			let tools: ToolInfo[] = [];
+			try {
+				tools = pi.getAllTools().filter((tool) => tool.name.startsWith(TOOL_PREFIX) && tool.exposure !== "hidden");
+			} catch {
+				// A handle from a replaced session: show nothing rather than throw.
+			}
+			if (tools.length === 0) {
+				ctx.ui.notify("No orq tools yet: the MCP server is still connecting, or not connected. /mcp shows its state.", "warning");
+				return;
+			}
+			tools.sort((a, b) => bareName(a.name).localeCompare(bareName(b.name)));
+			const width = Math.min(28, Math.max(...tools.map((tool) => bareName(tool.name).length)));
+			const firstLine = (text: string | undefined) => String(text ?? "").split("\n")[0]!.trim();
+			const detail = (tool: ToolInfo): PanelSpec => {
+				const hints = (tool as { annotations?: Record<string, unknown> }).annotations ?? {};
+				const flags = [hints.readOnlyHint ? "read-only" : "", hints.destructiveHint ? "destructive" : "", hints.idempotentHint ? "idempotent" : ""].filter(Boolean).join(" · ");
+				return {
+					title: tool.name,
+					badge: [tool.exposure, flags].filter(Boolean).join(" · "),
+					// Parameters first: they are what a definition is opened for; descriptions run long.
+					rows: ["parameters", ...schemaLines(tool.parameters).map((line) => `  ${line}`), "", "description", ...String(tool.description ?? "").trim().split("\n").map((line) => `  ${line}`)],
+					hint: "j raw schema · esc back",
+					keys: {
+						j: () => {
+							void panel(ctx, { title: `${tool.name} · input schema`, rows: JSON.stringify(tool.parameters, null, 2).split("\n"), hint: "esc back" });
+						},
+					},
+				};
+			};
+			await panel(ctx, {
+				title: "orq tools",
+				badge: `${tools.length} · mcp__orq__*`,
+				rows: tools.map((tool) => `${bareName(tool.name).padEnd(width)}  ${firstLine(tool.description)}`),
+				selectable: true,
+				filterable: true,
+				hint: "type to filter · ↑↓ move · enter definition · esc close",
+				keys: {
+					enter: (i) => {
+						void panel(ctx, detail(tools[i]!));
+					},
+				},
+			});
+		};
+
+		// The loaded skills, like /tools: where each came from, its metadata, its instructions.
+		pi.registerCommand("skills", {
+			description: "browse the loaded skills: type to filter, enter for details, i for instructions, u to use one",
+			handler: async (_args, ctx) => {
+				let skills: { name: string; description: string; path: string }[] = [];
+				try {
+					skills = pi
+						.getCommands()
+						.filter((command) => command.source === "skill")
+						.map((command) => ({ name: command.name.replace(/^skill:/, ""), description: command.description ?? "", path: command.sourceInfo.path }));
+				} catch {
+					// A handle from a replaced session: show nothing rather than throw.
+				}
+				if (skills.length === 0) {
+					ctx.ui.notify("No skills loaded.", "warning");
+					return;
+				}
+				skills.sort((a, b) => a.name.localeCompare(b.name));
+				const width = Math.min(32, Math.max(...skills.map((skill) => skill.name.length)));
+				const origins = skills.map((skill) => skillOrigin(skill.path));
+				const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+				const use = (name: string) => {
+					// Into the editor, not sent: the user adds what the skill should work on.
+					ctx.ui.setEditorText(`/skill:${name} `);
+					return true;
+				};
+				const detail = (i: number): PanelSpec => {
+					const skill = skills[i]!;
+					const { frontmatter, body, files } = readSkill(skill.path, parseYaml);
+					const meta = Object.entries(frontmatter)
+						.filter(([key]) => key !== "name" && key !== "description")
+						.map(([key, value]) => `  ${key.padEnd(14)} ${typeof value === "string" ? oneLine(value) : JSON.stringify(value)}`);
+					return {
+						title: `skill ${skill.name}`,
+						badge: origins[i],
+						rows: [
+							"description",
+							`  ${oneLine(String(frontmatter.description ?? skill.description))}`,
+							...(meta.length ? ["", "metadata", ...meta] : []),
+							"",
+							"location",
+							`  ${skill.path.replace(homedir(), "~")}`,
+							...(files.length ? [`  ${files.length} more file${files.length === 1 ? "" : "s"}: ${files.slice(0, 8).join(", ")}${files.length > 8 ? ", …" : ""}`] : []),
+						],
+						hint: "i instructions · u use · esc back",
+					};
+				};
+				await panel(ctx, (close) => ({
+					title: "skills",
+					badge: `${skills.length} loaded`,
+					rows: skills.map((skill, i) => `${skill.name.padEnd(width)}  ${origins[i]!.padEnd(20)}  ${oneLine(skill.description)}`),
+					selectable: true,
+					filterable: true,
+					hint: "type to filter · ↑↓ move · enter details · esc close",
+					keys: {
+						enter: (i) => {
+							void panel(ctx, (closeDetail) => {
+								const spec = detail(i);
+								return {
+									...spec,
+									keys: {
+										u: () => (use(skills[i]!.name), closeDetail(), close(), true),
+										// The instructions on their own, like j for a tool's raw schema.
+										i: () => {
+											const body = readSkill(skills[i]!.path, parseYaml).body.trim();
+											void panel(ctx, { title: `skill ${skills[i]!.name} · instructions`, rows: body.split("\n"), hint: "↑↓ scroll · esc back" });
+										},
+									},
+								};
+							});
+						},
+					},
+				}));
+			},
+		});
+
 		pi.registerCommand("cost", {
 			description: "what this session cost, per model, and what the most capable model would have cost",
 			handler: async (_args, ctx) => {
@@ -593,27 +1263,6 @@ export function orqHarness(deps: HarnessDeps) {
 			},
 		});
 
-		pi.registerCommand("feedback", {
-			description: "send feedback to the orq.ai team: /feedback <text> (prefix with feature: for a request)",
-			handler: async (args, ctx) => {
-				const text = args.trim();
-				if (!text) {
-					ctx.ui.notify("usage: /feedback <what went wrong, or feature: what you want>", "warning");
-					return;
-				}
-				const feature = /^feature:/i.test(text);
-				try {
-					const result = await deps.callTool("submit_feedback", {
-						message: `${feature ? text.replace(/^feature:\s*/i, "") : text}\n\n(sent from orqi ${VERSION}, thread ${ctx.sessionManager.getSessionId()})`,
-						category: feature ? "feature_request" : "bug",
-					});
-					ctx.ui.notify(result.isError ? `Feedback not sent: ${result.text.slice(0, 200)}` : `Sent to the orq.ai team, thank you. ${result.text.slice(0, 120)}`, result.isError ? "error" : "info");
-				} catch (error) {
-					ctx.ui.notify(`Feedback not sent: ${error instanceof Error ? error.message : error}`, "error");
-				}
-			},
-		});
-
 		const talkTo = async (key: string, ctx: ExtensionContext) => {
 			const model = ctx.modelRegistry.find("orq", `agent/${key}`);
 			if (!model) {
@@ -621,18 +1270,39 @@ export function orqHarness(deps: HarnessDeps) {
 				return;
 			}
 			await pi.setModel(model);
-			ctx.ui.notify(`Talking to ${key} (agent). orqi tools are off; the agent uses its own. /model to leave.`);
+			ctx.ui.notify(`Now talking to ${key}, a managed agent: its own instructions and tools, run on orq.ai. orqi's tools are off. /agent off brings orqi back.`);
+		};
+
+		/** Back from agent mode to the chat model it was entered from, else the configured default. */
+		const leaveAgent = async (ctx: ExtensionContext) => {
+			const key = agentKey(ctx.model?.id);
+			if (!key) {
+				ctx.ui.notify("Already talking to orqi. /agents lists the workspace's agents.");
+				return;
+			}
+			const fallback = DEFAULT_MODEL.startsWith("orq/") ? DEFAULT_MODEL.slice(4) : DEFAULT_MODEL;
+			const target = (returnTo && ctx.modelRegistry.find(returnTo.provider, returnTo.id)) ?? ctx.modelRegistry.find("orq", fallback);
+			if (!target) {
+				ctx.ui.notify("No chat model to return to: pick one with /model.", "warning");
+				return;
+			}
+			await pi.setModel(target);
+			ctx.ui.notify(`Back to orqi on ${selectionName(target)}, with its tools. /agent ${key} to talk to the agent again.`);
 		};
 
 		pi.registerCommand("agent", {
-			description: "talk to a managed orq agent: /agent <key> (same as /model agent/<key>)",
+			description: "talk to a managed orq agent: /agent <key>; /agent off returns to orqi",
 			handler: async (args, ctx) => {
-				const key = args.trim().replace(/^agent\//, "");
-				if (!key) {
-					ctx.ui.notify("usage: /agent <key>. /agents lists them.", "warning");
+				const arg = args.trim().replace(/^agent\//, "");
+				if (arg === "off" || arg === "orqi" || (!arg && agentKey(ctx.model?.id))) {
+					await leaveAgent(ctx);
 					return;
 				}
-				await talkTo(key, ctx);
+				if (!arg) {
+					ctx.ui.notify("usage: /agent <key> to talk to a managed agent, /agent off to come back. /agents lists them.", "warning");
+					return;
+				}
+				await talkTo(arg, ctx);
 			},
 		});
 

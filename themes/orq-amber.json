@@ -68,7 +68,7 @@
 		"syntaxOperator": "amberDim",
 		"syntaxPunctuation": "amberDim",
 
-		"thinkingOff": "#3A2E22",
+		"thinkingOff": "amberLine",
 		"thinkingMinimal": "amberFaint",
 		"thinkingLow": "amberLine",
 		"thinkingMedium": "amberFaint",

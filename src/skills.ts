@@ -1,130 +1,146 @@
 /**
- * Runtime skill updates: the binary's baked skills are a floor, not a ceiling.
+ * The orq plugin, kept current: the marketplace's `orq` plugin
+ * (orq-ai/assistant-plugins) is skills plus slash commands plus a version,
+ * and orqi follows it as one unit.
  *
- * Once a day the CLI asks GitHub whether orq-ai/assistant-plugins has moved
- * past what this binary shipped with, and if so downloads the new skills into
- * ~/.orqi/agent/skills-live/. The live dir is listed BEFORE the bundled dir in
- * additionalSkillPaths, so a fresher orq-* skill supersedes its bundled copy
- * while the bundled orqi-* skills (ours, not upstream's) keep loading. pi puts
- * project/user/package skills ahead of both, so a skill the user installed
- * still wins - but only under ORQI_LOCAL_SKILLS, which is what enables them.
+ * The binary ships a vendored copy (`skills/orq-*`, `commands/`, pinned in
+ * skills.lock.json with its commit date and plugin version). Once a day orqi
+ * asks GitHub for upstream main and, when it is NEWER than that copy, unpacks
+ * it into ~/.orqi/agent/skills-live/current/{skills,commands}. At boot exactly
+ * one copy is used: the live one if it is newer than the bundled one, the
+ * bundled one otherwise. A live copy older than the binary (the binary was
+ * updated, the live dir was not) is ignored and removed by the next check.
  *
- * Bundled-loses-to-live is the normal state, not a fault, and pi renders one
- * amber block per collision: 15 vendored names means ~30 lines at every boot.
- * skillResources folds those into a single warning naming what was superseded,
- * so the fact stays visible without the wall. Any other collision - live vs
- * live, or a loser outside the bundled dir - is left alone.
+ * Using one copy is what keeps the startup quiet: the paths handed to pi are
+ * individual skill directories and template files, so no name is offered
+ * twice and pi reports no collision. The bundled orqi-* skills are ours, not
+ * upstream's, and always load. A plugin command whose name an orqi command
+ * already owns (`/workspace`) is left out: the extension command would win
+ * the dispatch anyway, and two entries in the completion list would mislead.
  *
- * The check never blocks startup: it fires after the session is up, with a
- * short timeout, and any failure is silence plus a retry after the TTL. An
- * update therefore lands on the NEXT run (pi scans skills once at boot);
- * /reload picks it up early. ORQI_SKILLS_UPDATE=0 pins; ORQI_REFRESH_SKILLS=1
- * forces a check now.
+ * The check never blocks startup and every failure is silent: the worst
+ * outcome is "as fresh as the binary". An update lands on the next run (pi
+ * scans resources at boot); /reload picks it up early. ORQI_SKILLS_UPDATE=0
+ * pins; ORQI_REFRESH_SKILLS=1 forces a check now.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 import { $ } from "bun";
 import lock from "../skills.lock.json" with { type: "json" };
+import { normalizeCommand } from "./frontmatter.ts";
 
 /** One check a day, shared with src/update.ts so the two background checks
- * cannot drift into different cadences. Only the constant is shared: the two
- * differ in what they cache and what they sweep. */
+ * cannot drift into different cadences. */
 export const CHECK_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
 
-export const SKILLS_LOCK: { source: string; sha: string; vendored: string[] } = lock;
+export interface PluginLock {
+	source: string;
+	sha: string;
+	/** Commit date of `sha`: what a live update must be newer than. */
+	committed: string;
+	/** The plugin's own version (`.claude-plugin/plugin.json`). */
+	version?: string;
+	vendored: string[];
+	commands: string[];
+}
 
-/** Upstream dirs we take: the two known shapes, nothing else (no dotfiles, no traversal). */
+export const SKILLS_LOCK: PluginLock = lock as PluginLock;
+
+/** Upstream skill dirs we take: the two known shapes, nothing else (no dotfiles, no traversal). */
 export function vendoredNames(upstreamSkillDirs: string[]): string[] {
 	return upstreamSkillDirs.filter((name) => /^(orq-[a-z0-9-]+|evaluatorq)$/.test(name)).sort();
 }
 
 const liveRoot = (agentDir: string) => join(agentDir, "skills-live");
 
-/** The live override dir, or undefined when no update has ever landed. */
-export function liveSkillsDir(agentDir: string): string | undefined {
-	const current = join(liveRoot(agentDir), "current");
-	return existsSync(current) && existsSync(join(liveRoot(agentDir), "current.sha")) ? current : undefined;
-}
-
-function isInside(root: string, candidate: string): boolean {
-	const child = relative(resolve(root), resolve(candidate));
-	return child !== "" && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
-}
-
-type LoadedSkills = { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
-
-/** The pair of resource-loader options the live tree needs; structurally pi's own. */
-export interface SkillResources {
-	additionalSkillPaths: string[];
-	skillsOverride?: (base: LoadedSkills) => LoadedSkills;
-}
-
-/** A bundled skill losing its name to the live copy: expected, and the point of the live tree. */
-function supersededByLive(diagnostic: ResourceDiagnostic, liveDir: string, bundledDir: string): boolean {
-	const collision = diagnostic.collision;
-	if (diagnostic.type !== "collision" || collision?.resourceType !== "skill") return false;
-	return isInside(liveDir, collision.winnerPath) && isInside(bundledDir, collision.loserPath);
-}
-
-export function foldLiveSkillCollisions(
-	diagnostics: ResourceDiagnostic[],
-	liveDir: string,
-	bundledDir: string,
-): ResourceDiagnostic[] {
-	const names: string[] = [];
-	const rest = diagnostics.filter((diagnostic) => {
-		if (!supersededByLive(diagnostic, liveDir, bundledDir)) return true;
-		if (diagnostic.collision) names.push(diagnostic.collision.name);
-		return false;
-	});
-	if (names.length === 0) return rest;
-	const one = names.length === 1;
-	return [
-		...rest,
-		{
-			type: "warning",
-			message: `Using the live copy of ${names.length} skill${one ? "" : "s"} instead of the bundled ${one ? "one" : "ones"}: ${names.join(", ")}.`,
-			path: liveDir,
-		},
-	];
+/** What a live copy records about itself. */
+export interface LivePlugin {
+	dir: string;
+	sha: string;
+	committed: string;
+	version?: string;
 }
 
 /**
- * Both halves of the live-skills wiring, so the path order and the diagnostic
- * fold can never name different directories.
+ * The live copy, or undefined when none has landed. A tree from before the
+ * plugin layout (skills at the top, a bare `current.sha`) has no commit date
+ * to compare, so it reads as absent and the next check replaces it.
  */
-export function skillResources(pkgDir: string, liveDir: string | undefined): SkillResources {
-	const bundledDir = join(pkgDir, "skills");
-	if (!liveDir) return { additionalSkillPaths: [bundledDir] };
-	return {
-		additionalSkillPaths: [liveDir, bundledDir],
-		skillsOverride: ({ skills, diagnostics }) => ({
-			skills,
-			diagnostics: foldLiveSkillCollisions(diagnostics, liveDir, bundledDir),
-		}),
-	};
-}
-
-/**
- * Header note when the live skills are not the baked ones.
- *
- * "Cannot tell" must never render as silence: no note means "you are running
- * exactly what this binary shipped with", so an unreadable sha beside a live
- * dir that IS in use would claim something we did not check.
- */
-export function liveSkillsNote(agentDir: string): string | undefined {
-	if (!liveSkillsDir(agentDir)) return undefined; // baked skills, nothing to report
-	let sha = "";
+export function readLive(agentDir: string): LivePlugin | undefined {
+	const dir = join(liveRoot(agentDir), "current");
 	try {
-		sha = readFileSync(join(liveRoot(agentDir), "current.sha"), "utf8").trim();
+		const meta = JSON.parse(readFileSync(join(liveRoot(agentDir), "current.json"), "utf8"));
+		if (typeof meta?.sha !== "string" || typeof meta?.committed !== "string" || !existsSync(join(dir, "skills"))) return undefined;
+		return { dir, sha: meta.sha, committed: meta.committed, version: meta.version };
 	} catch {
-		// Falls through to the unknown note below.
+		return undefined;
 	}
-	if (!sha) return "skills unknown";
-	return sha === SKILLS_LOCK.sha ? undefined : `skills ${sha.slice(0, 8)}`;
+}
+
+/** Live wins only when it is strictly newer than what the binary carries. */
+export function liveIsNewer(live: LivePlugin | undefined, bundled: Pick<PluginLock, "committed" | "sha"> = SKILLS_LOCK): live is LivePlugin {
+	if (!live || live.sha === bundled.sha) return false;
+	const a = Date.parse(live.committed);
+	const b = Date.parse(bundled.committed);
+	return Number.isFinite(a) && Number.isFinite(b) && a > b;
+}
+
+function dirsIn(path: string): string[] {
+	try {
+		return readdirSync(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+	} catch {
+		return [];
+	}
+}
+
+function markdownIn(path: string): string[] {
+	try {
+		return readdirSync(path).filter((name) => /^[a-z0-9-]+\.md$/.test(name)).sort();
+	} catch {
+		return [];
+	}
+}
+
+/** The resource-loader options the plugin needs; structurally pi's own. */
+export interface PluginResources {
+	additionalSkillPaths: string[];
+	additionalPromptTemplatePaths: string[];
+	/** Which copy is in use, for the header: undefined when it is the bundled one. */
+	note?: string;
+}
+
+/**
+ * Plugin commands orqi leaves out. `/models` spends a model turn and three
+ * `list_models` calls to print what pi's `/model` already lists for free, and
+ * its error hint is Claude Code setup. Filtered here, not deleted from
+ * `commands/`, because `bun run vendor` would bring the file back.
+ */
+export const DROPPED_COMMANDS = ["models"];
+
+/**
+ * Exactly one copy of the plugin, as individual skill dirs and template files.
+ * `reserved` are slash commands orqi already owns; `DROPPED_COMMANDS` never load.
+ */
+export function pluginResources(pkgDir: string, agentDir: string, reserved: Iterable<string> = []): PluginResources {
+	const live = readLive(agentDir);
+	const useLive = liveIsNewer(live);
+	const source = useLive ? live.dir : pkgDir;
+	const bundledSkills = join(pkgDir, "skills");
+	const ours = dirsIn(bundledSkills)
+		.filter((name) => name.startsWith("orqi-"))
+		.map((name) => join(bundledSkills, name));
+	const upstream = vendoredNames(dirsIn(join(source, "skills"))).map((name) => join(source, "skills", name));
+	const taken = new Set([...reserved, ...DROPPED_COMMANDS]);
+	const commands = markdownIn(join(source, "commands"))
+		.filter((name) => !taken.has(name.replace(/\.md$/, "")))
+		.map((name) => join(source, "commands", name));
+	return {
+		additionalSkillPaths: [...upstream, ...ours],
+		additionalPromptTemplatePaths: commands,
+		note: useLive ? `orq plugin ${live.version ?? live.sha.slice(0, 8)} (updated)` : undefined,
+	};
 }
 
 /** True when the daily TTL (or the force flag) says a check is due. */
@@ -139,9 +155,19 @@ export function updateDue(agentDir: string, env: NodeJS.ProcessEnv = process.env
 }
 
 /**
+ * What the daily check does with upstream main: nothing, drop the live copy
+ * (the binary already carries main, or something newer), or install it.
+ */
+export function updateAction(upstream: { sha: string; committed: string }, live: LivePlugin | undefined, bundled: Pick<PluginLock, "sha" | "committed"> = SKILLS_LOCK): "none" | "drop" | "install" {
+	const newerThanBundled = liveIsNewer({ dir: "", ...upstream }, bundled);
+	if (!newerThanBundled) return live ? "drop" : "none";
+	return live?.sha === upstream.sha ? "none" : "install";
+}
+
+/**
  * Fire-and-forget daily update. Every failure path is a silent return: the
- * worst outcome of this feature must be "skills are as fresh as the binary",
- * never a broken boot.
+ * worst outcome of this feature must be "as fresh as the binary", never a
+ * broken boot.
  */
 export async function maybeUpdateSkills(agentDir: string): Promise<void> {
 	try {
@@ -154,32 +180,35 @@ export async function maybeUpdateSkills(agentDir: string): Promise<void> {
 		});
 		// The marker records a check that COMPLETED, not one that was attempted.
 		// A one-shot run exits the moment its answer is printed and can kill this
-		// mid-flight; marking earlier would then pin skills for 24 h on a check
-		// that never happened, which is how a one-shot-only user never updates.
+		// mid-flight; marking earlier would then pin the plugin for 24 h on a
+		// check that never happened, which is how a one-shot-only user never updates.
 		if (!response.ok) return;
-		const sha = ((await response.json()) as { sha?: string }).sha;
-		if (!sha || !/^[0-9a-f]{40}$/.test(sha)) return;
+		const body = (await response.json()) as { sha?: string; commit?: { committer?: { date?: string } } };
+		const upstream = { sha: body.sha ?? "", committed: body.commit?.committer?.date ?? "" };
+		if (!/^[0-9a-f]{40}$/.test(upstream.sha) || !upstream.committed) return;
 		writeFileSync(join(root, "last-check"), "");
 
-		let current = "";
-		try {
-			current = readFileSync(join(root, "current.sha"), "utf8").trim();
-		} catch {
-			// No live dir yet; fall through to the baked-copy comparison.
+		const action = updateAction(upstream, readLive(agentDir) ?? legacyLive(root));
+		if (action === "drop") {
+			// The binary is at least as new: a stale live copy would only shadow it.
+			for (const name of ["current", "current.json", "current.sha"]) rmSync(join(root, name), { recursive: true, force: true });
+			return;
 		}
-		if (sha === current) return;
-		if (!liveSkillsDir(agentDir) && sha === SKILLS_LOCK.sha) return; // baked copy already matches upstream
-
-		await downloadAndSwap(root, sha);
+		if (action === "install") await downloadAndSwap(root, upstream);
 	} catch {
-		// Silent by design; the header note and /doctor reflect whatever landed.
+		// Silent by design; the header note reflects whatever landed.
 	}
+}
+
+/** A pre-plugin live tree still on disk: enough to know there is something to drop. */
+function legacyLive(root: string): LivePlugin | undefined {
+	return existsSync(join(root, "current.sha")) ? { dir: join(root, "current"), sha: "", committed: "1970-01-01T00:00:00Z" } : undefined;
 }
 
 /** Orphans are swept, in-flight dirs are not: an hour is far longer than the ~2 s a swap takes. */
 const STAGING_ORPHAN_MS = 60 * 60 * 1000;
 
-async function downloadAndSwap(root: string, sha: string): Promise<void> {
+async function downloadAndSwap(root: string, upstream: { sha: string; committed: string }): Promise<void> {
 	// A one-shot run may exit mid-download and orphan its staging dir. Sweep by
 	// age, never by name alone: a second orqi started the same minute is using
 	// its own staging dir right now, and deleting it fails that process.
@@ -197,34 +226,83 @@ async function downloadAndSwap(root: string, sha: string): Promise<void> {
 	mkdirSync(staging, { recursive: true });
 	try {
 		const tarball = join(staging, "src.tar.gz");
-		await $`curl -fsSL --max-time 60 https://codeload.github.com/${SKILLS_LOCK.source}/tar.gz/${sha} -o ${tarball}`.quiet();
-		// Only the skills subtree: the tarball carries the whole upstream repo.
+		await $`curl -fsSL --max-time 60 https://codeload.github.com/${SKILLS_LOCK.source}/tar.gz/${upstream.sha} -o ${tarball}`.quiet();
+		// Only the plugin's parts: the tarball carries the whole upstream repo.
 		// No --wildcards flag: it is GNU-only, bsdtar on macOS rejects it, and the
 		// failure would land in the silent catch above and never update anything.
 		// Both tars treat a bare pattern as a wildcard when extracting.
-		await $`tar -xzf ${tarball} -C ${staging} --strip-components=1 ${"*/skills/*"}`.quiet();
+		await $`tar -xzf ${tarball} -C ${staging} --strip-components=1 ${"*/skills/*"} ${"*/commands/*"} ${"*/.claude-plugin/plugin.json"}`.quiet().nothrow();
 
-		const upstream = join(staging, "skills");
-		const names = vendoredNames(
-			readdirSync(upstream, { withFileTypes: true })
-				.filter((entry) => entry.isDirectory())
-				.map((entry) => entry.name),
-		);
-		if (names.length === 0) return; // an empty or reshaped upstream must not wipe the live dir
+		const names = vendoredNames(dirsIn(join(staging, "skills")));
+		if (names.length === 0) return; // an empty or reshaped upstream must not wipe the live copy
 
 		const next = join(root, "next");
 		rmSync(next, { recursive: true, force: true });
-		mkdirSync(next);
-		for (const name of names) renameSync(join(upstream, name), join(next, name));
+		mkdirSync(join(next, "skills"), { recursive: true });
+		mkdirSync(join(next, "commands"), { recursive: true });
+		for (const name of names) renameSync(join(staging, "skills", name), join(next, "skills", name));
+		for (const name of markdownIn(join(staging, "commands"))) {
+			writeFileSync(join(next, "commands", name), normalizeCommand(readFileSync(join(staging, "commands", name), "utf8")));
+		}
+		let version: string | undefined;
+		try {
+			version = JSON.parse(readFileSync(join(staging, ".claude-plugin", "plugin.json"), "utf8"))?.version;
+		} catch {
+			// The version is a label; a plugin without one still updates.
+		}
 
 		// Swap: at every instant `current` is either the old tree or the new one.
 		const old = join(root, "current.old");
 		rmSync(old, { recursive: true, force: true });
 		if (existsSync(join(root, "current"))) renameSync(join(root, "current"), old);
 		renameSync(next, join(root, "current"));
-		writeFileSync(join(root, "current.sha"), `${sha}\n`);
+		writeFileSync(join(root, "current.json"), `${JSON.stringify({ ...upstream, version })}\n`);
+		rmSync(join(root, "current.sha"), { force: true }); // the pre-plugin marker
 		rmSync(old, { recursive: true, force: true });
 	} finally {
 		rmSync(staging, { recursive: true, force: true });
 	}
+}
+
+/** Where a loaded skill came from, for the /skills view. */
+export function skillOrigin(path: string): string {
+	if (path.includes(`${"/"}skills-live${"/"}`)) return "orq plugin (updated)";
+	const dir = path.split("/").at(-2) ?? "";
+	if (dir.startsWith("orqi-")) return "orqi";
+	if (/^(orq-[a-z0-9-]+|evaluatorq)$/.test(dir)) return "orq plugin";
+	return "local";
+}
+
+export interface SkillDetail {
+	frontmatter: Record<string, unknown>;
+	body: string;
+	/** Files beside SKILL.md (resources, scripts), relative to the skill dir. */
+	files: string[];
+}
+
+/** Read a SKILL.md: its frontmatter, its body, and what ships beside it. */
+export function readSkill(path: string, parse: (yaml: string) => unknown): SkillDetail {
+	const text = readFileSync(path, "utf8");
+	const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
+	let frontmatter: Record<string, unknown> = {};
+	try {
+		frontmatter = (match ? (parse(match[1]!) as Record<string, unknown>) : {}) ?? {};
+	} catch {
+		// A skill pi loaded but whose frontmatter we cannot read still shows its body.
+	}
+	const dir = path.slice(0, path.lastIndexOf("/"));
+	const files: string[] = [];
+	const walk = (sub: string) => {
+		for (const entry of readdirSync(join(dir, sub), { withFileTypes: true })) {
+			const rel = sub ? `${sub}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) walk(rel);
+			else if (rel !== "SKILL.md") files.push(rel);
+		}
+	};
+	try {
+		walk("");
+	} catch {
+		// Unreadable dir: the view just lists no files.
+	}
+	return { frontmatter, body: match ? text.slice(match[0].length) : text, files: files.sort() };
 }

@@ -11,9 +11,10 @@
  *   its 56% / 28% savings at 95% quality) and routes to the easy, medium or
  *   hard rung. Tool follow-ups and retries stay on the model that started the
  *   turn, so the prompt cache holds; an overload or context overflow on retry
- *   moves one rung up; a request to delete something or mutate an agent or
- *   evaluator never goes below hard, mirroring the system prompt's approval
- *   gates.
+ *   moves one rung up. The same call asks the door question (evaluatorq's
+ *   benign / two_way / one_way, reworded for a request): anything that changes
+ *   state goes to hard. The keyword floor only stands in when the classifier
+ *   cannot answer, so "which tool would delete a dataset?" stays a question.
  *
  * Everything that decides is a pure function here, so the policy table is
  * tested without a network.
@@ -50,6 +51,24 @@ export const DIFFICULTY_QUESTION = {
 		hard: "Deep multi-step reasoning, competition-level math or proofs, intricate logic puzzles, or expert knowledge; needs the strongest model",
 	},
 };
+
+/**
+ * Whether what a request asks for can be undone: evaluatorq's `_DOOR_CRITERIA`
+ * (signals/doors.py), reworded from a tool call to the request that leads to one.
+ */
+export const DOOR_QUESTION = {
+	type: "choice" as const,
+	instructions:
+		"Classify whether doing what this request asks can be undone. A question about an action, or a request to read, list, explain or compare, changes nothing.",
+	criteria: {
+		benign: "Changes no state: reads, lists, searches, views, explains or compares, or asks which tool would do something.",
+		two_way: "Changes state that can be undone: creates or updates an agent, deployment, prompt, dataset, evaluator or experiment, or edits a configuration.",
+		one_way:
+			"Changes state that cannot be undone: deletes or overwrites a resource, datapoints or a dataset, runs an experiment with auto_run, invalidates evaluator history, sends feedback or a message, publishes, or spends money at scale.",
+	},
+};
+
+export type Door = keyof typeof DOOR_QUESTION.criteria;
 
 // ── Decisions API ──────────────────────────────────────────────────────────
 
@@ -187,9 +206,12 @@ export interface RouteState {
 	cost?: number;
 	latencyMs?: number;
 	classifier?: string;
+	/** The door question's answer and its probability, when the classifier gave one. */
+	door?: Door;
+	doorP?: number;
 }
 
-/** The floor: requests the system prompt gates behind approval never go below hard. */
+/** The fallback floor, for when the classifier cannot answer: requests that change state never go below hard. */
 export function floorOf(text: string): string | undefined {
 	const t = text.toLowerCase();
 	if (/\b(delete|remove|drop|purge|wipe|destroy)\b/.test(t)) return "destructive request";
@@ -224,6 +246,8 @@ export interface PolicyInput {
 	failedError?: string;
 	/** The classifier's probabilities, or the reason it could not answer. */
 	classified?: Record<Tier, number> | { error: string };
+	/** The door question's answer; absent, the classifier has no opinion on it. */
+	door?: Door;
 }
 
 /**
@@ -241,11 +265,13 @@ export function policy(input: PolicyInput): { tier: Tier; why?: string; arrow?: 
 		}
 		return { tier: from };
 	}
-	const floor = floorOf(input.text);
-	if (floor) return { tier: "hard", why: `floor: ${floor}`, arrow: "▲" };
 	if (!input.classified || "error" in input.classified) {
+		// No classifier answer: the keyword floor stands in for the door question.
+		const floor = floorOf(input.text);
+		if (floor) return { tier: "hard", why: `floor: ${floor}`, arrow: "▲" };
 		return { tier: "medium", why: input.classified && "error" in input.classified ? input.classified.error : "no classifier" };
 	}
+	if (input.door && input.door !== "benign") return { tier: "hard", why: `door: ${input.door}`, arrow: "▲" };
 	return { tier: tierOf(input.classified) };
 }
 
@@ -265,6 +291,7 @@ export function logRoute(path: string, text: string, state: RouteState): void {
 			cost: state.cost ?? 0,
 			latency_ms: state.latencyMs ?? null,
 			why: state.why ?? null,
+			...(state.door ? { door: state.door } : {}),
 		})}\n`,
 	);
 }
@@ -295,7 +322,10 @@ export interface Decision extends RouteState {
 export interface Routing {
 	pool: Pool;
 	classifier?: string;
-	onDecision(listener: (decision: Decision) => void): void;
+	/** Returns the unsubscribe: each session's harness listens, and stops when that session ends. */
+	onDecision(listener: (decision: Decision) => void): () => void;
+	/** Recompute the pool and classifier from a fresher catalogue (after a first sign-in). */
+	refresh(catalogue: ModelInfo[]): void;
 	/** Set once a 403 says the key cannot classify: the widget line. */
 	unavailable?: string;
 }
@@ -312,13 +342,25 @@ interface RuntimeLike {
  * subagents can resolve the rungs. Returns the pool and a decision feed.
  */
 export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], defaultModel: string, routeLog?: string): Routing {
-	const classifiers = catalogue.filter((model) => model.kind === "classifier");
 	const listeners = new Set<(decision: Decision) => void>();
-	const pool = routePool(catalogue, defaultModel === `orq/${AUTO_ID}` ? BASE_MODEL : defaultModel);
-	const classifier = process.env.ORQI_ROUTE_CLASSIFIER ?? (classifiers.some((model) => model.id === DEFAULT_CLASSIFIER) ? DEFAULT_CLASSIFIER : classifiers[0]?.id);
-	const routing: Routing = { pool, classifier, onDecision: (listener) => listeners.add(listener) };
-	if (classifiers.length) runtime.registerProvider(DECISIONS_PROVIDER, decisionsProvider(classifiers));
-	const hard = catalogue.find((model) => model.id === pool.hard);
+	const base = defaultModel === `orq/${AUTO_ID}` ? BASE_MODEL : defaultModel;
+	const routing: Routing = {
+		pool: routePool(catalogue, base),
+		onDecision: (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		refresh: (next) => {
+			const classifiers = next.filter((model) => model.kind === "classifier");
+			routing.pool = routePool(next, base);
+			routing.classifier = process.env.ORQI_ROUTE_CLASSIFIER ?? (classifiers.some((model) => model.id === DEFAULT_CLASSIFIER) ? DEFAULT_CLASSIFIER : classifiers[0]?.id);
+			routing.unavailable = undefined;
+			if (classifiers.length) runtime.registerProvider(DECISIONS_PROVIDER, decisionsProvider(classifiers));
+		},
+	};
+	routing.refresh(catalogue);
+	const pool = () => routing.pool;
+	const hard = catalogue.find((model) => model.id === routing.pool.hard);
 
 	runtime.registerVirtualModel({
 		provider: "orq",
@@ -333,18 +375,27 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 			// Switched to orq/auto mid-turn: stay on whatever answered last.
 			if (request.reason === "continuation" && !state && request.previous) return { model: request.previous.model, thinkingLevel: request.thinkingLevel };
 			let classified: PolicyInput["classified"];
+			let door: { door: Door; p: number } | undefined;
 			let cost: number | undefined;
 			let latencyMs: number | undefined;
-			// A floored turn is hard whatever the classifier says: do not wait for it.
-			if (request.reason === "user" && !floorOf(text)) {
+			if (request.reason === "user") {
+				const classifier = routing.classifier;
 				if (!classifier) classified = { error: "no classifier model in this workspace" };
 				else if (routing.unavailable) classified = { error: routing.unavailable };
 				else {
 					const started = Date.now();
 					try {
-						const result = await classifyWithOrq(classifier, { state: { prompt: text.slice(0, 16_000) }, questions: { difficulty: DIFFICULTY_QUESTION } }, { signal: withTimeout(request.signal, CLASSIFY_TIMEOUT_MS) });
+						const result = await classifyWithOrq(
+							classifier,
+							{ state: { prompt: text.slice(0, 16_000) }, questions: { difficulty: DIFFICULTY_QUESTION, door: DOOR_QUESTION } },
+							{ signal: withTimeout(request.signal, CLASSIFY_TIMEOUT_MS) },
+						);
 						const answer = result.answers.difficulty;
 						classified = answer?.type === "choice" ? (answer.probabilities as Record<Tier, number>) : { error: "classifier gave no difficulty" };
+						const doorAnswer = result.answers.door;
+						if (doorAnswer?.type === "choice" && doorAnswer.choice in DOOR_QUESTION.criteria) {
+							door = { door: doorAnswer.choice as Door, p: Number(doorAnswer.probabilities?.[doorAnswer.choice] ?? doorAnswer.confidence ?? 0) };
+						}
 						cost = result.usage?.cost.total;
 					} catch (error) {
 						if (error instanceof ClassifyForbidden) routing.unavailable = error.message;
@@ -354,9 +405,9 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 					latencyMs = Date.now() - started;
 				}
 			}
-			const decision = policy({ reason: request.reason, text, state, failedError: request.failed?.message?.errorMessage, classified });
-			const model = runtime.getModel("orq", pool[decision.tier]) ?? runtime.getModel("orq", pool.medium) ?? request.previous?.model;
-			if (!model) throw new Error(`orq/auto: no model for the ${decision.tier} rung (${pool[decision.tier]})`);
+			const decision = policy({ reason: request.reason, text, state, failedError: request.failed?.message?.errorMessage, classified, door: door?.door });
+			const model = runtime.getModel("orq", pool()[decision.tier]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
+			if (!model) throw new Error(`orq/auto: no model for the ${decision.tier} rung (${pool()[decision.tier]})`);
 			const changed = request.reason === "user" || (request.reason === "retry" && decision.arrow);
 			if (!changed) return { model, thinkingLevel: request.thinkingLevel };
 			const next: RouteState = {
@@ -366,7 +417,8 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 				...(decision.why ? { why: decision.why } : {}),
 				...(cost !== undefined ? { cost } : {}),
 				...(latencyMs !== undefined ? { latencyMs } : {}),
-				...(classifier && request.reason === "user" ? { classifier } : {}),
+				...(routing.classifier && request.reason === "user" && latencyMs !== undefined ? { classifier: routing.classifier } : {}),
+				...(door ? { door: door.door, doorP: door.p } : {}),
 			};
 			for (const listener of listeners) listener({ ...next, reason: request.reason, arrow: decision.arrow });
 			if (routeLog) {
