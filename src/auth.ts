@@ -308,8 +308,11 @@ export function workspaceOfKey(token: string, session: { workspaces?: { id: stri
 export function loginKey(authPath: string | undefined): string | undefined {
 	if (!authPath) return undefined;
 	try {
-		const stored = readStoredCredential("orq", authPath);
-		return stored?.type === "api_key" && stored.key ? stored.key : undefined;
+		const stored = readStoredCredential("orq", authPath) as { type?: string; key?: string; access?: string } | undefined;
+		// An API key pasted into /login or /key, or the session token "Sign in with an account" stored.
+		if (stored?.type === "api_key" && stored.key) return stored.key;
+		if (stored?.type === "oauth" && stored.access) return stored.access;
+		return undefined;
 	} catch {
 		return undefined;
 	}
@@ -347,7 +350,9 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 	const candidates: Credential[] = [];
 	const { session, apiKeyLogin, failure } = readSession();
 	const login = loginKey(authPath);
-	if (login) candidates.push({ token: login, source: "/login key", workspace: workspaceOfKey(login, session) });
+	// A browser sign-in stores the CLI session's own token: its workspace is the session's active one.
+	const loginWorkspace = login && login === sessionToken(session) ? session?.activeWorkspaceKey : login ? workspaceOfKey(login, session) : undefined;
+	if (login) candidates.push({ token: login, source: "/login key", workspace: loginWorkspace });
 	// A profile outranks an exported key, because it does for the CLI: it warns
 	// and uses the profile (applyProfileAPIKey), and orqi disagreeing would put
 	// the two on different credentials for the same command.
@@ -373,6 +378,6 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 
 /** In-session: pi's /login stores a key orqi picks up on the next message. */
 export const LOGIN_HINT =
-	"Run /key and paste an API key for this workspace (masked; /login orq works too but shows the key), or run `orq auth login` in another terminal. orqi reconnects on your next message.";
+	"Sign in with /login (Sign in with an account → orq.ai, in the browser), paste an API key with /key, or run `orq auth login` in another terminal. orqi reconnects on your next message.";
 /** One-shot: there is no session to log in from. */
 export const LOGIN_HINT_ONESHOT = "Run `orq auth login`, or export an ORQ_API_KEY for this workspace.";

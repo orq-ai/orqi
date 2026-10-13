@@ -18,14 +18,16 @@ import {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
 	createAgentSessionServices,
+	createMcpExtension,
 	InteractiveMode,
 	SessionManager,
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
-import { credentialCandidates, LOGIN_HINT_ONESHOT, mcpUrl, projectForCredential, type Credential } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
+import { orqOAuth, refreshStoredSignIn } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
-import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, toolTable } from "./commands.ts";
-import { connectOrqTools, firstLine } from "./mcp.ts";
+import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./commands.ts";
+import { callOrqTool, CredentialsRejected, firstLine, hintsSection, orqMcp, pickCredential, type Reconnected, type Rejection } from "./mcp.ts";
 import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, talkable } from "./model.ts";
 import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
@@ -109,34 +111,67 @@ const AUTH_PATH = join(AGENT_DIR, "auth.json"); // where pi's /login stores the 
 const { candidates, failure, profileGap } = credentialCandidates(AUTH_PATH);
 // No credential at all: one-shot has nothing to try and stops; the TUI opens
 // anyway with a welcome that signs in from inside the session.
-const welcome = candidates.length === 0;
-if (welcome && oneShot) {
+// With no candidate at all, one-shot has nothing to try and stops.
+if (candidates.length === 0 && oneShot) {
 	if (failure) console.error(failure);
 	console.error(LOGIN_HINT_ONESHOT);
 	process.exit(1);
 }
 if (profileGap) console.error(profileGap);
 
-// A rejected credential does not stop the boot: the session opens with a
-// pinned warning and reconnects once /login or `orq auth login` has produced
-// a credential the server takes. Only an unreachable server is fatal, and even
-// that is one line rather than the MCP SDK's stack trace out of node_modules.
-const orq = await connectOrqTools(candidates, join(AGENT_DIR, "tool-catalogue.json")).catch((error: unknown) => {
-	console.error(`Could not reach the orq MCP server at ${mcpUrl()}: ${firstLine(error)}`);
-	process.exit(1);
-});
-if (oneShot && !orq.credential) {
+// Which credential: the first the API accepts (one REST call each). A
+// rejected boot is not a failed boot: the session opens with a pinned warning
+// and reconnects once /login, /key or `orq auth login` produces one that works.
+// A stall is no verdict, so the best guess is kept and pi's MCP retries.
+let credential: Credential | undefined;
+let bootRejections: Rejection[] = [];
+let bootNote: string | undefined;
+// What the API actually refused on the way to the winner: a stall is no verdict.
+const refusedAtBoot: Rejection[] = [];
+try {
+	credential = candidates.length ? await pickCredential(candidates, undefined, refusedAtBoot) : undefined;
+} catch (error) {
+	if (error instanceof CredentialsRejected) bootRejections = error.rejections;
+	else {
+		credential = candidates[0];
+		bootNote = `orq did not answer the credential check (${firstLine(error)}); trying ${credential?.source ?? "nothing"}`;
+	}
+}
+// Nothing accepted (no candidate, or every one refused): the TUI opens on the
+// sign-in invitation and the welcome; one-shot says why and stops.
+const welcome = !credential;
+if (oneShot && !credential) {
 	// No session to log in from: say what was rejected and why, then stop.
-	for (const line of authLines(orq.rejections, LOGIN_HINT_ONESHOT)) console.error(line);
+	for (const line of authLines(bootRejections, LOGIN_HINT_ONESHOT)) console.error(line);
 	process.exit(1);
 }
+// pi's MCP reads the server's Authorization header from here, per connection.
+if (credential) process.env.ORQ_API_KEY = credential.token;
+// The stored /login credential is candidate #0 and pi's model runtime prefers it,
+// so one the API refused breaks every model call even though the tools connected
+// on something else. A stale browser sign-in is refreshed from the session in
+// place; a refused pasted key gets one pinned line saying how to replace it.
+const storedLogin = candidates.find((candidate) => candidate.source === "/login key");
+// Refused, not merely slow: a stored key that stalled at boot is retried on the
+// first message instead of being reported as broken.
+const loginRefused =
+	credential &&
+	storedLogin &&
+	refusedAtBoot.some((rejection) => rejection.source === storedLogin.source) &&
+	!(credential.source === SESSION_SOURCE && refreshStoredSignIn(AUTH_PATH, credential.token));
+const mcp = orqMcp(Boolean(credential));
 // With nothing accepted the model runs on the best guess; a bad key only
 // degrades the model catalogue to its fallback, and /login replaces it.
 // Every router call names the repo it came from, so a team's Threads tab can be
 // filtered by project. The remote is stripped of any credentials it embeds.
 process.env.ORQI_REPO ??= repoName();
-const models = await createOrqModelRuntime(AGENT_DIR, orq.credential?.token ?? candidates[0]?.token ?? "");
+const models = await createOrqModelRuntime(AGENT_DIR, credential?.token ?? candidates[0]?.token ?? "");
 const modelRuntime = models.runtime;
+// "Sign in with an account" in pi's /login: the orq CLI's browser login, so a
+// key never has to be pasted. Its token is the login session's (via whoami).
+modelRuntime.registerProvider("orq", {
+	oauth: orqOAuth(() => credentialCandidates().candidates.find((candidate) => candidate.source === SESSION_SOURCE)?.token),
+} as never);
 // `orq/auto` and the Decisions API classifiers, on the runtime itself so the
 // boot model can be `orq/auto` and subagents can resolve its rungs.
 const routing = registerRouting(
@@ -147,9 +182,7 @@ const routing = registerRouting(
 );
 const model = pickModel(models);
 const customTools = [
-	...orq.tools,
 	createSubagentTool({
-		orqTools: orq.tools,
 		model,
 		modelRuntime,
 		agentDir: AGENT_DIR,
@@ -174,20 +207,54 @@ const header: HeaderInfo = {
 // The orq marketplace plugin (skills + commands), one copy: live when newer than the bundled one.
 const plugin = pluginResources(pkgDir, AGENT_DIR, ORQI_COMMANDS);
 
+// Built once, outside makeServices: the factory it returns runs per session,
+// but the connection state (rejections, tokens already tried) lives in its
+// closure and has to survive /new, /resume and /fork. Built per session, a
+// /reconnect that worked was forgotten on the next /new and the boot's
+// rejection warning came back.
+const commands = orqCommands(
+	async (next: Credential[]) => {
+		const result: Reconnected = { credential: await pickCredential(next), added: [] };
+		// The model runtime and pi's MCP both read $ORQ_API_KEY: move both, then reconnect the server.
+		process.env.ORQ_API_KEY = result.credential.token;
+		mcp.refresh();
+		// The boot had nothing that worked, so the models are the fallback:
+		// reload them now that the server takes a credential.
+		if (models.note && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
+			routing.refresh(models.catalogue);
+			result.modelsReloaded = true;
+		}
+		header.workspace = result.credential.workspace;
+		header.project = await projectForCredential(result.credential.token);
+		header.status = statusLine("orq MCP", result.note);
+		header.signedOut = false;
+		return result;
+	},
+	mcp.toolNames,
+	header,
+	AGENT_DIR,
+	{
+		rejections: candidates.length === 0 ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : bootRejections,
+		candidates,
+		welcome,
+		loginRefused: Boolean(loginRefused),
+	},
+);
+
 // Services are built per session, not once: pi marks a session's extension
 // handles stale when the session is replaced (/new, /resume, /fork), and a
 // shared services object would leave every extension calling through dead
 // handles from then on (the footer's first frame after /new crashed on it).
-// The factories keep their own state across sessions where it matters
-// (the connection state in orqCommands); the harness rebuilds from the branch.
+// State that must outlive a session sits in the factories built above
+// (orqCommands); the harness rebuilds from the branch.
 const makeServices = async () => {
 	const created = await createAgentSessionServices({
 		cwd: process.cwd(),
 		agentDir: AGENT_DIR,
 		modelRuntime,
 		resourceLoaderOptions: {
-			// The tool table is the live catalogue's, not a hand-kept copy.
-			systemPrompt: readFileSync(join(pkgDir, "orqi-system-prompt.txt"), "utf8").replace("{{ORQ_TOOLS}}", toolTable(orq.tools.map((tool) => tool.name))),
+			// The tools themselves are declared by pi's MCP; the prompt carries what their schemas leave out.
+			systemPrompt: readFileSync(join(pkgDir, "orqi-system-prompt.txt"), "utf8").replace("{{ORQ_TOOL_HINTS}}", hintsSection()),
 			// Ship a predictable skill set: the bundled orq + orqi skills only.
 			// Ambient discovery finds every skill installed on the machine (100+ here),
 			// which both bloats the prompt and makes orqi behave differently per user.
@@ -199,41 +266,16 @@ const makeServices = async () => {
 			additionalPromptTemplatePaths: plugin.additionalPromptTemplatePaths,
 			additionalThemePaths: [join(pkgDir, "themes")],
 			extensionFactories: [
-				orqCommands(
-					async (next: Credential[]) => {
-						const result = await orq.reconnect(next);
-						// The model runtime reads $ORQ_API_KEY; keep it on the credential the tools use.
-						process.env.ORQ_API_KEY = result.credential.token;
-					// The boot had nothing that worked, so the models are the fallback:
-					// reload them now that the server takes a credential.
-					if (models.note && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
-						routing.refresh(models.catalogue);
-					}
-						header.workspace = result.credential.workspace;
-						header.project = await projectForCredential(result.credential.token);
-						header.status = statusLine(`${orq.tools.length} tools`, result.note);
-						return result;
-					},
-					orq.tools.map((tool) => tool.name),
-					header,
-					AGENT_DIR,
-					{
-						rejections: welcome ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : orq.rejections,
-						candidates,
-						welcome,
-					},
-				),
+				// pi's own MCP client (built in for the CLI, opt-in for SDK sessions), and the orq server on it.
+				createMcpExtension(),
+				mcp.extension,
+				commands,
 				orqHarness({
 					agentDir: AGENT_DIR,
 					catalogue: () => models.catalogue,
-					toolCount: () => orq.tools.length,
-					callTool: async (name, args) => {
-						const tool = orq.tools.find((candidate) => candidate.name === `orq_${name}`);
-						if (!tool) throw new Error(`orq_${name} is not available on this connection`);
-						// The MCP server stalls now and then (AGENTS.md); a slash command must not hang on it.
-						const result = await tool.execute(`orqi-${name}`, args as any, AbortSignal.timeout(20_000), undefined, undefined as any);
-						return { text: (result.content as { text?: string }[]).map((block) => block.text ?? "").join("\n"), isError: Boolean((result as { isError?: boolean }).isError) };
-					},
+					toolCount: () => mcp.toolNames().length,
+					// Slash commands cannot run tools in pi, so they make one direct call.
+					callTool: (name, args) => callOrqTool(name, args),
 					workspace: () => header.workspace,
 					routing,
 				}),
@@ -262,7 +304,7 @@ const services = await makeServices();
 // One composition site for the status line: the reconnect closure above used to
 // patch the joined string by substring, which quietly did nothing whenever the
 // boot had in fact connected.
-function statusLine(connection: string, note = orq.note): string {
+function statusLine(connection: string, note = bootNote): string {
 	const agents = models.catalogue.filter(talkable).length;
 	return [
 		model ? (model.id === "auto" ? "orq/auto" : model.id) : "no model",
@@ -272,7 +314,7 @@ function statusLine(connection: string, note = orq.note): string {
 		agents ? `${agents} agents` : "",
 		note,
 		// With no credential at all, "catalogue unavailable: 401" is noise: the welcome says why.
-		welcome && !orq.credential ? undefined : models.note,
+		welcome && !credential ? undefined : models.note,
 		// A plugin newer than the binary shipped with; silent drift would otherwise be
 		// invisible until someone diffed behaviour against a colleague's machine.
 		plugin.note,
@@ -283,10 +325,11 @@ function statusLine(connection: string, note = orq.note): string {
 
 const skills = services.resourceLoader.getSkills().skills.length;
 const update = pendingUpdate(readCache(AGENT_DIR));
-header.workspace = orq.credential?.workspace;
-header.project = orq.credential ? await projectForCredential(orq.credential.token) : undefined;
-header.status = statusLine(orq.credential ? `${orq.tools.length} tools` : welcome ? "not signed in" : "not connected");
-const startupLine = [header.name, header.workspace, header.status, orq.credential?.source].filter(Boolean).join(" · ");
+header.workspace = credential?.workspace;
+header.project = credential ? await projectForCredential(credential.token) : undefined;
+header.status = statusLine(credential ? "orq MCP" : "not signed in");
+header.signedOut = !credential;
+const startupLine = [header.name, header.workspace, header.status, credential?.source].filter(Boolean).join(" · ");
 // The header's "update available" line is the only place a pending update is
 // announced: it used to also ride in the status list above, saying the same
 // thing twice in one screenful.
@@ -345,7 +388,7 @@ try {
 		await runtime.dispose();
 	}
 } finally {
-	await orq.close().catch(() => {});
+	// pi's MCP extension closes the server connection with the session.
 }
 
 // The MCP transport keeps a stream open, so the event loop would not drain.
