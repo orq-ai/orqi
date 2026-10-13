@@ -35,13 +35,20 @@ export interface PanelSpec {
 	filterable?: boolean;
 }
 
-/** Indices of the rows that contain every word of `query`, case-insensitively. */
+/**
+ * Indices of the rows that contain every word of `query`, case-insensitively.
+ * Rows whose first column (the name) matches come first: "trace" should put
+ * `orq-analyze-traces` above a skill that merely mentions traces.
+ */
 export function filterRows(rows: string[], query: string): number[] {
 	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-	return rows.flatMap((row, index) => {
+	const hits = rows.flatMap((row, index) => {
 		const text = row.replace(/\x1b\[[0-9;]*m/g, "").toLowerCase();
-		return words.every((word) => text.includes(word)) ? [index] : [];
+		if (!words.every((word) => text.includes(word))) return [];
+		const name = text.trim().split(/\s+/)[0] ?? "";
+		return [{ index, byName: words.every((word) => name.includes(word)) }];
 	});
+	return [...hits.filter((hit) => hit.byName), ...hits.filter((hit) => !hit.byName)].map((hit) => hit.index);
 }
 
 /** Draw a box `width` wide. Pure, so the views are testable. */

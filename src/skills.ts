@@ -255,3 +255,46 @@ async function downloadAndSwap(root: string, upstream: { sha: string; committed:
 		rmSync(staging, { recursive: true, force: true });
 	}
 }
+
+/** Where a loaded skill came from, for the /skills view. */
+export function skillOrigin(path: string): string {
+	if (path.includes(`${"/"}skills-live${"/"}`)) return "orq plugin (updated)";
+	const dir = path.split("/").at(-2) ?? "";
+	if (dir.startsWith("orqi-")) return "orqi";
+	if (/^(orq-[a-z0-9-]+|evaluatorq)$/.test(dir)) return "orq plugin";
+	return "local";
+}
+
+export interface SkillDetail {
+	frontmatter: Record<string, unknown>;
+	body: string;
+	/** Files beside SKILL.md (resources, scripts), relative to the skill dir. */
+	files: string[];
+}
+
+/** Read a SKILL.md: its frontmatter, its body, and what ships beside it. */
+export function readSkill(path: string, parse: (yaml: string) => unknown): SkillDetail {
+	const text = readFileSync(path, "utf8");
+	const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
+	let frontmatter: Record<string, unknown> = {};
+	try {
+		frontmatter = (match ? (parse(match[1]!) as Record<string, unknown>) : {}) ?? {};
+	} catch {
+		// A skill pi loaded but whose frontmatter we cannot read still shows its body.
+	}
+	const dir = path.slice(0, path.lastIndexOf("/"));
+	const files: string[] = [];
+	const walk = (sub: string) => {
+		for (const entry of readdirSync(join(dir, sub), { withFileTypes: true })) {
+			const rel = sub ? `${sub}/${entry.name}` : entry.name;
+			if (entry.isDirectory()) walk(rel);
+			else if (rel !== "SKILL.md") files.push(rel);
+		}
+	};
+	try {
+		walk("");
+	} catch {
+		// Unreadable dir: the view just lists no files.
+	}
+	return { frontmatter, body: match ? text.slice(match[0].length) : text, files: files.sort() };
+}

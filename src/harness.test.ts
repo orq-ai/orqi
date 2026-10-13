@@ -2,6 +2,8 @@
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { parse as parseYaml } from "yaml";
+import { readSkill, skillOrigin } from "./skills.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
@@ -466,6 +468,8 @@ test("a tool's parameters read as name, type, required, default and description"
 test("/tools filters as you type, and enter opens the tool you see, not the one at that position before", async () => {
 	expect(filterRows(["list_traces  List traces", "get_span  Get a span", "list_spans  List spans"], "span")).toEqual([1, 2]);
 	expect(filterRows(["list_traces  List traces", "list_spans  List spans"], "list  TRACES")).toEqual([0]); // every word, any case
+	// Name matches first, description-only matches after.
+	expect(filterRows(["evaluatorq  scores production traces", "orq-analyze-traces  Analyze an agent"], "trace")).toEqual([1, 0]);
 	let opened = -1;
 	let closed = false;
 	const panel = new Panel(
@@ -488,4 +492,16 @@ test("/tools filters as you type, and enter opens the tool you see, not the one 
 	panel.handleInput("\x1b"); // then closes
 	expect(closed).toBe(true);
 	for (const ch of "zzz") new Panel({ title: "t", rows: ["a"], selectable: true, filterable: true }, plainPanel, () => {}, () => {}).handleInput(ch);
+});
+
+test("/skills knows where each skill came from and reads its SKILL.md", () => {
+	expect(skillOrigin("/pkg/skills/orqi-platform-guide/SKILL.md")).toBe("orqi");
+	expect(skillOrigin("/pkg/skills/orq-build-agent/SKILL.md")).toBe("orq plugin");
+	expect(skillOrigin("/home/u/.orqi/agent/skills-live/current/skills/orq-build-agent/SKILL.md")).toBe("orq plugin (updated)");
+	expect(skillOrigin("/home/u/.agents/skills/tdd/SKILL.md")).toBe("local");
+	const detail = readSkill(join(import.meta.dir, "..", "skills", "orq-build-agent", "SKILL.md"), parseYaml);
+	expect(detail.frontmatter.name).toBe("orq-build-agent");
+	expect(String(detail.frontmatter.description)).toContain("orq.ai Agents");
+	expect(detail.body.length).toBeGreaterThan(100);
+	expect(detail.files.every((file) => file !== "SKILL.md")).toBe(true);
 });

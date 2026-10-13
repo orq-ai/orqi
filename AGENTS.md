@@ -182,6 +182,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `showTools`) is a flat list where enter and escape both go back. `/tools` reads
   `pi.getAllTools()` and opens a tool on enter: parameters first (`schemaLines`), then the full
   description, `j` for the raw input schema.
+- **`/skills` mirrors `/tools` for skills.** It reads the loaded skills from `pi.getCommands()`
+  (`source: "skill"`), labels each by origin (`skillOrigin`: orqi, orq plugin, orq plugin (updated),
+  local), filters as you type (name matches rank first, as in `/tools`), and opens one on enter
+  (`readSkill`: description, other frontmatter, path, files beside it, the full instructions).
+  `u` puts `/skill:<name> ` in the editor without sending it.
 - **Slash commands make their own short MCP call** (`callOrqTool`). pi lets tools call tools, not
   commands, so `/trace`, `/agents` and `/feedback` open a one-call connection, retried once.
 - **Session services are built per session, not once** (`makeServices` in `src/main.ts`). pi marks

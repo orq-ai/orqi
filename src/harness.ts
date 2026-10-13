@@ -8,6 +8,8 @@
  */
 
 import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { parse as parseYaml } from "yaml";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
@@ -18,6 +20,7 @@ import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "
 import { MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, SPINNER } from "./minimap.ts";
 import { talkable, type ModelInfo } from "./model.ts";
 import { bareName, schemaLines, TOOL_PREFIX } from "./mcp.ts";
+import { readSkill, skillOrigin } from "./skills.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
 import { shortTool, toAtif, Trajectory, type StepUsage } from "./trajectory.ts";
@@ -786,6 +789,75 @@ export function orqHarness(deps: HarnessDeps) {
 						},
 					},
 				});
+			},
+		});
+
+		// The loaded skills, like /tools: where each came from, its metadata, its instructions.
+		pi.registerCommand("skills", {
+			description: "browse the loaded skills: type to filter, enter for metadata and instructions, u to use one",
+			handler: async (_args, ctx) => {
+				let skills: { name: string; description: string; path: string }[] = [];
+				try {
+					skills = pi
+						.getCommands()
+						.filter((command) => command.source === "skill")
+						.map((command) => ({ name: command.name.replace(/^skill:/, ""), description: command.description ?? "", path: command.sourceInfo.path }));
+				} catch {
+					// A handle from a replaced session: show nothing rather than throw.
+				}
+				if (skills.length === 0) {
+					ctx.ui.notify("No skills loaded.", "warning");
+					return;
+				}
+				skills.sort((a, b) => a.name.localeCompare(b.name));
+				const width = Math.min(32, Math.max(...skills.map((skill) => skill.name.length)));
+				const origins = skills.map((skill) => skillOrigin(skill.path));
+				const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+				const use = (name: string) => {
+					// Into the editor, not sent: the user adds what the skill should work on.
+					ctx.ui.setEditorText(`/skill:${name} `);
+					return true;
+				};
+				const detail = (i: number): PanelSpec => {
+					const skill = skills[i]!;
+					const { frontmatter, body, files } = readSkill(skill.path, parseYaml);
+					const meta = Object.entries(frontmatter)
+						.filter(([key]) => key !== "name" && key !== "description")
+						.map(([key, value]) => `  ${key.padEnd(14)} ${typeof value === "string" ? oneLine(value) : JSON.stringify(value)}`);
+					return {
+						title: `skill ${skill.name}`,
+						badge: origins[i],
+						rows: [
+							"description",
+							`  ${oneLine(String(frontmatter.description ?? skill.description))}`,
+							...(meta.length ? ["", "metadata", ...meta] : []),
+							"",
+							"location",
+							`  ${skill.path.replace(homedir(), "~")}`,
+							...(files.length ? [`  ${files.length} more file${files.length === 1 ? "" : "s"}: ${files.slice(0, 8).join(", ")}${files.length > 8 ? ", …" : ""}`] : []),
+							"",
+							"instructions",
+							...body.trim().split("\n").map((line) => `  ${line}`),
+						],
+						hint: "u use · ↑↓ scroll · esc back",
+					};
+				};
+				await panel(ctx, (close) => ({
+					title: "skills",
+					badge: `${skills.length} loaded`,
+					rows: skills.map((skill, i) => `${skill.name.padEnd(width)}  ${origins[i]!.padEnd(20)}  ${oneLine(skill.description)}`),
+					selectable: true,
+					filterable: true,
+					hint: "type to filter · ↑↓ move · enter details · esc close",
+					keys: {
+						enter: (i) => {
+							void panel(ctx, (closeDetail) => {
+								const spec = detail(i);
+								return { ...spec, keys: { u: () => (use(skills[i]!.name), closeDetail(), close(), true) } };
+							});
+						},
+					},
+				}));
 			},
 		});
 
