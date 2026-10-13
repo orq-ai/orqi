@@ -72,7 +72,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   "still on the previous workspace" rather than "not connected" over tools that keep answering.
   The stored `/login` key is candidate #0 for the tools because pi's model runtime already
   prefers it. Only one-shot exits, having no session to log in from - but a boot with no
-  candidate at all exits in either mode, there being nothing to try.
+  candidate at all exits in one-shot mode; the TUI opens anyway with a welcome (`welcome` in
+  `src/commands.ts`) whose every path ends in the same `recover`, so a workshop laptop with nothing
+  set up gets to a working session without leaving it.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
   backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit

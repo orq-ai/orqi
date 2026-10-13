@@ -68,7 +68,10 @@ const PITCH = [
 
 // pi's own header is silenced (it advertises pi, not orq), so its key hints
 // are restated here. Keep in step with pi's defaults if they change.
-const HINTS = "escape interrupt · ctrl+c/d exit · / commands · ! bash · ctrl+o resources";
+const HINTS = "escape interrupt · ctrl+c/d exit · / commands · ! bash · ctrl+o expand";
+
+/** The orqi views worth knowing on day one. */
+const VIEWS = "/learn · /route · /cost · /trace · /agents · /whatsnew · alt+m minimap";
 
 export const CHANGELOG_URL = "https://docs.orq.ai/docs/changelog/";
 
@@ -112,8 +115,8 @@ export function headerLines(info: HeaderInfo, size = terminalSize()): string[] {
 	];
 	const footer = [
 		"",
+		`${indent}${color(VIEWS, MUTED)}`,
 		`${indent}${color(HINTS, MUTED)}`,
-		`${indent}${color(`changelog ${CHANGELOG_URL}`, MUTED)}`,
 		// Only when a check actually found something newer: most sessions never
 		// see this line, matching orqi update's own "check daily, tell, never
 		// auto-install" contract.

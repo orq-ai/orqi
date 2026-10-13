@@ -13,6 +13,7 @@ import { credentialCandidates, LOGIN_HINT, runOrq, SESSION_SOURCE, type Credenti
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
+import { loginUrl, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
 
 /**
  * Re-point the orq tools at the first of `candidates` the server accepts.
@@ -96,6 +97,8 @@ export interface Boot {
 	candidates?: Credential[];
 	/** Injectable for tests: the real one shells out to `orq auth whoami`. */
 	readCandidates?: typeof credentialCandidates;
+	/** No credential at all: open the welcome instead of exiting. */
+	welcome?: boolean;
 }
 
 export function orqCommands(
@@ -209,6 +212,50 @@ export function orqCommands(
 		return `Connected to orq: ${toolNames.length} tools in ${result.credential.workspace ?? "workspace"} (${result.credential.source}).${note}${unregistered}`;
 	};
 
+	/**
+	 * The first run with no credential: sign in from inside the session
+	 * rather than being sent away with exit 1. Each path ends in the same
+	 * recovery the `input` hook runs.
+	 */
+	const welcome = async (pi: ExtensionAPI, ctx: { ui: Ui & { select(title: string, options: string[]): Promise<string | undefined>; input(title: string, placeholder?: string): Promise<string | undefined> } }) => {
+		const choice = welcomeChoice(await ctx.ui.select(WELCOME_TITLE, Object.values(WELCOME_OPTIONS)));
+		if (choice === "key") {
+			const key = plausibleKey(await ctx.ui.input("API key", "sk-orq-…"));
+			if (!key) {
+				ctx.ui.notify(`No key pasted. ${LOGIN_HINT}`, "warning");
+				return;
+			}
+			saveLoginKey(authPath, key);
+			ctx.ui.notify("connecting to orq…");
+			const outcome = await recover(pi, ctx, (all) => all);
+			if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+			return;
+		}
+		if (choice === "browser") {
+			ctx.ui.setWidget(AUTH_WIDGET, ["waiting for the browser sign-in… (finish it in the browser; /reconnect if this stalls)"]);
+			const proc = Bun.spawn(["orq", "auth", "login", "--no-input"], { stdout: "pipe", stderr: "pipe" });
+			let shown = false;
+			const watch = async (stream: ReadableStream<Uint8Array>) => {
+				for await (const chunk of stream) {
+					const url = loginUrl(new TextDecoder().decode(chunk));
+					if (url && !shown) {
+						shown = true;
+						ctx.ui.notify(`If no browser opened, sign in at ${url}`);
+					}
+				}
+			};
+			void watch(proc.stdout);
+			void watch(proc.stderr);
+			const code = await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(-1), 5 * 60_000))]);
+			if (code !== 0) proc.kill();
+			const outcome = await recover(pi, ctx, (all) => all);
+			if (outcome) ctx.ui.notify(code === 0 ? outcome : `orq auth login did not finish. ${outcome}`, rejections.length ? "warning" : "info");
+			return;
+		}
+		// Look around: nothing to connect; the docs and the changelog need no workspace.
+		ctx.ui.notify("Looking around without a workspace: /whatsnew shows the latest orq.ai release, /learn the guided prompts. /login orq or `orq auth login` whenever you are ready.");
+	};
+
 	return (pi: ExtensionAPI) => {
 		// Registering during load is allowed; a /reload re-runs this with a
 		// fresh handle that has never seen the tools a reconnect produced.
@@ -242,6 +289,11 @@ export function orqCommands(
 				// answer, and the user has to see this until it is fixed.
 				showAuth(ctx);
 				ctx.ui.notify(authLines(rejections)[0]!, "warning");
+			}
+			if (boot.welcome && event.reason === "startup" && ctx.hasUI) {
+				boot.welcome = false;
+				// Not awaited: session_start must return before pi draws the editor.
+				setTimeout(() => void welcome(pi, ctx), 50);
 			}
 		});
 

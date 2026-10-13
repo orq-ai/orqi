@@ -24,9 +24,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { credentialCandidates, LOGIN_HINT_ONESHOT, mcpUrl, projectForCredential, type Credential } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
-import { authLines, orqCommands } from "./commands.ts";
+import { authLines, NO_CREDENTIAL, orqCommands } from "./commands.ts";
 import { connectOrqTools, firstLine } from "./mcp.ts";
-import { createOrqModelRuntime, DEFAULT_MODEL, pickModel } from "./model.ts";
+import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, talkable } from "./model.ts";
 import { registerRouting } from "./router.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
 import { orqHarness } from "./harness.ts";
@@ -108,7 +108,10 @@ process.env.PI_SKIP_VERSION_CHECK ??= "1";
 
 const AUTH_PATH = join(AGENT_DIR, "auth.json"); // where pi's /login stores the orq key
 const { candidates, failure, profileGap } = credentialCandidates(AUTH_PATH);
-if (candidates.length === 0) {
+// No credential at all: one-shot has nothing to try and stops; the TUI opens
+// anyway with a welcome that signs in from inside the session.
+const welcome = candidates.length === 0;
+if (welcome && oneShot) {
 	if (failure) console.error(failure);
 	console.error(LOGIN_HINT_ONESHOT);
 	process.exit(1);
@@ -133,7 +136,7 @@ if (oneShot && !orq.credential) {
 // Every router call names the repo it came from, so a team's Threads tab can be
 // filtered by project. The remote is stripped of any credentials it embeds.
 process.env.ORQI_REPO ??= repoName();
-const models = await createOrqModelRuntime(AGENT_DIR, orq.credential?.token ?? candidates[0]!.token);
+const models = await createOrqModelRuntime(AGENT_DIR, orq.credential?.token ?? candidates[0]?.token ?? "");
 const modelRuntime = models.runtime;
 // `orq/auto` and the Decisions API classifiers, on the runtime itself so the
 // boot model can be `orq/auto` and subagents can resolve its rungs.
@@ -201,7 +204,11 @@ const services = await createAgentSessionServices({
 				orq.tools.map((tool) => tool.name),
 				header,
 				AGENT_DIR,
-				{ rejections: orq.rejections, candidates },
+				{
+					rejections: welcome ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : orq.rejections,
+					candidates,
+					welcome,
+				},
 			),
 			orqHarness({
 				agentDir: AGENT_DIR,
@@ -240,11 +247,13 @@ services.settingsManager.setLastChangelogVersion("999.0.0");
 // patch the joined string by substring, which quietly did nothing whenever the
 // boot had in fact connected.
 function statusLine(connection: string, note = orq.note): string {
+	const agents = models.catalogue.filter(talkable).length;
 	return [
-		model?.id ?? "no model",
+		model ? (model.id === "auto" ? "orq/auto" : model.id) : "no model",
 		connection,
 		`${skills} skills`,
 		`${models.ids.length} models`,
+		agents ? `${agents} agents` : "",
 		note,
 		models.note,
 		// Skills newer than the binary shipped with; silent drift would otherwise be
@@ -259,7 +268,7 @@ const skills = services.resourceLoader.getSkills().skills.length;
 const update = pendingUpdate(readCache(AGENT_DIR));
 header.workspace = orq.credential?.workspace;
 header.project = orq.credential ? await projectForCredential(orq.credential.token) : undefined;
-header.status = statusLine(orq.credential ? `${orq.tools.length} tools` : "not connected");
+header.status = statusLine(orq.credential ? `${orq.tools.length} tools` : welcome ? "not signed in" : "not connected");
 const startupLine = [header.name, header.workspace, header.status, orq.credential?.source].filter(Boolean).join(" · ");
 // The header's "update available" line is the only place a pending update is
 // announced: it used to also ride in the status list above, saying the same

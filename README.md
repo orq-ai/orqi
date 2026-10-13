@@ -50,6 +50,7 @@ never runs automatically.
 | **7 workspace commands** | `/tools`, `/whoami`, `/workspace [key]`, `/reconnect`, `/doctor`, `/update`, `/feedback <text>` (straight to the orq.ai team) |
 | **A harness you can see through** | A footer with the workspace, the model that answered, tokens, cost and a context bar with a per-turn sparkline; a minimap of every step beside the transcript (`alt+m`, `/panel focus`); `/cost` per model; `/trace` for a turn's spans and smart-router decision; `/open` for the session's thread in Studio; `/trajectory` to export the session as a Harbor ATIF file; `/whatsnew` renders the latest orq.ai release in the terminal |
 | **Smart routing you can watch** | `orq/auto` (`/model orq/auto` or `ORQI_MODEL=orq/auto`) asks the orq Decisions API how hard each turn is and routes it to an easy, medium or hard model from your workspace, with a route line above the turn showing the probabilities, the pick, and what the decision cost. `/route explain` prints the question and the pool, `/route platform` lists the workspace's smart routers |
+| **Workshop onboarding** | A first run with nothing set up opens a welcome instead of exiting: paste an API key, sign in with the browser, or look around. `/learn` offers six guided prompts, one per platform area; `/btw <question>` answers a side question on the cheapest model without adding it to the conversation |
 | **Managed agents** | `/agents` lists the workspace's agents (enter talks, `i` inspects, `t` traces, `o` opens Studio); `/agent <key>` talks to one, with orqi's own prompt and tools switched off; the `subagent` tool delegates to `agent/<key>` too |
 | **44 orq MCP tools** | Every tool the workspace's MCP server exposes today, minus three invocation surfaces ([why](ARCHITECTURE.md#tools)). Wrapped as native pi tools with an `orq_` prefix. Results render as a one-line summary (`23 items · 6.0 KB`); `ctrl+o` expands to pretty-printed JSON. The model always receives the full payload |
 | **24 skills** | 17 from [orq-ai/assistant-plugins](https://github.com/orq-ai/assistant-plugins) plus the 7 orqi skills, vendored in `skills/`. The upstream 17 refresh themselves: orqi checks once a day and picks up new ones without waiting for a release |
@@ -84,6 +85,12 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_VERSION` | Pins the release tag: which one `install.sh` installs, and which one `orqi update` installs |
 | `ORQI_INSTALL_DIR` | Read by `install.sh` only: where the binary lands (default `~/.local/bin`) |
 | `CI` | A non-empty value suppresses the daily update check unless `ORQI_REFRESH_UPDATE=1` forces one |
+
+### Launching from the orq CLI
+
+`orq orqi` installs orqi if needed and launches it with the CLI's resolved server (`ORQ_SERVER`) and,
+for a pinned profile, its key (`ORQ_API_KEY`). orqi reads both, so a profile, an on-prem host or a
+workspace switch made in the CLI carries over with nothing to configure.
 
 ### Picking a credential
 

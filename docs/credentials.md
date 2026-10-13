@@ -29,7 +29,7 @@ profile (`applyProfileAPIKey`). orqi ranking them the other way would put the tw
 credentials for the same command.
 
 The startup line always names the one that won. If they all fail, orqi still opens and says why
-(see [4](#4-when-nothing-works)); if there are none, it exits.
+(see [4](#4-when-nothing-works)); if there are none, one-shot exits and the TUI opens a welcome to sign in from.
 
 ## 2. Which server
 
@@ -107,7 +107,7 @@ the CLI's own stderr above the login hint.
 | api-key login file gone or corrupt | `api-key login file unreadable: <path> (…)` |
 | every candidate rejected on the connection | the session opens anyway, with a warning pinned above the editor naming each candidate tried and the server's reason (`ORQ_API_KEY (acme): API key is not valid for this workspace…`), then the hint. The footer reads `orq:not connected`. One-shot prints the same block and exits 1 |
 | the MCP server unreachable after three attempts | `Could not reach the orq MCP server at <url>: <reason>`, exit 1 |
-| nothing above, just no credential | the hint alone, exit 1 |
+| nothing above, just no credential | one-shot: the hint alone, exit 1. TUI: a welcome with three paths (paste an API key, stored where `/login orq` keeps it; `orq auth login` in the background; look around without a workspace) |
 
 The hint in-session: *Run `/login orq` and paste an API key for this workspace, or run
 `orq auth login` in another terminal. orqi reconnects on your next message.* One-shot: *Run

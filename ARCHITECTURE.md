@@ -151,7 +151,8 @@ catalogue (any age) or not at all, a warning naming each rejection is pinned abo
 the extension reconnects on the next message once `/login` or `orq auth login` has produced a
 credential the server accepts, registering the tools into the running session if the boot had none.
 Only the one-shot form exits once a candidate existed, because it has no session to log in from;
-a boot with no candidate at all exits in either mode, there being nothing to try.
+a boot with no candidate at all exits in one-shot mode and, in the TUI, opens a welcome that
+signs in from inside the session (paste a key, `orq auth login`, or look around).
 
 ## Known rough edges
 

@@ -21,6 +21,7 @@ import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
 import { toAtif, Trajectory, type StepUsage } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
+import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
 import { DIFFICULTY_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 
@@ -553,6 +554,69 @@ export function orqHarness(deps: HarnessDeps) {
 						live?.update(spec(closeLive, spans.length ? traceSummary(spans) : ["no spans yet: the gateway ingests traces a few seconds after the call"]));
 					})
 					.catch((error) => live?.update(spec(closeLive, [`spans unavailable: ${error instanceof Error ? error.message : error}`])));
+				await shown;
+			},
+		});
+
+		pi.registerCommand("learn", {
+			description: "guided prompts, one per platform area: pick one and it is sent as if you typed it",
+			handler: async (_args, ctx) => {
+				await panel(ctx, (close) => ({
+					title: "learn orq.ai",
+					rows: learnRows(),
+					selectable: true,
+					hint: "enter send · esc close",
+					keys: {
+						enter: (i) => {
+							close();
+							const prompt = LEARN_PROMPTS[i]!.prompt;
+							// While the model is working a message is steering, which needs deliverAs.
+							if (ctx.isIdle()) pi.sendUserMessage(prompt);
+							else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+						},
+					},
+				}));
+			},
+		});
+
+		// Borrowed from oh-my-pi: a side question on the cheap rung, answered in an
+		// overlay and never added to the conversation, so it costs no context.
+		pi.registerCommand("btw", {
+			description: "/btw <question>: a side answer on the cheapest rung, not added to the conversation",
+			handler: async (args, ctx) => {
+				const question = args.trim();
+				if (!question) {
+					ctx.ui.notify("usage: /btw <question>", "warning");
+					return;
+				}
+				const easy = deps.routing?.pool.easy;
+				const model = (easy && ctx.modelRegistry.find("orq", easy)) ?? (ctx.model?.provider === "orq" && ctx.model.id !== "auto" ? ctx.model : undefined);
+				if (!model) {
+					ctx.ui.notify("No model for /btw.", "warning");
+					return;
+				}
+				let live: Panel | undefined;
+				const title = `btw · ${shortModel(model.id)} · not added to the conversation`;
+				const shown = panel(ctx, { title, rows: ["…"], hint: "esc close" }, "70%", (p) => (live = p));
+				try {
+					const stream = ctx.modelRegistry.streamSimple(
+						model,
+						{ systemPrompt: "Answer the question briefly and directly, in plain prose. You are orqi, the orq.ai assistant.", messages: [{ role: "user", content: question, timestamp: Date.now() }] },
+						{ reasoning: "low" } as any,
+					);
+					let text = "";
+					for await (const event of stream as AsyncIterable<any>) {
+						if (event.type === "text_delta") {
+							text += event.delta;
+							live?.update({ title, rows: text.split("\n"), hint: "esc close" });
+						}
+					}
+					const result = await stream.result();
+					const cost = result.usage?.cost?.total;
+					live?.update({ title, rows: (text || result.errorMessage || "(no answer)").split("\n"), hint: `${cost ? `${dollars(cost)} · ` : ""}esc close` });
+				} catch (error) {
+					live?.update({ title, rows: [`failed: ${error instanceof Error ? error.message : error}`], hint: "esc close" });
+				}
 				await shown;
 			},
 		});
