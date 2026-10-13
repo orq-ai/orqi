@@ -62,7 +62,8 @@ export const DOOR_QUESTION = {
 		"Classify whether doing what this request asks can be undone. A question about an action, or a request to read, list, explain or compare, changes nothing.",
 	criteria: {
 		benign: "Changes no state: reads, lists, searches, views, explains or compares, or asks which tool would do something.",
-		two_way: "Changes state that can be undone: creates or updates an agent, deployment, prompt, dataset, evaluator or experiment, or edits a configuration.",
+		two_way:
+			"Changes state that can be undone: creates or updates an agent, deployment, prompt, dataset, evaluator or experiment, or edits a configuration.",
 		one_way:
 			"Changes state that cannot be undone: deletes or overwrites a resource, datapoints or a dataset, runs an experiment with auto_run, invalidates evaluator history, sends feedback or a message, publishes, or spends money at scale.",
 	},
@@ -82,7 +83,13 @@ export function fromDecisions(body: any, model: string): ClassifierResult {
 	const answers: ClassifierResult["answers"] = {};
 	for (const [key, answer] of Object.entries<any>(body?.answers ?? {})) {
 		if (answer?.type === "noul") answers[key] = { type: "bool", probability: Number(answer.noul ?? answer.probability ?? 0) };
-		else if (answer?.type === "choice") answers[key] = { type: "choice", choice: answer.choice, probabilities: answer.probabilities ?? {}, confidence: answer.confidence ?? 0 };
+		else if (answer?.type === "choice")
+			answers[key] = {
+				type: "choice",
+				choice: answer.choice,
+				probabilities: answer.probabilities ?? {},
+				confidence: answer.confidence ?? 0,
+			};
 		else if (answer?.type === "score") answers[key] = { type: "score", score: answer.score, confidence: answer.confidence ?? 0 };
 	}
 	const usage = body?.usage;
@@ -151,8 +158,11 @@ export function decisionsProvider(classifiers: ModelInfo[]) {
 		})),
 		classifiers: {
 			[DECISIONS_API]: {
-				classify: (model: ClassifierModel<any>, context: ClassifierContext, options?: { apiKey?: string; signal?: AbortSignal; headers?: Record<string, string> }) =>
-					classifyWithOrq(model.id, context, options ?? {}),
+				classify: (
+					model: ClassifierModel<any>,
+					context: ClassifierContext,
+					options?: { apiKey?: string; signal?: AbortSignal; headers?: Record<string, string> },
+				) => classifyWithOrq(model.id, context, options ?? {}),
 			},
 		},
 	};
@@ -216,8 +226,12 @@ export function floorOf(text: string): string | undefined {
 	const t = text.toLowerCase();
 	if (/\b(delete|remove|drop|purge|wipe|destroy)\b/.test(t)) return "destructive request";
 	if (/\bauto_run\b/.test(t)) return "auto_run experiment";
-	if (/\b(update|change|modify|edit|rewrite|fix|replace|tune)\b.*\b(evaluators?|evals?|judges?|guardrails?)\b/.test(t)) return "evaluator mutation";
-	if (/\b(update|change|modify|edit|rewrite|fix|replace|tune)\b.*\b(agents?|deployments?|prompts?|knowledge bases?|kb|instructions)\b/.test(t)) return "agent mutation";
+	if (/\b(update|change|modify|edit|rewrite|fix|replace|tune)\b.*\b(evaluators?|evals?|judges?|guardrails?)\b/.test(t))
+		return "evaluator mutation";
+	if (
+		/\b(update|change|modify|edit|rewrite|fix|replace|tune)\b.*\b(agents?|deployments?|prompts?|knowledge bases?|kb|instructions)\b/.test(t)
+	)
+		return "agent mutation";
 	return undefined;
 }
 
@@ -353,7 +367,9 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 		refresh: (next) => {
 			const classifiers = next.filter((model) => model.kind === "classifier");
 			routing.pool = routePool(next, base);
-			routing.classifier = process.env.ORQI_ROUTE_CLASSIFIER ?? (classifiers.some((model) => model.id === DEFAULT_CLASSIFIER) ? DEFAULT_CLASSIFIER : classifiers[0]?.id);
+			routing.classifier =
+				process.env.ORQI_ROUTE_CLASSIFIER ??
+				(classifiers.some((model) => model.id === DEFAULT_CLASSIFIER) ? DEFAULT_CLASSIFIER : classifiers[0]?.id);
 			routing.unavailable = undefined;
 			if (classifiers.length) runtime.registerProvider(DECISIONS_PROVIDER, decisionsProvider(classifiers));
 		},
@@ -373,7 +389,8 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 			const state = request.state as RouteState | undefined;
 			const text = lastUserText(request.messages);
 			// Switched to orq/auto mid-turn: stay on whatever answered last.
-			if (request.reason === "continuation" && !state && request.previous) return { model: request.previous.model, thinkingLevel: request.thinkingLevel };
+			if (request.reason === "continuation" && !state && request.previous)
+				return { model: request.previous.model, thinkingLevel: request.thinkingLevel };
 			let classified: PolicyInput["classified"];
 			let door: { door: Door; p: number } | undefined;
 			let cost: number | undefined;
@@ -391,21 +408,38 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 							{ signal: withTimeout(request.signal, CLASSIFY_TIMEOUT_MS) },
 						);
 						const answer = result.answers.difficulty;
-						classified = answer?.type === "choice" ? (answer.probabilities as Record<Tier, number>) : { error: "classifier gave no difficulty" };
+						classified =
+							answer?.type === "choice" ? (answer.probabilities as Record<Tier, number>) : { error: "classifier gave no difficulty" };
 						const doorAnswer = result.answers.door;
 						if (doorAnswer?.type === "choice" && doorAnswer.choice in DOOR_QUESTION.criteria) {
-							door = { door: doorAnswer.choice as Door, p: Number(doorAnswer.probabilities?.[doorAnswer.choice] ?? doorAnswer.confidence ?? 0) };
+							door = {
+								door: doorAnswer.choice as Door,
+								p: Number(doorAnswer.probabilities?.[doorAnswer.choice] ?? doorAnswer.confidence ?? 0),
+							};
 						}
 						cost = result.usage?.cost.total;
 					} catch (error) {
 						if (error instanceof ClassifyForbidden) routing.unavailable = error.message;
 						const timedOut = error instanceof Error && (error.name === "TimeoutError" || /timed? ?out/i.test(error.message));
-						classified = { error: timedOut ? `classifier timed out after ${CLASSIFY_TIMEOUT_MS / 1000} s` : error instanceof Error ? error.message.slice(0, 80) : String(error) };
+						classified = {
+							error: timedOut
+								? `classifier timed out after ${CLASSIFY_TIMEOUT_MS / 1000} s`
+								: error instanceof Error
+									? error.message.slice(0, 80)
+									: String(error),
+						};
 					}
 					latencyMs = Date.now() - started;
 				}
 			}
-			const decision = policy({ reason: request.reason, text, state, failedError: request.failed?.message?.errorMessage, classified, door: door?.door });
+			const decision = policy({
+				reason: request.reason,
+				text,
+				state,
+				failedError: request.failed?.message?.errorMessage,
+				classified,
+				door: door?.door,
+			});
 			const model = runtime.getModel("orq", pool()[decision.tier]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
 			if (!model) throw new Error(`orq/auto: no model for the ${decision.tier} rung (${pool()[decision.tier]})`);
 			const changed = request.reason === "user" || (request.reason === "retry" && decision.arrow);

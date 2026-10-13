@@ -1,31 +1,34 @@
 {
-  "name": "orqi",
-  "version": "0.2.0",
-  "private": true,
-  "type": "module",
-  "description": "orqi - the orq.ai helper agent CLI: pi coding agent with orq MCP tools and skills built in",
-  "bin": {
-    "orqi": "./src/main.ts"
-  },
-  "scripts": {
-    "start": "bun src/main.ts",
-    "typecheck": "bun run assets && tsc --noEmit",
-    "test": "bun test",
-    "assets": "bun build.ts",
-    "vendor": "bun vendor.ts",
-    "build": "bun run assets && bun build --compile --outfile orqi src/main.ts",
-    "dist": "bun dist.ts"
-  },
-  "dependencies": {
-    "@earendil-works/pi-ai": "^1.2.0",
-    "@earendil-works/pi-coding-agent": "^1.2.0",
-    "@earendil-works/pi-tui": "^1.2.0",
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "yaml": "^2.9.1"
-  },
-  "devDependencies": {
-    "@types/bun": "^1.4.2",
-    "@types/node": "^26.6.5",
-    "typescript": "^7.0.2"
-  }
+	"name": "orqi",
+	"version": "0.2.0",
+	"private": true,
+	"type": "module",
+	"description": "orqi - the orq.ai helper agent CLI: pi coding agent with orq MCP tools and skills built in",
+	"bin": {
+		"orqi": "./src/main.ts"
+	},
+	"scripts": {
+		"start": "bun src/main.ts",
+		"typecheck": "bun run assets && tsc --noEmit",
+		"test": "bun test",
+		"assets": "bun build.ts",
+		"vendor": "bun vendor.ts",
+		"build": "bun run assets && bun build --compile --outfile orqi src/main.ts",
+		"dist": "bun dist.ts",
+		"format": "biome format --write",
+		"format:check": "biome format"
+	},
+	"dependencies": {
+		"@earendil-works/pi-ai": "^1.2.0",
+		"@earendil-works/pi-coding-agent": "^1.2.0",
+		"@earendil-works/pi-tui": "^1.2.0",
+		"@modelcontextprotocol/sdk": "^1.32.1",
+		"yaml": "^2.9.1"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.4.2",
+		"@types/node": "^26.6.5",
+		"typescript": "^7.0.2",
+		"@biomejs/biome": "2.5.15"
+	}
 }

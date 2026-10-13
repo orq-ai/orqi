@@ -27,7 +27,16 @@ import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION
 import { orqOAuth, refreshStoredSignIn } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./commands.ts";
-import { callOrqTool, CredentialsRejected, firstLine, hintsSection, orqMcp, pickCredential, type Reconnected, type Rejection } from "./mcp.ts";
+import {
+	callOrqTool,
+	CredentialsRejected,
+	firstLine,
+	hintsSection,
+	orqMcp,
+	pickCredential,
+	type Reconnected,
+	type Rejection,
+} from "./mcp.ts";
 import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, talkable } from "./model.ts";
 import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
@@ -189,7 +198,9 @@ const customTools = [
 		// Under orq/auto a subagent runs on its type's rung (investigator and
 		// docs easy, analyst medium); otherwise on whatever the parent runs.
 		modelFor: (agent, parent) =>
-			parent?.provider === "orq" && parent.id === "auto" ? (modelRuntime.getModel("orq", routing.pool[agent.rung]) ?? model) : (parent ?? model),
+			parent?.provider === "orq" && parent.id === "auto"
+				? (modelRuntime.getModel("orq", routing.pool[agent.rung]) ?? model)
+				: (parent ?? model),
 	}),
 ];
 
@@ -234,7 +245,10 @@ const commands = orqCommands(
 	header,
 	AGENT_DIR,
 	{
-		rejections: candidates.length === 0 ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : bootRejections,
+		rejections:
+			candidates.length === 0
+				? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }]
+				: bootRejections,
 		candidates,
 		welcome,
 		loginRefused: Boolean(loginRefused),

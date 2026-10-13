@@ -1,0 +1,48 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		// Only code orqi owns. skills/ is replaced wholesale by `bun run vendor` and checked
+		// against skills.lock.json; src/assets.generated.ts is written by build.ts; fixtures
+		// are recorded server payloads. Markdown, themes and the lockfiles are left alone.
+		"includes": ["src/**/*.ts", "*.ts", "npm/**/*.js", "npm/**/*.mjs", "!src/assets.generated.ts", "!src/fixtures"]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		// 140, not the default 80: the code was written wide, and 140 touches about a third
+		// fewer lines than 120 would while staying readable in a split editor.
+		"lineWidth": 140
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "always"
+		}
+	},
+	"linter": {
+		"enabled": false
+	},
+	"assist": {
+		"enabled": false
+	},
+	"overrides": [
+		{
+			// The npm launcher and stager are plain Node scripts in their own house style.
+			"includes": ["npm/**"],
+			"formatter": {
+				"indentStyle": "space",
+				"indentWidth": 2
+			},
+			"javascript": {
+				"formatter": {
+					"quoteStyle": "single"
+				}
+			}
+		}
+	]
+}

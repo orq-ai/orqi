@@ -17,7 +17,19 @@ import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { apiBaseUrl, runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
 import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
-import { contextLines, contextUsed, sectionLines, MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, signalLines, SPINNER, type ContextSplit } from "./minimap.ts";
+import {
+	contextLines,
+	contextUsed,
+	sectionLines,
+	MINIMAP_MIN_COLS,
+	MINIMAP_WIDTH,
+	minimapRows,
+	minimapSummary,
+	peekLines,
+	signalLines,
+	SPINNER,
+	type ContextSplit,
+} from "./minimap.ts";
 import { DEFAULT_MODEL, talkable, type ModelInfo } from "./model.ts";
 import { bareName, hintsSection, schemaLines, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -58,18 +70,27 @@ export const selectionName = (model: { provider: string; id: string } | undefine
  * The route entry above a turn:
  *   route › medium  ▁▅▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003
  */
-export function routeLine(decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP">): string {
+export function routeLine(
+	decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP">,
+): string {
 	const tier = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(8);
 	const p = decision.probabilities;
 	const short = (n: number) => n.toFixed(2).replace(/^0/, "");
 	// A door that sent the turn to hard reads with its confidence: `door: one_way .94`.
-	if (decision.door && decision.door !== "benign" && decision.doorP !== undefined) decision = { ...decision, why: `door: ${decision.door} ${short(decision.doorP)}` };
+	if (decision.door && decision.door !== "benign" && decision.doorP !== undefined)
+		decision = { ...decision, why: `door: ${decision.door} ${short(decision.doorP)}` };
 	const middle = p
 		? `${TIERS.map((t) => BARS[Math.min(7, Math.floor((p[t] ?? 0) * 8))]).join("")}   ${TIERS.map((t) => `${t} ${short(p[t] ?? 0)}`).join(" · ")}`
 		: (decision.why ?? "");
 	const why = p && decision.why ? `   ${decision.why}` : "";
-	const classifier = decision.classifier ? decision.classifier.split("/").at(-1)!.replace(/-latest$/, "") : "";
-	const timing = decision.latencyMs !== undefined ? `   ${classifier} ${(decision.latencyMs / 1000).toFixed(1)} s ${dollars(decision.cost ?? 0)}` : "";
+	const classifier = decision.classifier
+		? decision.classifier
+				.split("/")
+				.at(-1)!
+				.replace(/-latest$/, "")
+		: "";
+	const timing =
+		decision.latencyMs !== undefined ? `   ${classifier} ${(decision.latencyMs / 1000).toFixed(1)} s ${dollars(decision.cost ?? 0)}` : "";
 	return `route › ${tier} ${middle}${why}   → ${shortModel(decision.model)}${timing}`;
 }
 
@@ -94,7 +115,10 @@ export function repoOf(remote: string): string {
 			return "";
 		}
 	}
-	const parts = path.replace(/\.git$/, "").split("/").filter(Boolean);
+	const parts = path
+		.replace(/\.git$/, "")
+		.split("/")
+		.filter(Boolean);
 	return parts.length >= 2 ? parts.slice(-2).join("/") : (parts[0] ?? "");
 }
 
@@ -137,7 +161,8 @@ const looksLikeKey = (workspace: string | undefined): workspace is string => Boo
 export function repriced(rows: Map<string, StepUsage & { calls: number }>, price: ModelInfo["cost"]): number {
 	if (!price) return 0;
 	let total = 0;
-	for (const row of rows.values()) total += (row.input * price.input + row.output * price.output + row.cacheRead * price.cacheRead) / 1_000_000;
+	for (const row of rows.values())
+		total += (row.input * price.input + row.output * price.output + row.cacheRead * price.cacheRead) / 1_000_000;
 	return total;
 }
 
@@ -147,24 +172,32 @@ export function costLines(rows: Map<string, StepUsage & { calls: number }>, turn
 	const rule = "─".repeat(66);
 	const lines = [`session cost${dollars(total).padStart(42)}   (${turns} ${turns === 1 ? "turn" : "turns"})`, rule];
 	for (const [model, row] of [...rows].sort((a, b) => b[1].cost - a[1].cost)) {
-		const toks = row.input + row.cacheRead + row.output ? `↑${tokens(row.input + row.cacheRead)}${row.output ? ` ↓${tokens(row.output)}` : ""}` : "";
-		lines.push(`${model.padEnd(28).slice(0, 28)} ${String(row.calls).padStart(3)} calls  ${toks.padEnd(16)} ${dollars(row.cost).padStart(9)}`);
+		const toks =
+			row.input + row.cacheRead + row.output ? `↑${tokens(row.input + row.cacheRead)}${row.output ? ` ↓${tokens(row.output)}` : ""}` : "";
+		lines.push(
+			`${model.padEnd(28).slice(0, 28)} ${String(row.calls).padStart(3)} calls  ${toks.padEnd(16)} ${dollars(row.cost).padStart(9)}`,
+		);
 	}
 	if (rows.size === 0) lines.push("no model calls yet");
 	if (top?.cost && total > 0) {
 		const always = repriced(rows, top.cost);
 		const delta = always > 0 ? Math.round(((total - always) / always) * 100) : 0;
-		lines.push(rule, `always ${shortModel(top.id)} would have cost${dollars(always).padStart(Math.max(1, 34 - shortModel(top.id).length))}   (${delta > 0 ? "+" : ""}${delta}%)`);
+		lines.push(
+			rule,
+			`always ${shortModel(top.id)} would have cost${dollars(always).padStart(Math.max(1, 34 - shortModel(top.id).length))}   (${delta > 0 ? "+" : ""}${delta}%)`,
+		);
 	}
 	return lines;
 }
 
 /** The most capable chat model the workspace offers: the "always" baseline for /cost. */
 export function topModel(catalogue: ModelInfo[]): ModelInfo | undefined {
-	return catalogue
-		// Not a smart router, and not a regional copy of a model already listed.
-		.filter((model) => !model.kind && model.cost && !model.id.includes("@") && !/\/(eu|us|global|apac)\./.test(model.id))
-		.sort((a, b) => (b.intelligence ?? 0) - (a.intelligence ?? 0) || (b.cost?.output ?? 0) - (a.cost?.output ?? 0))[0];
+	return (
+		catalogue
+			// Not a smart router, and not a regional copy of a model already listed.
+			.filter((model) => !model.kind && model.cost && !model.id.includes("@") && !/\/(eu|us|global|apac)\./.test(model.id))
+			.sort((a, b) => (b.intelligence ?? 0) - (a.intelligence ?? 0) || (b.cost?.output ?? 0) - (a.cost?.output ?? 0))[0]
+	);
 }
 
 /** A `<name>…</name>` section of pi's system prompt, or "". */
@@ -207,7 +240,9 @@ export function contextSplit(input: {
 		tools: live.reduce((n, tool) => n + schema(tool), 0),
 		skills: tok(skills),
 	};
-	const last = [...input.steps].reverse().find((step) => step.role === "assistant" && step.usage && step.usage.input + step.usage.cacheRead > 0);
+	const last = [...input.steps]
+		.reverse()
+		.find((step) => step.role === "assistant" && step.usage && step.usage.input + step.usage.cacheRead > 0);
 	return {
 		...fixed,
 		hidden: hidden.reduce((n, tool) => n + schema(tool), 0),
@@ -237,7 +272,8 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 	const num = (n: number) => n.toLocaleString("en-US");
 	const share = (n: number) => `${used ? Math.round((n / used) * 100) : 0}%`;
 	const c = split.counts;
-	const row = (name: string, what: string, n: number, cached: boolean) => `${name.padEnd(16)}${what.padEnd(36)}${num(n).padStart(8)}${share(n).padStart(7)}${(cached ? "✓" : "✗").padStart(6)}`;
+	const row = (name: string, what: string, n: number, cached: boolean) =>
+		`${name.padEnd(16)}${what.padEnd(36)}${num(n).padStart(8)}${share(n).padStart(7)}${(cached ? "✓" : "✗").padStart(6)}`;
 	const parts = [
 		{ label: "prompt", n: split.prompt + split.hints + split.project, cached: true },
 		{ label: "tools", n: split.tools, cached: true },
@@ -249,10 +285,20 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 	// Rounding leaves the bar a cell short or long: the largest part absorbs it.
 	if (used) cells[cells.indexOf(Math.max(...cells))]! += barWidth - cells.reduce((a, b) => a + b, 0);
 	const bar = parts.map((part, i) => (part.cached ? "▇" : "▁").repeat(cells[i]!)).join("");
-	const legend = (cached: boolean) => parts.filter((part) => part.cached === cached && part.n).map((part) => `${part.label} ${tokens(part.n)}`).join(" · ");
+	const legend = (cached: boolean) =>
+		parts
+			.filter((part) => part.cached === cached && part.n)
+			.map((part) => `${part.label} ${tokens(part.n)}`)
+			.join(" · ");
 	const lever = (name: string, what: string, effect = "") => `· ${name.padEnd(19)}${what.padEnd(48)}${effect}`.trimEnd();
 	return [
-		...(split.agent ? [`agent mode: ${split.agent}'s instructions and tools run on orq.ai; only the messages go from here.`, "/agent off returns to orqi.", ""] : []),
+		...(split.agent
+			? [
+					`agent mode: ${split.agent}'s instructions and tools run on orq.ai; only the messages go from here.`,
+					"/agent off returns to orqi.",
+					"",
+				]
+			: []),
 		`${"what the model reads on every turn".padEnd(52)}${"tokens".padStart(8)}${"share".padStart(7)}${"cache".padStart(6)}`,
 		row("system prompt", "orqi-system-prompt.txt", split.prompt, true),
 		...(split.hints ? [row("  tool hints", `TOOL_HINTS, ${c.hinted} tool${c.hinted === 1 ? "" : "s"}`, split.hints, true)] : []),
@@ -260,7 +306,12 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 		row("tool schemas", `${c.orq} orq tools · ${c.builtin} built-in`, split.tools, true),
 		...(c.hidden.length ? [`  hidden: ${c.hidden.join(", ")}  saves ${num(split.hidden)}`] : []),
 		row("skills index", `${c.skills} skills, name + description`, split.skills, true),
-		row("messages", `${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.results} tool result${c.results === 1 ? "" : "s"}`, split.messages, false),
+		row(
+			"messages",
+			`${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.results} tool result${c.results === 1 ? "" : "s"}`,
+			split.messages,
+			false,
+		),
 		"",
 		bar,
 		`▇ cached  ${legend(true)}${split.messages ? `   ▁ ${legend(false)}` : ""}`,
@@ -270,7 +321,9 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 		...(c.hidden.length ? [lever("ORQI_ALL_TOOLS=1", `show the ${c.hidden.length} hidden tools`, `→ +${tokens(split.hidden)}`)] : []),
 		lever("/compact", "summarise the messages into one"),
 		...(split.project ? [lever("another directory", "the project files ride along from the cwd", `→ -${tokens(split.project)}`)] : []),
-		...(split.cache !== undefined ? [lever(`cache hit ${Math.round(split.cache * 100)}%`, "the prefix is cached; routing keeps it (/route explain)")] : []),
+		...(split.cache !== undefined
+			? [lever(`cache hit ${Math.round(split.cache * 100)}%`, "the prefix is cached; routing keeps it (/route explain)")]
+			: []),
 	];
 }
 
@@ -284,10 +337,15 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
  *     context   peak 29k of 1.1M · cache hit 94%
  *     thread    https://my.orq.ai/acme/traces/threads?id=…
  */
-export function exitSummary(trajectory: Trajectory, meta: { workspace?: string; startedAt: number; now?: number; thread: string }): string[] {
+export function exitSummary(
+	trajectory: Trajectory,
+	meta: { workspace?: string; startedAt: number; now?: number; thread: string },
+): string[] {
 	const minutes = Math.round(((meta.now ?? Date.now()) - meta.startedAt) / 60_000);
 	const turns = `${trajectory.turn} turn${trajectory.turn === 1 ? "" : "s"}`;
-	const head = ["orqi", meta.workspace, minutes < 1 ? "<1 min" : `${minutes} min`, turns, dollars(trajectory.totals().cost)].filter(Boolean).join(" · ");
+	const head = ["orqi", meta.workspace, minutes < 1 ? "<1 min" : `${minutes} min`, turns, dollars(trajectory.totals().cost)]
+		.filter(Boolean)
+		.join(" · ");
 	const rows = [...trajectory.byModel()].sort((a, b) => b[1].cost - a[1].cost);
 	const tools = trajectory.steps.filter((step) => step.role === "tool");
 	const byTool = new Map<string, { n: number; verdicts: Set<string> }>();
@@ -300,16 +358,38 @@ export function exitSummary(trajectory: Trajectory, meta: { workspace?: string; 
 	const change = (step: Step) => `${step.label}${argSummary(step.args, 1) ? ` ${argSummary(step.args, 1)}` : ""}`;
 	const oneWay = tools.filter((step) => step.door === "one_way" && step.gate === "allowed" && step.status === "ok");
 	const twoWay = tools.filter((step) => step.door === "two_way" && step.status === "ok");
-	const peak = trajectory.samples.reduce<(typeof trajectory.samples)[number] | undefined>((max, sample) => (!max || sample.used > max.used ? sample : max), undefined);
+	const peak = trajectory.samples.reduce<(typeof trajectory.samples)[number] | undefined>(
+		(max, sample) => (!max || sample.used > max.used ? sample : max),
+		undefined,
+	);
 	const totals = trajectory.totals();
 	const cache = totals.input + totals.cacheRead ? Math.round((totals.cacheRead / (totals.input + totals.cacheRead)) * 100) : undefined;
 	const row = (name: string, text: string) => `  ${name.padEnd(10)}${text}`;
 	return [
 		head,
-		...(rows.length ? [row("models", rows.map(([model, usage]) => `${shortModel(model)} ×${usage.calls}  ${dollars(usage.cost)}`).join("  ·  "))] : []),
-		row("tools", tools.length ? `${tools.length} call${tools.length === 1 ? "" : "s"} · ${[...byTool].map(([name, { n, verdicts }]) => `${name} ×${n}${verdicts.size ? ` (${[...verdicts].join(", ")})` : ""}`).join(", ")}` : "none"),
-		row("changes", oneWay.length || twoWay.length ? [oneWay.length ? `${oneWay.length} one-way  ${oneWay.map(change).join(", ")}` : "", twoWay.length ? `${twoWay.length} two-way  ${twoWay.map(change).join(", ")}` : ""].filter(Boolean).join("  ·  ") : "none"),
-		...(peak ? [row("context", `peak ${tokens(peak.used)} of ${tokens(peak.window)}${cache !== undefined ? ` · cache hit ${cache}%` : ""}`)] : []),
+		...(rows.length
+			? [row("models", rows.map(([model, usage]) => `${shortModel(model)} ×${usage.calls}  ${dollars(usage.cost)}`).join("  ·  "))]
+			: []),
+		row(
+			"tools",
+			tools.length
+				? `${tools.length} call${tools.length === 1 ? "" : "s"} · ${[...byTool].map(([name, { n, verdicts }]) => `${name} ×${n}${verdicts.size ? ` (${[...verdicts].join(", ")})` : ""}`).join(", ")}`
+				: "none",
+		),
+		row(
+			"changes",
+			oneWay.length || twoWay.length
+				? [
+						oneWay.length ? `${oneWay.length} one-way  ${oneWay.map(change).join(", ")}` : "",
+						twoWay.length ? `${twoWay.length} two-way  ${twoWay.map(change).join(", ")}` : "",
+					]
+						.filter(Boolean)
+						.join("  ·  ")
+				: "none",
+		),
+		...(peak
+			? [row("context", `peak ${tokens(peak.used)} of ${tokens(peak.window)}${cache !== undefined ? ` · cache hit ${cache}%` : ""}`)]
+			: []),
 		row("thread", meta.thread),
 	];
 }
@@ -340,7 +420,11 @@ export function orqHarness(deps: HarnessDeps) {
 			const theme = ctx.ui.theme;
 			ctx.ui.setWidget(
 				"orqi-agent",
-				key ? [`${theme.fg("warning", `▌ talking to agent ${key}`)}${theme.fg("dim", " · its own prompt and tools · /agent off returns to orqi")}`] : undefined,
+				key
+					? [
+							`${theme.fg("warning", `▌ talking to agent ${key}`)}${theme.fg("dim", " · its own prompt and tools · /agent off returns to orqi")}`,
+						]
+					: undefined,
 			);
 		};
 		let reserveTokens = 16_384;
@@ -422,7 +506,12 @@ export function orqHarness(deps: HarnessDeps) {
 			return { host, workspace: resolvedWorkspace };
 		};
 
-		const panel = (ctx: ExtensionContext, spec: PanelSpec | ((close: () => void) => PanelSpec), width: number | string = "80%", onPanel?: (live: Panel) => void) => {
+		const panel = (
+			ctx: ExtensionContext,
+			spec: PanelSpec | ((close: () => void) => PanelSpec),
+			width: number | string = "80%",
+			onPanel?: (live: Panel) => void,
+		) => {
 			if (ctx.mode !== "tui") {
 				const resolved = typeof spec === "function" ? spec(() => {}) : spec;
 				ctx.ui.notify([resolved.title, ...resolved.rows].join("\n"));
@@ -431,11 +520,19 @@ export function orqHarness(deps: HarnessDeps) {
 			return ctx.ui.custom<void>(
 				(tui, theme, _keys, done) => {
 					const resolved = typeof spec === "function" ? spec(() => done()) : spec;
-					const live = new Panel(resolved, panelPaint(theme), () => done(), () => tui.requestRender());
+					const live = new Panel(
+						resolved,
+						panelPaint(theme),
+						() => done(),
+						() => tui.requestRender(),
+					);
 					onPanel?.(live);
 					return live;
 				},
-				{ overlay: true, overlayOptions: { anchor: "center", width: typeof width === "number" ? width : (width as `${number}%`), maxHeight: "85%" } },
+				{
+					overlay: true,
+					overlayOptions: { anchor: "center", width: typeof width === "number" ? width : (width as `${number}%`), maxHeight: "85%" },
+				},
 			);
 		};
 
@@ -468,29 +565,31 @@ export function orqHarness(deps: HarnessDeps) {
 					},
 				};
 				function footerFrame(width: number): string {
-						const totals = trajectory.totals();
-						const lastAnswer = [...trajectory.steps].reverse().find((step) => step.role === "assistant" && step.model);
-						const sample = trajectory.samples.at(-1);
-						const reserve = reserveTokens;
-						const physical = lastAnswer?.model;
-						return footerLine(
-								{
-									// The workspace lives in the fixed header now; the footer keeps the orq.ai mark.
-									workspace: headerShown ? undefined : footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
-									selection: selectionName(ctxRef?.model),
-									physical: physical && physical !== ctxRef?.model?.id ? physical : undefined,
-									input: totals.input + totals.cacheRead,
-									output: totals.output,
-									cost: totals.cost,
-									context: sample ? { used: sample.used, window: sample.window, threshold: (sample.window - reserve) / sample.window } : undefined,
-									samples: trajectory.samples,
-									tools: isAgentModel(ctxRef?.model?.id) ? 0 : deps.toolCount(),
-									minimapHidden: !minimapVisible(),
-									branch: footerData.getGitBranch(),
-								},
-								width,
-								paint,
-							);
+					const totals = trajectory.totals();
+					const lastAnswer = [...trajectory.steps].reverse().find((step) => step.role === "assistant" && step.model);
+					const sample = trajectory.samples.at(-1);
+					const reserve = reserveTokens;
+					const physical = lastAnswer?.model;
+					return footerLine(
+						{
+							// The workspace lives in the fixed header now; the footer keeps the orq.ai mark.
+							workspace: headerShown ? undefined : footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
+							selection: selectionName(ctxRef?.model),
+							physical: physical && physical !== ctxRef?.model?.id ? physical : undefined,
+							input: totals.input + totals.cacheRead,
+							output: totals.output,
+							cost: totals.cost,
+							context: sample
+								? { used: sample.used, window: sample.window, threshold: (sample.window - reserve) / sample.window }
+								: undefined,
+							samples: trajectory.samples,
+							tools: isAgentModel(ctxRef?.model?.id) ? 0 : deps.toolCount(),
+							minimapHidden: !minimapVisible(),
+							branch: footerData.getGitBranch(),
+						},
+						width,
+						paint,
+					);
 				}
 			});
 		};
@@ -535,7 +634,9 @@ export function orqHarness(deps: HarnessDeps) {
 					error: (text: string) => theme.fg("error", text),
 				};
 				const found = signals(trajectory.steps, trajectory.turn);
-				const teach = teachOn ? [sectionLines("teach", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")] : [];
+				const teach = teachOn
+					? [sectionLines("teach", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")]
+					: [];
 				// Under the trajectory: what needs attention, then where the context goes, then the lesson.
 				const sections = [signalLines(found, inner), ...(split ? [contextLines(split, inner)] : []), ...teach];
 				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
@@ -546,7 +647,13 @@ export function orqHarness(deps: HarnessDeps) {
 				const paintSection = (lines: string[]) => [
 					blank,
 					side(theme.fg("dim", lines[0]!)),
-					...lines.slice(1).map((line, i) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : lines === teach[0] && i === 0 && card ? "accent" : "muted", line))),
+					...lines
+						.slice(1)
+						.map((line, i) =>
+							side(
+								theme.fg(line.trimStart().startsWith("⚠") ? "warning" : lines === teach[0] && i === 0 && card ? "accent" : "muted", line),
+							),
+						),
 				];
 				const title = " inspector ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
@@ -573,7 +680,10 @@ export function orqHarness(deps: HarnessDeps) {
 			const status = statusOf(WORKSPACE_STATUS) ?? "";
 			const model = ctxRef?.model;
 			const agent = isAgentModel(model?.id)
-				? (deps.catalogue().find((m) => m.id === model!.id)?.name?.replace(/ \(agent\)$/, "") ?? model!.id.slice(6))
+				? (deps
+						.catalogue()
+						.find((m) => m.id === model!.id)
+						?.name?.replace(/ \(agent\)$/, "") ?? model!.id.slice(6))
 				: undefined;
 			const thread = ctxRef?.sessionManager.getSessionId();
 			return {
@@ -619,10 +729,18 @@ export function orqHarness(deps: HarnessDeps) {
 			if (host.layoutRoot && typeof host.setLayoutRoot === "function") {
 				// A previous session or /reload left its own wrapper: wrap pi's root, not that.
 				const inner = host.layoutRoot[SIDE] ?? host.layoutRoot;
-				const panelEntry = { component: minimapView(theme), basis: MINIMAP_WIDTH, shrink: 0, visible: (viewport: { width: number }) => minimapVisible(viewport.width) };
+				const panelEntry = {
+					component: minimapView(theme),
+					basis: MINIMAP_WIDTH,
+					shrink: 0,
+					visible: (viewport: { width: number }) => minimapVisible(viewport.width),
+				};
 				const body = new HStack([{ component: inner, grow: 1, shrink: 1, basis: 0 }, panelEntry]);
 				// The fixed header sits above both: who and where, while the footer says what and how much.
-				const wrapper = new VStack([{ component: headerView(theme as never), basis: 2, shrink: 0 }, { component: body, grow: 1, shrink: 1, basis: 0 }]) as VStack & { [SIDE]?: Component };
+				const wrapper = new VStack([
+					{ component: headerView(theme as never), basis: 2, shrink: 0 },
+					{ component: body, grow: 1, shrink: 1, basis: 0 },
+				]) as VStack & { [SIDE]?: Component };
 				wrapper[SIDE] = inner;
 				headerShown = true;
 				sideRoot = wrapper;
@@ -636,7 +754,13 @@ export function orqHarness(deps: HarnessDeps) {
 			if (overlay || ctx.mode !== "tui") return;
 			void ctx.ui.custom<void>((_tui, overlayTheme) => minimapView(overlayTheme), {
 				overlay: true,
-				overlayOptions: () => ({ anchor: "right-center", width: MINIMAP_WIDTH, margin: { top: 1, bottom: 3, right: 0, left: 0 }, visible: (cols: number) => minimapVisible(cols), nonCapturing: true }),
+				overlayOptions: () => ({
+					anchor: "right-center",
+					width: MINIMAP_WIDTH,
+					margin: { top: 1, bottom: 3, right: 0, left: 0 },
+					visible: (cols: number) => minimapVisible(cols),
+					nonCapturing: true,
+				}),
 				onHandle: (handle) => {
 					overlay = handle;
 				},
@@ -749,8 +873,14 @@ export function orqHarness(deps: HarnessDeps) {
 			if (ctx.mode !== "tui") return;
 			const loop = signals(trajectory.steps, trajectory.turn).loop;
 			const dim = (line: string) => ctx.ui.theme.fg("dim", line);
-			ctx.ui.setWidget("orqi-signals", loop && !panelShown() ? [ctx.ui.theme.fg("warning", `⚠ tool loop: ${loop.tool} ×${loop.count} same args · /panel for details`)] : undefined);
-			if (teachLine !== undefined || !teachOn || panelShown()) ctx.ui.setWidget("orqi-teach", teachLine && teachOn && !panelShown() ? [dim(teachLine)] : undefined);
+			ctx.ui.setWidget(
+				"orqi-signals",
+				loop && !panelShown()
+					? [ctx.ui.theme.fg("warning", `⚠ tool loop: ${loop.tool} ×${loop.count} same args · /panel for details`)]
+					: undefined,
+			);
+			if (teachLine !== undefined || !teachOn || panelShown())
+				ctx.ui.setWidget("orqi-teach", teachLine && teachOn && !panelShown() ? [dim(teachLine)] : undefined);
 		};
 
 		// The one-way gate. Registered here so its verdicts reach the trajectory;
@@ -786,7 +916,8 @@ export function orqHarness(deps: HarnessDeps) {
 			if (!isAgentModel(ctx.model?.id)) chatLevel = event.level;
 		});
 		pi.on("model_select", (event, ctx) => {
-			if (isAgentModel(event.model.id) && event.previousModel && !isAgentModel(event.previousModel.id)) returnTo = { provider: event.previousModel.provider, id: event.previousModel.id };
+			if (isAgentModel(event.model.id) && event.previousModel && !isAgentModel(event.previousModel.id))
+				returnTo = { provider: event.previousModel.provider, id: event.previousModel.id };
 			// Leaving agent mode gives the tools back now, not on the next turn, so the panel counts them,
 			// and the thinking level the agent model forced off: without it the chat model stops reasoning
 			// and the editor border takes thinkingOff's colour.
@@ -841,7 +972,8 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		pi.registerCommand("route", {
-			description: "orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route platform the workspace's smart routers",
+			description:
+				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route platform the workspace's smart routers",
 			handler: async (args, ctx) => {
 				const routing = deps.routing;
 				const arg = args.trim();
@@ -856,10 +988,16 @@ export function orqHarness(deps: HarnessDeps) {
 					let rows: string[] = [];
 					try {
 						const body = JSON.parse(listed.stdout);
-						rows = ((Array.isArray(body) ? body : body?.data) ?? []).map((r: any) => `  ${String(r.refId ?? r.key ?? r.name).padEnd(28)} ${String(r.profile ?? r.strategy ?? "").padEnd(10)} ${(r.models ?? []).map((m: any) => shortModel(typeof m === "string" ? m : (m.id ?? m.model ?? ""))).join(" · ")}`);
+						rows = ((Array.isArray(body) ? body : body?.data) ?? []).map(
+							(r: any) =>
+								`  ${String(r.refId ?? r.key ?? r.name).padEnd(28)} ${String(r.profile ?? r.strategy ?? "").padEnd(10)} ${(r.models ?? []).map((m: any) => shortModel(typeof m === "string" ? m : (m.id ?? m.model ?? ""))).join(" · ")}`,
+						);
 					} catch {
 						// 403 or an older CLI: the catalogue still names them.
-						rows = deps.catalogue().filter((m) => m.id.includes("@orq/")).map((m) => `  ${m.id}`);
+						rows = deps
+							.catalogue()
+							.filter((m) => m.id.includes("@orq/"))
+							.map((m) => `  ${m.id}`);
 						if (!listed.ok) rows.push(`  (orq smart-routers: ${listed.stderr.trim().split("\n")[0] ?? "failed"})`);
 					}
 					ctx.ui.notify(
@@ -911,7 +1049,11 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				teachOn = arg ? arg === "on" : !teachOn;
-				ctx.ui.notify(teachOn ? `Teach mode on: a card follows each answer, ${panelShown() ? "in the inspector" : "above the editor"}.` : "Teach mode off.");
+				ctx.ui.notify(
+					teachOn
+						? `Teach mode on: a card follows each answer, ${panelShown() ? "in the inspector" : "above the editor"}.`
+						: "Teach mode off.",
+				);
 				syncWidgets(ctx);
 				render();
 			},
@@ -936,7 +1078,11 @@ export function orqHarness(deps: HarnessDeps) {
 			description: "/trajectory [path]: write this session as a Harbor ATIF trajectory.json",
 			handler: async (args, ctx) => {
 				const target = resolve(args.trim() || "trajectory.json");
-				const atif = toAtif(trajectory.steps, { sessionId: ctx.sessionManager.getSessionId(), agentVersion: VERSION, model: ctx.model?.id });
+				const atif = toAtif(trajectory.steps, {
+					sessionId: ctx.sessionManager.getSessionId(),
+					agentVersion: VERSION,
+					model: ctx.model?.id,
+				});
 				writeFileSync(target, `${JSON.stringify(atif, null, 2)}\n`);
 				ctx.ui.notify(`Wrote ${trajectory.steps.length} steps to ${target} (ATIF v1.8)`);
 			},
@@ -951,16 +1097,30 @@ export function orqHarness(deps: HarnessDeps) {
 				const last = traces.at(-1);
 				const target =
 					what === "trace"
-						? last && { label: `trace ${shortId(last.traceId)}`, id: last.traceId, url: workspace && traceUrl(host, workspace, last.traceId, last.spanId) }
+						? last && {
+								label: `trace ${shortId(last.traceId)}`,
+								id: last.traceId,
+								url: workspace && traceUrl(host, workspace, last.traceId, last.spanId),
+							}
 						: what === "agent"
-							? isAgentModel(ctx.model?.id) && { label: `agent ${ctx.model!.id.slice(6)}`, id: ctx.model!.id, url: workspace && agentUrl(host, workspace, ctx.model!.id.slice(6)) }
+							? isAgentModel(ctx.model?.id) && {
+									label: `agent ${ctx.model!.id.slice(6)}`,
+									id: ctx.model!.id,
+									url: workspace && agentUrl(host, workspace, ctx.model!.id.slice(6)),
+								}
 							: { label: `thread ${shortId(threadId)}`, id: threadId, url: workspace && threadUrl(host, workspace, threadId) };
 				if (!target) {
-					ctx.ui.notify(what === "trace" ? "No trace yet: send a message first." : "Not talking to an agent: pick one with /agents.", "warning");
+					ctx.ui.notify(
+						what === "trace" ? "No trace yet: send a message first." : "Not talking to an agent: pick one with /agents.",
+						"warning",
+					);
 					return;
 				}
 				if (!target.url) {
-					ctx.ui.notify(`${target.label}: ${target.id}. The workspace key is unknown for this API key, so there is no link; set ORQI_WORKSPACE=<key>, or search for the id under Traces at ${host}.`, "warning");
+					ctx.ui.notify(
+						`${target.label}: ${target.id}. The workspace key is unknown for this API key, so there is no link; set ORQI_WORKSPACE=<key>, or search for the id under Traces at ${host}.`,
+						"warning",
+					);
 					return;
 				}
 				const opened = openUrl(target.url);
@@ -1000,18 +1160,32 @@ export function orqHarness(deps: HarnessDeps) {
 						c: () => {
 							const result = runOrq(["traces", "conversation", id, "-o", "json"]);
 							close();
-							void panel(ctx, { title: `conversation ${shortId(id)}`, rows: result.ok ? conversationLines(result.stdout) : [result.stderr.trim() || "no conversation"], hint: "esc close" });
+							void panel(ctx, {
+								title: `conversation ${shortId(id)}`,
+								rows: result.ok ? conversationLines(result.stdout) : [result.stderr.trim() || "no conversation"],
+								hint: "esc close",
+							});
 						},
 					},
 				});
 				let live: Panel | undefined;
 				let closeLive = () => {};
-				const shown = panel(ctx, (close) => ((closeLive = close), spec(close, ["reading spans…"])), "80%", (p) => (live = p));
+				const shown = panel(
+					ctx,
+					(close) => ((closeLive = close), spec(close, ["reading spans…"])),
+					"80%",
+					(p) => (live = p),
+				);
 				deps
 					.callTool("list_spans", { trace_id: id })
 					.then((listed) => {
 						const spans = listed.isError ? [] : (JSON.parse(listed.text)?.items ?? []);
-						live?.update(spec(closeLive, spans.length ? traceSummary(spans) : ["no spans yet: the gateway ingests traces a few seconds after the call"]));
+						live?.update(
+							spec(
+								closeLive,
+								spans.length ? traceSummary(spans) : ["no spans yet: the gateway ingests traces a few seconds after the call"],
+							),
+						);
 					})
 					.catch((error) => live?.update(spec(closeLive, [`spans unavailable: ${error instanceof Error ? error.message : error}`])));
 				await shown;
@@ -1050,7 +1224,9 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				const easy = deps.routing?.pool.easy;
-				const model = (easy && ctx.modelRegistry.find("orq", easy)) ?? (ctx.model?.provider === "orq" && ctx.model.id !== "auto" ? ctx.model : undefined);
+				const model =
+					(easy && ctx.modelRegistry.find("orq", easy)) ??
+					(ctx.model?.provider === "orq" && ctx.model.id !== "auto" ? ctx.model : undefined);
 				if (!model) {
 					ctx.ui.notify("No model for /btw.", "warning");
 					return;
@@ -1061,7 +1237,10 @@ export function orqHarness(deps: HarnessDeps) {
 				try {
 					const stream = ctx.modelRegistry.streamSimple(
 						model,
-						{ systemPrompt: "Answer the question briefly and directly, in plain prose. You are orqi, the orq.ai assistant.", messages: [{ role: "user", content: question, timestamp: Date.now() }] },
+						{
+							systemPrompt: "Answer the question briefly and directly, in plain prose. You are orqi, the orq.ai assistant.",
+							messages: [{ role: "user", content: question, timestamp: Date.now() }],
+						},
 						{ reasoning: "low" } as any,
 					);
 					let text = "";
@@ -1073,7 +1252,11 @@ export function orqHarness(deps: HarnessDeps) {
 					}
 					const result = await stream.result();
 					const cost = result.usage?.cost?.total;
-					live?.update({ title, rows: (text || result.errorMessage || "(no answer)").split("\n"), hint: `${cost ? `${dollars(cost)} · ` : ""}esc close` });
+					live?.update({
+						title,
+						rows: (text || result.errorMessage || "(no answer)").split("\n"),
+						hint: `${cost ? `${dollars(cost)} · ` : ""}esc close`,
+					});
 				} catch (error) {
 					live?.update({ title, rows: [`failed: ${error instanceof Error ? error.message : error}`], hint: "esc close" });
 				}
@@ -1096,13 +1279,17 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				const used = contextUsed(split);
-				await panel(ctx, {
-					title: "context",
-					badge: `${tokens(used)} of ${tokens(split.window)}${split.window ? ` · ${Math.round((used / split.window) * 100)}%` : ""}`,
-					rows: contextRows(split),
-					hint: "t open /tools · esc close",
-					keys: { t: () => void showTools(ctx) },
-				}, 84);
+				await panel(
+					ctx,
+					{
+						title: "context",
+						badge: `${tokens(used)} of ${tokens(split.window)}${split.window ? ` · ${Math.round((used / split.window) * 100)}%` : ""}`,
+						rows: contextRows(split),
+						hint: "t open /tools · esc close",
+						keys: { t: () => void showTools(ctx) },
+					},
+					84,
+				);
 			},
 		});
 
@@ -1119,19 +1306,41 @@ export function orqHarness(deps: HarnessDeps) {
 			}
 			tools.sort((a, b) => bareName(a.name).localeCompare(bareName(b.name)));
 			const width = Math.min(28, Math.max(...tools.map((tool) => bareName(tool.name).length)));
-			const firstLine = (text: string | undefined) => String(text ?? "").split("\n")[0]!.trim();
+			const firstLine = (text: string | undefined) =>
+				String(text ?? "")
+					.split("\n")[0]!
+					.trim();
 			const detail = (tool: ToolInfo): PanelSpec => {
 				const hints = (tool as { annotations?: Record<string, unknown> }).annotations ?? {};
-				const flags = [hints.readOnlyHint ? "read-only" : "", hints.destructiveHint ? "destructive" : "", hints.idempotentHint ? "idempotent" : ""].filter(Boolean).join(" · ");
+				const flags = [
+					hints.readOnlyHint ? "read-only" : "",
+					hints.destructiveHint ? "destructive" : "",
+					hints.idempotentHint ? "idempotent" : "",
+				]
+					.filter(Boolean)
+					.join(" · ");
 				return {
 					title: tool.name,
 					badge: [tool.exposure, flags].filter(Boolean).join(" · "),
 					// Parameters first: they are what a definition is opened for; descriptions run long.
-					rows: ["parameters", ...schemaLines(tool.parameters).map((line) => `  ${line}`), "", "description", ...String(tool.description ?? "").trim().split("\n").map((line) => `  ${line}`)],
+					rows: [
+						"parameters",
+						...schemaLines(tool.parameters).map((line) => `  ${line}`),
+						"",
+						"description",
+						...String(tool.description ?? "")
+							.trim()
+							.split("\n")
+							.map((line) => `  ${line}`),
+					],
 					hint: "j raw schema · esc back",
 					keys: {
 						j: () => {
-							void panel(ctx, { title: `${tool.name} · input schema`, rows: JSON.stringify(tool.parameters, null, 2).split("\n"), hint: "esc back" });
+							void panel(ctx, {
+								title: `${tool.name} · input schema`,
+								rows: JSON.stringify(tool.parameters, null, 2).split("\n"),
+								hint: "esc back",
+							});
 						},
 					},
 				};
@@ -1160,7 +1369,11 @@ export function orqHarness(deps: HarnessDeps) {
 					skills = pi
 						.getCommands()
 						.filter((command) => command.source === "skill")
-						.map((command) => ({ name: command.name.replace(/^skill:/, ""), description: command.description ?? "", path: command.sourceInfo.path }));
+						.map((command) => ({
+							name: command.name.replace(/^skill:/, ""),
+							description: command.description ?? "",
+							path: command.sourceInfo.path,
+						}));
 				} catch {
 					// A handle from a replaced session: show nothing rather than throw.
 				}
@@ -1193,7 +1406,11 @@ export function orqHarness(deps: HarnessDeps) {
 							"",
 							"location",
 							`  ${skill.path.replace(homedir(), "~")}`,
-							...(files.length ? [`  ${files.length} more file${files.length === 1 ? "" : "s"}: ${files.slice(0, 8).join(", ")}${files.length > 8 ? ", …" : ""}`] : []),
+							...(files.length
+								? [
+										`  ${files.length} more file${files.length === 1 ? "" : "s"}: ${files.slice(0, 8).join(", ")}${files.length > 8 ? ", …" : ""}`,
+									]
+								: []),
 						],
 						hint: "i instructions · u use · esc back",
 					};
@@ -1216,7 +1433,11 @@ export function orqHarness(deps: HarnessDeps) {
 										// The instructions on their own, like j for a tool's raw schema.
 										i: () => {
 											const body = readSkill(skills[i]!.path, parseYaml).body.trim();
-											void panel(ctx, { title: `skill ${skills[i]!.name} · instructions`, rows: body.split("\n"), hint: "↑↓ scroll · esc back" });
+											void panel(ctx, {
+												title: `skill ${skills[i]!.name} · instructions`,
+												rows: body.split("\n"),
+												hint: "↑↓ scroll · esc back",
+											});
 										},
 									},
 								};
@@ -1270,7 +1491,9 @@ export function orqHarness(deps: HarnessDeps) {
 				return;
 			}
 			await pi.setModel(model);
-			ctx.ui.notify(`Now talking to ${key}, a managed agent: its own instructions and tools, run on orq.ai. orqi's tools are off. /agent off brings orqi back.`);
+			ctx.ui.notify(
+				`Now talking to ${key}, a managed agent: its own instructions and tools, run on orq.ai. orqi's tools are off. /agent off brings orqi back.`,
+			);
 		};
 
 		/** Back from agent mode to the chat model it was entered from, else the configured default. */
@@ -1332,17 +1555,30 @@ export function orqHarness(deps: HarnessDeps) {
 						},
 						i: async (i) => {
 							const result = await deps.callTool("get_agent", { key: keyOf(i) }).catch((error) => ({ text: String(error), isError: true }));
-							void panel(ctx, { title: `${keyOf(i)} · ${agents[i]!.agent?.status ?? ""}`, rows: inspectLines(result.text), hint: "esc close" });
+							void panel(ctx, {
+								title: `${keyOf(i)} · ${agents[i]!.agent?.status ?? ""}`,
+								rows: inspectLines(result.text),
+								hint: "esc close",
+							});
 						},
 						t: async (i) => {
-							const result = await deps.callTool("list_traces", { entity_key: keyOf(i), limit: 10 }).catch((error) => ({ text: String(error), isError: true }));
+							const result = await deps
+								.callTool("list_traces", { entity_key: keyOf(i), limit: 10 })
+								.catch((error) => ({ text: String(error), isError: true }));
 							let rows: string[];
 							try {
-								rows = (JSON.parse(result.text)?.items ?? []).map((t: any) => `${t.trace_id ?? t.context?.trace_id}  ${String(t.start_time ?? "").slice(0, 19)}  ${t.duration ?? "?"} ms  ${t.total_cost ? dollars(t.total_cost) : ""}`);
+								rows = (JSON.parse(result.text)?.items ?? []).map(
+									(t: any) =>
+										`${t.trace_id ?? t.context?.trace_id}  ${String(t.start_time ?? "").slice(0, 19)}  ${t.duration ?? "?"} ms  ${t.total_cost ? dollars(t.total_cost) : ""}`,
+								);
 							} catch {
 								rows = [result.text.slice(0, 300)];
 							}
-							void panel(ctx, { title: `traces · ${keyOf(i)}`, rows: rows.length ? rows : ["no traces"], hint: "/trace <id> for one · esc close" });
+							void panel(ctx, {
+								title: `traces · ${keyOf(i)}`,
+								rows: rows.length ? rows : ["no traces"],
+								hint: "/trace <id> for one · esc close",
+							});
 						},
 						o: (i) => {
 							if (workspace) openUrl(agentUrl(host, workspace, keyOf(i)));
@@ -1362,7 +1598,17 @@ function branchMessages(ctx: ExtensionContext): any[] {
 		if (entry.type === "custom" && entry.customType === ROUTE_ENTRY && entry.data) {
 			const d = entry.data as Decision;
 			const label = `${d.tier}${d.arrow ? ` ${d.arrow}` : ""}`;
-			return [{ role: "route", label, detail: `→ ${shortModel(d.model)}`, usage: d.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: d.cost } : undefined, durationMs: d.latencyMs, model: d.classifier, timestamp: Date.parse(entry.timestamp ?? "") || undefined }];
+			return [
+				{
+					role: "route",
+					label,
+					detail: `→ ${shortModel(d.model)}`,
+					usage: d.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: d.cost } : undefined,
+					durationMs: d.latencyMs,
+					model: d.classifier,
+					timestamp: Date.parse(entry.timestamp ?? "") || undefined,
+				},
+			];
 		}
 		return [];
 	});

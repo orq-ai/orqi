@@ -46,7 +46,11 @@ try {
 	await $`tar -xzf ${join(tmp, "src.tar.gz")} -C ${tmp} --strip-components=1`.quiet();
 
 	const upstream = join(tmp, "skills");
-	const names = vendoredNames(readdirSync(upstream, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name));
+	const names = vendoredNames(
+		readdirSync(upstream, { withFileTypes: true })
+			.filter((e) => e.isDirectory())
+			.map((e) => e.name),
+	);
 	if (names.length === 0) {
 		console.error("upstream skills/ is empty; refusing to delete the vendored tree");
 		process.exit(1);
@@ -65,11 +69,17 @@ try {
 	rmSync(COMMANDS, { recursive: true, force: true });
 	mkdirSync(COMMANDS);
 	const commands = existsSync(join(tmp, "commands"))
-		? readdirSync(join(tmp, "commands")).filter((name) => /^[a-z0-9-]+\.md$/.test(name)).sort()
+		? readdirSync(join(tmp, "commands"))
+				.filter((name) => /^[a-z0-9-]+\.md$/.test(name))
+				.sort()
 		: [];
 	// Claude Code tolerates frontmatter YAML rejects; pi does not (src/frontmatter.ts).
 	for (const name of commands) await Bun.write(join(COMMANDS, name), normalizeCommand(await Bun.file(join(tmp, "commands", name)).text()));
-	const version: string | undefined = JSON.parse(await Bun.file(join(tmp, ".claude-plugin", "plugin.json")).text().catch(() => "{}"))?.version;
+	const version: string | undefined = JSON.parse(
+		await Bun.file(join(tmp, ".claude-plugin", "plugin.json"))
+			.text()
+			.catch(() => "{}"),
+	)?.version;
 
 	await Bun.write(
 		join(ROOT, "skills.lock.json"),

@@ -26,9 +26,27 @@ export type ReconnectFn = (candidates: Credential[]) => Promise<Reconnected>;
  * plugin's own commands skip these names, and a test keeps the list honest.
  */
 export const ORQI_COMMANDS = [
-	"key", "reconnect", "whoami", "workspace", "doctor", "update",
-	"panel", "trajectory", "open", "trace", "learn", "btw", "cost", "whatsnew", "agent", "agents", "route",
-	"tools", "skills", "teach", "context",
+	"key",
+	"reconnect",
+	"whoami",
+	"workspace",
+	"doctor",
+	"update",
+	"panel",
+	"trajectory",
+	"open",
+	"trace",
+	"learn",
+	"btw",
+	"cost",
+	"whatsnew",
+	"agent",
+	"agents",
+	"route",
+	"tools",
+	"skills",
+	"teach",
+	"context",
 ] as const;
 
 /** Rejection rows the extension writes itself, as opposed to the server's verdicts. */
@@ -59,7 +77,10 @@ export function authLines(rejections: Rejection[], cta = LOGIN_CTA): string[] {
 }
 
 /** The pinned line when the tools connected but the stored /login key, which the model uses, was refused. */
-export const LOGIN_REFUSED = ["⚠ the key stored with /login or /key was refused, so the model cannot answer", "→ /key to replace it, or /login to sign in with the browser"];
+export const LOGIN_REFUSED = [
+	"⚠ the key stored with /login or /key was refused, so the model cannot answer",
+	"→ /key to replace it, or /login to sign in with the browser",
+];
 
 /**
  * The one candidate a workspace switch re-points at. The session token is
@@ -130,8 +151,7 @@ export function orqCommands(
 	// Good news and a stall ("retrying on your next message") are not pinned anywhere.
 	const worthNotice = (outcome: string) => rejections.length === 0 || outcome.startsWith(STALL);
 
-	const showWorkspace = (ctx: { ui: Ui }) =>
-		ctx.ui.setStatus(WORKSPACE_STATUS, header.workspace ? `orq:${header.workspace}` : undefined);
+	const showWorkspace = (ctx: { ui: Ui }) => ctx.ui.setStatus(WORKSPACE_STATUS, header.workspace ? `orq:${header.workspace}` : undefined);
 	const showAuth = (ctx: { ui: Ui }) => {
 		if (rejections.length === 0) {
 			ctx.ui.setWidget(AUTH_WIDGET, loginRefused ? LOGIN_REFUSED : undefined);
@@ -177,7 +197,10 @@ export function orqCommands(
 			wasConnected ? [{ source: WORKSPACE_SWITCH, workspace: previous, reason }] : [];
 		if (candidates.length === 0) {
 			triedTokens = key;
-			rejections = [...stillOnPrevious("no credential to switch with"), { source: NO_CREDENTIAL, reason: reread.failure ?? "nothing to try" }];
+			rejections = [
+				...stillOnPrevious("no credential to switch with"),
+				{ source: NO_CREDENTIAL, reason: reread.failure ?? "nothing to try" },
+			];
 			showAuth(ctx);
 			return "No orq credential found.";
 		}
@@ -189,7 +212,9 @@ export function orqCommands(
 				triedTokens = key;
 				rejections = [...stillOnPrevious("the new credential was rejected"), ...error.rejections];
 				showAuth(ctx);
-				return wasConnected ? `orq rejected that credential; still on ${previous ?? "the previous workspace"}.` : "orq still rejects every credential.";
+				return wasConnected
+					? `orq rejected that credential; still on ${previous ?? "the previous workspace"}.`
+					: "orq still rejects every credential.";
 			}
 			// A stall is the server's problem, so it is no verdict on these keys:
 			// clearing the memo makes "retrying on your next message" true, even
@@ -228,8 +253,14 @@ export function orqCommands(
 			ctx.ui.notify(`This needs the terminal UI. ${LOGIN_HINT}`, "warning");
 			return;
 		}
-		const typed = (await ctx.ui.custom((_tui: unknown, theme: { fg(token: string, text: string): string }, _keys: unknown, done: (value: string | undefined) => void) =>
-			new MaskedInput("orq API key", (value) => done(value), () => done(undefined), { label: (t) => theme.fg("accent", t), dim: (t) => theme.fg("dim", t) }),
+		const typed = (await ctx.ui.custom(
+			(_tui: unknown, theme: { fg(token: string, text: string): string }, _keys: unknown, done: (value: string | undefined) => void) =>
+				new MaskedInput(
+					"orq API key",
+					(value) => done(value),
+					() => done(undefined),
+					{ label: (t) => theme.fg("accent", t), dim: (t) => theme.fg("dim", t) },
+				),
 		)) as string | undefined;
 		if (typed === undefined) return;
 		const key = plausibleKey(typed);
@@ -248,7 +279,15 @@ export function orqCommands(
 	 * rather than being sent away with exit 1. Each path ends in the same
 	 * recovery the `input` hook runs.
 	 */
-	const welcome = async (pi: ExtensionAPI, ctx: { ui: Ui & { select(title: string, options: string[]): Promise<string | undefined>; input(title: string, placeholder?: string): Promise<string | undefined> } }) => {
+	const welcome = async (
+		pi: ExtensionAPI,
+		ctx: {
+			ui: Ui & {
+				select(title: string, options: string[]): Promise<string | undefined>;
+				input(title: string, placeholder?: string): Promise<string | undefined>;
+			};
+		},
+	) => {
 		const choice = welcomeChoice(await ctx.ui.select(WELCOME_TITLE, Object.values(WELCOME_OPTIONS)));
 		if (choice === "key") {
 			await connectWithKey(pi, ctx);
@@ -272,11 +311,14 @@ export function orqCommands(
 			const code = await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(-1), 5 * 60_000))]);
 			if (code !== 0) proc.kill();
 			const outcome = await recover(pi, ctx, (all) => all);
-			if (outcome) ctx.ui.notify(code === 0 ? outcome : `orq auth login did not finish. ${outcome}`, rejections.length ? "warning" : "info");
+			if (outcome)
+				ctx.ui.notify(code === 0 ? outcome : `orq auth login did not finish. ${outcome}`, rejections.length ? "warning" : "info");
 			return;
 		}
 		// Look around: nothing to connect; the docs and the changelog need no workspace.
-		ctx.ui.notify("Looking around without a workspace: /whatsnew shows the latest orq.ai release, /learn the guided prompts. /login orq or `orq auth login` whenever you are ready.");
+		ctx.ui.notify(
+			"Looking around without a workspace: /whatsnew shows the latest orq.ai release, /learn the guided prompts. /login orq or `orq auth login` whenever you are ready.",
+		);
 	};
 
 	return (pi: ExtensionAPI) => {

@@ -53,7 +53,6 @@ export interface Step {
 	gate?: "waiting" | "allowed" | "denied";
 }
 
-
 export interface ContextSample {
 	turn: number;
 	used: number;
@@ -91,7 +90,10 @@ const oneLine = (text: string, max = 200) => text.replace(/\s+/g, " ").trim().sl
 
 export function textOf(content: AnyMessage["content"]): string {
 	if (typeof content === "string") return content;
-	return (content ?? []).filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n");
+	return (content ?? [])
+		.filter((block) => block.type === "text")
+		.map((block) => block.text ?? "")
+		.join("\n");
 }
 
 /** The identifying arguments of a call, as `k=v` pairs: what a one-line view shows. */
@@ -183,8 +185,24 @@ export class Trajectory {
 	private add(message: AnyMessage): void {
 		if (message.role === "route") {
 			// A persisted orqi-route entry, replayed on resume.
-			const route = message as unknown as { label: string; detail: string; usage?: StepUsage; durationMs?: number; model?: string; timestamp?: number };
-			this.push({ role: "route", label: route.label, detail: route.detail, status: "ok", ts: route.timestamp ?? Date.now(), usage: route.usage, durationMs: route.durationMs, model: route.model });
+			const route = message as unknown as {
+				label: string;
+				detail: string;
+				usage?: StepUsage;
+				durationMs?: number;
+				model?: string;
+				timestamp?: number;
+			};
+			this.push({
+				role: "route",
+				label: route.label,
+				detail: route.detail,
+				status: "ok",
+				ts: route.timestamp ?? Date.now(),
+				usage: route.usage,
+				durationMs: route.durationMs,
+				model: route.model,
+			});
 			return;
 		}
 		if (message.role === "user") {
@@ -197,7 +215,12 @@ export class Trajectory {
 			const blocks = Array.isArray(message.content) ? message.content : [];
 			const text = textOf(blocks);
 			const usage = message.usage
-				? { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cacheRead, cost: this.costOf(message.model, message.usage) }
+				? {
+						input: message.usage.input,
+						output: message.usage.output,
+						cacheRead: message.usage.cacheRead,
+						cost: this.costOf(message.model, message.usage),
+					}
 				: undefined;
 			const failed = message.stopReason === "error";
 			// The text part (or the error) is one step; each tool call becomes a
@@ -215,7 +238,15 @@ export class Trajectory {
 				});
 			} else if (usage) {
 				// A tool-only reply still cost tokens: carry them on an empty assistant step.
-				this.push({ role: "assistant", label: "assist", detail: "", status: "ok", ts: message.timestamp ?? Date.now(), model: message.model, usage });
+				this.push({
+					role: "assistant",
+					label: "assist",
+					detail: "",
+					status: "ok",
+					ts: message.timestamp ?? Date.now(),
+					model: message.model,
+					usage,
+				});
 			}
 			for (const block of blocks) {
 				if (block.type !== "toolCall") continue;
@@ -337,7 +368,9 @@ export class Trajectory {
 
 /** `JSON.stringify` with sorted keys, so the same arguments compare equal whatever their order. */
 export function canonical(value: unknown): string {
-	return JSON.stringify(value, (_key, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v));
+	return JSON.stringify(value, (_key, v) =>
+		v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v,
+	);
 }
 
 export interface Signals {
@@ -432,7 +465,14 @@ export function toAtif(steps: Step[], meta: AtifMeta): Record<string, unknown> {
 				message: step.text ?? step.detail,
 				...(step.model ? { model_name: step.model } : {}),
 				...(step.usage
-					? { metrics: { prompt_tokens: step.usage.input + step.usage.cacheRead, completion_tokens: step.usage.output, cached_tokens: step.usage.cacheRead, cost_usd: step.usage.cost } }
+					? {
+							metrics: {
+								prompt_tokens: step.usage.input + step.usage.cacheRead,
+								completion_tokens: step.usage.output,
+								cached_tokens: step.usage.cacheRead,
+								cost_usd: step.usage.cost,
+							},
+						}
 					: {}),
 			};
 			out.push(current);
@@ -444,7 +484,11 @@ export function toAtif(steps: Step[], meta: AtifMeta): Record<string, unknown> {
 			out.push(current);
 		}
 		const id = step.toolCallId ?? `call_${step.id}`;
-		(current.tool_calls ??= []).push({ tool_call_id: id, function_name: step.role === "subagent" ? "subagent" : (step.toolName ?? step.label), arguments: step.args ?? {} });
+		(current.tool_calls ??= []).push({
+			tool_call_id: id,
+			function_name: step.role === "subagent" ? "subagent" : (step.toolName ?? step.label),
+			arguments: step.args ?? {},
+		});
 		const result: Record<string, unknown> = { source_call_id: id, content: step.text ?? "" };
 		if (step.role === "subagent" && step.children?.length) {
 			const trajectoryId = `${meta.sessionId}/subagent-${step.id}`;

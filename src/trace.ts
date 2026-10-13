@@ -67,7 +67,11 @@ export function traceSummary(spans: Span[]): string[] {
 	const router = autoRouter(spans);
 	if (router) {
 		const pick = (key: string) => (router[key] === undefined ? undefined : String(router[key]));
-		const head = [pick("profile") && `profile ${pick("profile")}`, pick("tier") && `tier ${pick("tier")}`, pick("selected_band") && `band ${pick("selected_band")}`]
+		const head = [
+			pick("profile") && `profile ${pick("profile")}`,
+			pick("tier") && `tier ${pick("tier")}`,
+			pick("selected_band") && `band ${pick("selected_band")}`,
+		]
 			.filter(Boolean)
 			.join(" · ");
 		lines.push(`auto-router   ${head}`);
@@ -76,7 +80,9 @@ export function traceSummary(spans: Span[]): string[] {
 	for (const span of spans) {
 		if (span.name === "auto-router") continue;
 		const usage = span.attributes?.gen_ai?.usage;
-		const tokens = usage ? ` · ↑${usage.prompt_tokens ?? usage.input_tokens ?? 0} ↓${usage.completion_tokens ?? usage.output_tokens ?? 0}` : "";
+		const tokens = usage
+			? ` · ↑${usage.prompt_tokens ?? usage.input_tokens ?? 0} ↓${usage.completion_tokens ?? usage.output_tokens ?? 0}`
+			: "";
 		lines.push(`${(span.name ?? "span").padEnd(13)} ${sec(span.duration)}${tokens}${span.total_cost ? ` · ${usd(span.total_cost)}` : ""}`);
 	}
 	return lines;
@@ -85,12 +91,19 @@ export function traceSummary(spans: Span[]): string[] {
 /** `orq traces conversation <id> -o json`, as `role  text` rows. */
 export function conversationLines(json: string, width = 70): string[] {
 	try {
-		const parsed = JSON.parse(json) as { messages?: { role: string; content?: { type: string; text?: string; name?: string }[] | string }[] };
+		const parsed = JSON.parse(json) as {
+			messages?: { role: string; content?: { type: string; text?: string; name?: string }[] | string }[];
+		};
 		return (parsed.messages ?? []).map((message) => {
-			const content = typeof message.content === "string"
-				? message.content
-				: (message.content ?? []).map((part) => (part.type === "text" ? part.text : `[${part.type}${part.name ? ` ${part.name}` : ""}]`)).join(" ");
-			return `${message.role.padEnd(10)} ${String(content ?? "").replace(/\s+/g, " ").slice(0, width)}`;
+			const content =
+				typeof message.content === "string"
+					? message.content
+					: (message.content ?? [])
+							.map((part) => (part.type === "text" ? part.text : `[${part.type}${part.name ? ` ${part.name}` : ""}]`))
+							.join(" ");
+			return `${message.role.padEnd(10)} ${String(content ?? "")
+				.replace(/\s+/g, " ")
+				.slice(0, width)}`;
 		});
 	} catch {
 		return [json.trim().split("\n")[0] ?? "no conversation"];

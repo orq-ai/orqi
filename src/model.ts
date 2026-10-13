@@ -34,7 +34,17 @@ export interface ModelInfo {
 	/** Artificial Analysis intelligence index (`metadata.autorouter.v2`), for ranking routing rungs. */
 	intelligence?: number;
 	/** Agents only: status, the model it runs on, and what it carries. */
-	agent?: { status: string; model?: string; tools: number; knowledgeBases: number; memory: number; team: number; totalCost?: number; updated?: string; description?: string };
+	agent?: {
+		status: string;
+		model?: string;
+		tools: number;
+		knowledgeBases: number;
+		memory: number;
+		team: number;
+		totalCost?: number;
+		updated?: string;
+		description?: string;
+	};
 }
 
 /** Fallback when /v2/models is unreachable: enough to start a session. */
@@ -65,7 +75,14 @@ export function modelInfo(model: any): ModelInfo | undefined {
 		maxTokens: num(meta.max_output_tokens),
 		responses: Boolean(meta.supports_responses_api),
 		...(input !== undefined || output !== undefined
-			? { cost: { input: input ?? 0, output: output ?? 0, cacheRead: num(meta.million_tokens_cache_read_cost) ?? 0, cacheWrite: num(meta.million_tokens_cache_write_cost) ?? 0 } }
+			? {
+					cost: {
+						input: input ?? 0,
+						output: output ?? 0,
+						cacheRead: num(meta.million_tokens_cache_read_cost) ?? 0,
+						cacheWrite: num(meta.million_tokens_cache_write_cost) ?? 0,
+					},
+				}
 			: {}),
 		...(num(meta.autorouter?.v2?.intelligence_index) !== undefined ? { intelligence: meta.autorouter.v2.intelligence_index } : {}),
 	};
@@ -124,7 +141,9 @@ async function fetchModels(token: string): Promise<ModelInfo[]> {
 	const chat = models.filter((model) => !model.kind);
 	// Agents are a bonus: a key without agent read access still gets its models.
 	const agents = await getJson("/v2/agents?limit=200", token)
-		.then((body) => ((body?.data ?? []) as any[]).map((agent) => agentInfo(agent, chat)).filter((agent): agent is ModelInfo => Boolean(agent)))
+		.then((body) =>
+			((body?.data ?? []) as any[]).map((agent) => agentInfo(agent, chat)).filter((agent): agent is ModelInfo => Boolean(agent)),
+		)
 		.catch(() => [] as ModelInfo[]);
 	return [...models, ...agents].sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -293,5 +312,9 @@ export async function refreshOrqModels(agentDir: string, token: string, models: 
 export function pickModel(models: OrqModels, id = DEFAULT_MODEL) {
 	// `orq/auto` is the virtual model: provider `orq`, id `auto`.
 	const wanted = id.startsWith("orq/") ? id.slice(4) : id;
-	return models.runtime.getModel(PROVIDER_ID, wanted) ?? models.runtime.getModel(PROVIDER_ID, BASE_MODEL) ?? models.runtime.getModel(PROVIDER_ID, models.ids[0]);
+	return (
+		models.runtime.getModel(PROVIDER_ID, wanted) ??
+		models.runtime.getModel(PROVIDER_ID, BASE_MODEL) ??
+		models.runtime.getModel(PROVIDER_ID, models.ids[0])
+	);
 }

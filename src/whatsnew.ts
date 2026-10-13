@@ -23,7 +23,12 @@ function firstSentence(body: string): string {
 	const lines = body.split("\n").map((line) => line.trim());
 	const prose = lines.filter((line) => line && !/^[<*|!-]/.test(line));
 	// Blocks that are only a bullet list ("New features") summarise by their first bullet.
-	const source = prose.length ? prose : lines.filter((line) => /^[*-] /.test(line)).slice(0, 1).map((line) => line.slice(2));
+	const source = prose.length
+		? prose
+		: lines
+				.filter((line) => /^[*-] /.test(line))
+				.slice(0, 1)
+				.map((line) => line.slice(2));
 	const text = source
 		.join(" ")
 		.replace(/\*\*([^*]+)\*\*/g, "$1")
@@ -46,7 +51,10 @@ export function parseChangelog(md: string): Release {
 }
 
 /** The release plus how old the copy is, or undefined when there is nothing at all. */
-export async function latestRelease(agentDir: string, fetchImpl: typeof fetch = fetch): Promise<{ release: Release; ageMs: number } | undefined> {
+export async function latestRelease(
+	agentDir: string,
+	fetchImpl: typeof fetch = fetch,
+): Promise<{ release: Release; ageMs: number } | undefined> {
 	const cache = join(agentDir, "whatsnew.md");
 	const age = existsSync(cache) ? Date.now() - statSync(cache).mtimeMs : Infinity;
 	if (age < TTL_MS) return { release: parseChangelog(readFileSync(cache, "utf8")), ageMs: age };

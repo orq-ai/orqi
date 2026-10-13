@@ -1,28 +1,72 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
 import { expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { apiBaseUrl, credentialCandidates, credentialsFile, readWhoami, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
+import {
+	apiBaseUrl,
+	credentialCandidates,
+	credentialsFile,
+	readWhoami,
+	loginKey,
+	LOGIN_HINT,
+	profileKey,
+	profileOf,
+	serverOf,
+	sessionFileOf,
+	sessionToken,
+	spawnFailure,
+	WHOAMI_ARGS,
+	workspaceOfKey,
+	type Credential,
+} from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
-import { authLines, LOGIN_CTA, LOGIN_REFUSED, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
+import {
+	authLines,
+	LOGIN_CTA,
+	LOGIN_REFUSED,
+	NO_CREDENTIAL,
+	ORQI_COMMANDS,
+	orqCommands,
+	pickForWorkspace,
+	WORKSPACE_SWITCH,
+	type Boot,
+} from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { orqHarness } from "./harness.ts";
 import { checksumLine, parseChecksum, sha256Hex, sidecar } from "./checksum.ts";
-import { authReason, CredentialsRejected, DENYLISTED_TOOLS, hintsSection, isAuthError, keptTools, orqServerConfig, pickCredential, summarize, TOOL_HINTS, TOOL_PREFIX, type Rejection } from "./mcp.ts";
+import {
+	authReason,
+	CredentialsRejected,
+	DENYLISTED_TOOLS,
+	hintsSection,
+	isAuthError,
+	keptTools,
+	orqServerConfig,
+	pickCredential,
+	summarize,
+	TOOL_HINTS,
+	TOOL_PREFIX,
+	type Rejection,
+} from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { DefaultResourceLoader, loadSkills } from "@earendil-works/pi-coding-agent";
-import {
-	liveIsNewer,
-	pluginResources,
-	readLive,
-	SKILLS_LOCK,
-	updateAction,
-	updateDue,
-	vendoredNames,
-} from "./skills.ts";
+import { liveIsNewer, pluginResources, readLive, SKILLS_LOCK, updateAction, updateDue, vendoredNames } from "./skills.ts";
 import {
 	assetName,
 	checkDue,
@@ -91,7 +135,9 @@ function installerEnv(root: string, tarball: string): Record<string, string | un
 	const fakeBin = join(root, "fake-bin");
 	mkdirSync(fakeBin, { recursive: true });
 	const curl = join(fakeBin, "curl");
-	writeFileSync(curl, `#!/bin/sh
+	writeFileSync(
+		curl,
+		`#!/bin/sh
 # Fake curl: serves $ORQI_TEST_TARBALL for the tarball URL and
 # $ORQI_TEST_TARBALL.sha256 for the sidecar URL (404 when absent); honours
 # -o and -w '%{http_code}' the way install.sh calls it. $ORQI_TEST_SUM_STATUS
@@ -126,7 +172,8 @@ case "$url" in
 		cp "$ORQI_TEST_TARBALL" "$out"
 		;;
 esac
-`);
+`,
+	);
 	chmodSync(curl, 0o755);
 	return {
 		...process.env,
@@ -277,9 +324,21 @@ test("every theme's text stays legible on a light-ish dark background", () => {
 	};
 	// Roles pi paints as text. Borders and backgrounds are decoration and exempt.
 	const textRoles = [
-		"text", "muted", "dim", "thinkingText", "toolTitle", "toolOutput", "mdHeading",
-		"mdLinkUrl", "mdQuote", "toolDiffContext", "syntaxComment", "userMessageText",
-		"customMessageText", "accent", "warning",
+		"text",
+		"muted",
+		"dim",
+		"thinkingText",
+		"toolTitle",
+		"toolOutput",
+		"mdHeading",
+		"mdLinkUrl",
+		"mdQuote",
+		"toolDiffContext",
+		"syntaxComment",
+		"userMessageText",
+		"customMessageText",
+		"accent",
+		"warning",
 	];
 	const LIGHTEST_BG = "#282C34";
 
@@ -320,7 +379,9 @@ test("every skill the system prompt names ships, under its directory's name", ()
 	// pi loads a skill by its frontmatter name; a prompt naming `build-agent`
 	// while the skill is `orq-build-agent` points the model at nothing.
 	const root = join(import.meta.dir, "..", "skills");
-	const dirs = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+	const dirs = readdirSync(root, { withFileTypes: true })
+		.filter((e) => e.isDirectory())
+		.map((e) => e.name);
 	const named = (dir: string) => readFileSync(join(root, dir, "SKILL.md"), "utf8").match(/^name:\s*(\S+)/m)?.[1];
 	expect(dirs.filter((dir) => named(dir) !== dir)).toEqual([]);
 	const prompt = readFileSync(join(import.meta.dir, "..", "orqi-system-prompt.txt"), "utf8");
@@ -345,7 +406,9 @@ test("every command AGENTS.md names exists", () => {
 	const root = join(import.meta.dir, "..");
 	const scripts = Object.keys(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts);
 	const ok = new Set([...scripts, "install", "ci", "test", "start", "add", "remove", "dlx", "exec", "x", "i"]);
-	const named = [...readFileSync(join(root, "AGENTS.md"), "utf8").matchAll(/\b(npm run|pnpm(?: run)?|yarn|bun run|make|just)\s+([A-Za-z0-9:_.-]+)/g)];
+	const named = [
+		...readFileSync(join(root, "AGENTS.md"), "utf8").matchAll(/\b(npm run|pnpm(?: run)?|yarn|bun run|make|just)\s+([A-Za-z0-9:_.-]+)/g),
+	];
 	// No Makefile or justfile, so any make/just target is stale.
 	expect(named.filter(([, tool, name]) => tool === "make" || tool === "just" || !ok.has(name)).map((m) => m[0])).toEqual([]);
 });
@@ -389,10 +452,14 @@ function pluginDirs(live?: { committed: string; sha?: string; skills?: string[];
 	const agent = join(root, "agent");
 	if (live) {
 		const current = join(agent, "skills-live", "current");
-		for (const name of live.skills ?? ["orq-cli", "orq-build-agent", "orq-new-skill"]) mkdirSync(join(current, "skills", name), { recursive: true });
+		for (const name of live.skills ?? ["orq-cli", "orq-build-agent", "orq-new-skill"])
+			mkdirSync(join(current, "skills", name), { recursive: true });
 		mkdirSync(join(current, "commands"), { recursive: true });
 		for (const name of live.commands ?? ["traces", "quickstart"]) writeFileSync(join(current, "commands", `${name}.md`), "x");
-		writeFileSync(join(agent, "skills-live", "current.json"), JSON.stringify({ sha: live.sha ?? "b".repeat(40), committed: live.committed, version: live.version ?? "3.10.0" }));
+		writeFileSync(
+			join(agent, "skills-live", "current.json"),
+			JSON.stringify({ sha: live.sha ?? "b".repeat(40), committed: live.committed, version: live.version ?? "3.10.0" }),
+		);
 	}
 	return { root, pkg, agent };
 }
@@ -401,7 +468,11 @@ test("one copy of the orq plugin: bundled by default, so pi never sees a name tw
 	const { root, pkg, agent } = pluginDirs();
 	try {
 		const resources = pluginResources(pkg, agent, ["workspace"]);
-		expect(resources.additionalSkillPaths.map((p) => p.slice(pkg.length))).toEqual(["/skills/orq-build-agent", "/skills/orq-cli", "/skills/orqi-platform-guide"]);
+		expect(resources.additionalSkillPaths.map((p) => p.slice(pkg.length))).toEqual([
+			"/skills/orq-build-agent",
+			"/skills/orq-cli",
+			"/skills/orqi-platform-guide",
+		]);
 		// The plugin's commands become prompt templates, minus names orqi already owns and the ones it drops.
 		expect(resources.additionalPromptTemplatePaths.map((p) => p.slice(pkg.length))).toEqual(["/commands/traces.md"]);
 		expect(resources.note).toBeUndefined();
@@ -457,15 +528,30 @@ test("the daily check installs only what is newer, and drops a stale live copy",
 
 test("every command orqi registers is in ORQI_COMMANDS, so the plugin never shadows one", () => {
 	const registered: string[] = [];
-	const pi = { registerEntryRenderer: () => {}, registerCommand: (name: string) => registered.push(name), registerShortcut: () => {}, registerTool: () => {}, on: () => {}, appendEntry: () => {} } as any;
+	const pi = {
+		registerEntryRenderer: () => {},
+		registerCommand: (name: string) => registered.push(name),
+		registerShortcut: () => {},
+		registerTool: () => {},
+		on: () => {},
+		appendEntry: () => {},
+	} as any;
 	orqCommands(noReconnect, () => [], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
-	orqHarness({ agentDir: tmpdir(), catalogue: () => [], toolCount: () => 0, callTool: async () => ({ text: "", isError: false }), workspace: () => undefined })(pi);
+	orqHarness({
+		agentDir: tmpdir(),
+		catalogue: () => [],
+		toolCount: () => 0,
+		callTool: async () => ({ text: "", isError: false }),
+		workspace: () => undefined,
+	})(pi);
 	expect([...registered].sort()).toEqual([...ORQI_COMMANDS].sort());
 });
 
 test("the lock records what a live update is compared against", () => {
 	expect(Number.isFinite(Date.parse(SKILLS_LOCK.committed))).toBe(true);
-	const commands = readdirSync(join(import.meta.dir, "..", "commands")).map((name) => name.replace(/\.md$/, "")).sort();
+	const commands = readdirSync(join(import.meta.dir, "..", "commands"))
+		.map((name) => name.replace(/\.md$/, ""))
+		.sort();
 	expect(SKILLS_LOCK.commands).toEqual(commands);
 });
 
@@ -505,9 +591,7 @@ test("the header uses the ORQI splash", () => {
 	expect(output).not.toContain("CLI");
 
 	// The logo is six rows and never gets split into a side-by-side layout.
-	const art = output
-		.split("\n")
-		.filter((line) => /[█▀▄]/.test(line));
+	const art = output.split("\n").filter((line) => /[█▀▄]/.test(line));
 	expect(art.length).toBe(6);
 	for (const line of art) expect(line.length).toBeLessThanOrEqual(100);
 });
@@ -578,7 +662,9 @@ test("npm/stage.mjs builds publishable packages from release tarballs", () => {
 	expect(stage(out).exitCode).toBe(0);
 
 	const manifest = (name: string) => JSON.parse(readFileSync(join(out, name, "package.json"), "utf8"));
-	const platforms = readdirSync(out).filter((name) => name !== "orqi").sort();
+	const platforms = readdirSync(out)
+		.filter((name) => name !== "orqi")
+		.sort();
 	expect(platforms).toEqual(["orqi-darwin-arm64", "orqi-darwin-x64", "orqi-linux-x64"]);
 	for (const name of platforms) {
 		const [, os, cpu] = name.split("-");
@@ -623,7 +709,10 @@ function launcherFixture(root: string, binaryScript?: string): string {
 	mkdirSync(join(wrapper, "bin"), { recursive: true });
 	writeFileSync(join(wrapper, "bin", "orqi.js"), readFileSync(join(import.meta.dir, "..", "npm", "orqi", "bin", "orqi.js")));
 	const platform = `orqi-${process.platform}-${process.arch}`;
-	writeFileSync(join(wrapper, "package.json"), JSON.stringify({ name: "@orq-ai/orqi", optionalDependencies: { [`@orq-ai/${platform}`]: "9.9.9" } }));
+	writeFileSync(
+		join(wrapper, "package.json"),
+		JSON.stringify({ name: "@orq-ai/orqi", optionalDependencies: { [`@orq-ai/${platform}`]: "9.9.9" } }),
+	);
 	if (binaryScript !== undefined) {
 		mkdirSync(join(modules, platform, "bin"), { recursive: true });
 		writeFileSync(join(modules, platform, "package.json"), JSON.stringify({ name: `@orq-ai/${platform}` }));
@@ -732,8 +821,12 @@ test("our commands never collide with a pi built-in", () => {
 	// command simply never fires. /whatsnew exists precisely because /changelog is
 	// taken, so this is the check that keeps the workaround honest.
 	const builtins = new Set(
-		[...readFileSync(join(import.meta.dir, "..", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "slash-commands.js"), "utf8")
-			.matchAll(/name: "([a-z-]+)"/g)].map((m) => m[1]),
+		[
+			...readFileSync(
+				join(import.meta.dir, "..", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "slash-commands.js"),
+				"utf8",
+			).matchAll(/name: "([a-z-]+)"/g),
+		].map((m) => m[1]),
 	);
 	expect(builtins.size).toBeGreaterThan(0); // the scrape still finds the list
 	expect(builtins.has("changelog")).toBe(true); // and /changelog is still theirs
@@ -746,7 +839,13 @@ test("our commands never collide with a pi built-in", () => {
 		appendEntry: () => {},
 	} as any;
 	orqCommands(noReconnect, () => ["list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
-	orqHarness({ agentDir: tmpdir(), catalogue: () => [], toolCount: () => 0, callTool: async () => ({ text: "", isError: false }), workspace: () => undefined })({ ...pi, registerShortcut: () => {} });
+	orqHarness({
+		agentDir: tmpdir(),
+		catalogue: () => [],
+		toolCount: () => 0,
+		callTool: async () => ({ text: "", isError: false }),
+		workspace: () => undefined,
+	})({ ...pi, registerShortcut: () => {} });
 
 	expect(registered).toContain("whatsnew");
 	expect(registered).toContain("trajectory");
@@ -822,34 +921,55 @@ test("readWhoami understands every shape CLI 11 answers in", () => {
 		return files[file]!;
 	};
 
-	const session = readWhoami('{"authenticated":true,"session_file":"/h/.orq/sessions/my.orq.ai.json","server":"https://my.orq.ai","workspaces":[]}', read);
+	const session = readWhoami(
+		'{"authenticated":true,"session_file":"/h/.orq/sessions/my.orq.ai.json","server":"https://my.orq.ai","workspaces":[]}',
+		read,
+	);
 	expect(session.session?.activeWorkspaceKey).toBe("acme");
 	expect(session.server).toBe("https://my.orq.ai");
 	expect(session.apiKeyLogin).toBeUndefined();
 	expect(session.failure).toBeUndefined();
 
-	const profile = readWhoami('{"profile":"aim","server":"https://aim.orq.ai","session_file":"/h/.orq/sessions/aim.orq.ai.json","authenticated":true}', read);
+	const profile = readWhoami(
+		'{"profile":"aim","server":"https://aim.orq.ai","session_file":"/h/.orq/sessions/aim.orq.ai.json","authenticated":true}',
+		read,
+	);
 	expect(profile.profile).toBe("aim");
 	expect(profile.server).toBe("https://aim.orq.ai");
 
-	const env = readWhoami('{"method":"api_key","source":"ORQ_API_KEY","server":"https://my.orq.ai","session_file":"/h/.orq/sessions/my.orq.ai.json","authenticated":true}', read);
+	const env = readWhoami(
+		'{"method":"api_key","source":"ORQ_API_KEY","server":"https://my.orq.ai","session_file":"/h/.orq/sessions/my.orq.ai.json","authenticated":true}',
+		read,
+	);
 	expect(env.apiKeyLogin).toBeUndefined(); // the env key is orqi's own candidate already
 	expect(env.session?.activeWorkspaceKey).toBe("acme");
 
-	const login = readWhoami('{"method":"api_key","server":"https://my.orq.ai","session_file":"/h/.orq/sessions/none.json","api_key_login_file":"/h/.orq/sessions/my.orq.ai.apikey.json","authenticated":true}', read);
+	const login = readWhoami(
+		'{"method":"api_key","server":"https://my.orq.ai","session_file":"/h/.orq/sessions/none.json","api_key_login_file":"/h/.orq/sessions/my.orq.ai.apikey.json","authenticated":true}',
+		read,
+	);
 	expect(login.apiKeyLogin).toBe("sk-orq-stored");
 	expect(login.failure).toBeUndefined(); // no browser session is normal for an api-key login
 
 	// authenticated:false drops the credential whoami vouched for, and says why.
-	const deadSession = readWhoami('{"authenticated":false,"auth_error":"401 token revoked","session_file":"/h/.orq/sessions/my.orq.ai.json","workspaces":[]}', read);
+	const deadSession = readWhoami(
+		'{"authenticated":false,"auth_error":"401 token revoked","session_file":"/h/.orq/sessions/my.orq.ai.json","workspaces":[]}',
+		read,
+	);
 	expect(deadSession.session).toBeUndefined();
 	expect(deadSession.failure).toContain("401 token revoked");
-	const deadLogin = readWhoami('{"method":"api_key","api_key_login_file":"/h/.orq/sessions/my.orq.ai.apikey.json","session_file":"/h/x.json","authenticated":false,"auth_error":"401 key deleted"}', read);
+	const deadLogin = readWhoami(
+		'{"method":"api_key","api_key_login_file":"/h/.orq/sessions/my.orq.ai.apikey.json","session_file":"/h/x.json","authenticated":false,"auth_error":"401 key deleted"}',
+		read,
+	);
 	expect(deadLogin.apiKeyLogin).toBeUndefined();
 	expect(deadLogin.failure).toContain("401 key deleted");
 
 	// A failed check (timeout, 5xx) is no verdict: authenticated stays true.
-	const checkFailed = readWhoami('{"authenticated":true,"auth_check_error":"timeout","session_file":"/h/.orq/sessions/my.orq.ai.json"}', read);
+	const checkFailed = readWhoami(
+		'{"authenticated":true,"auth_check_error":"timeout","session_file":"/h/.orq/sessions/my.orq.ai.json"}',
+		read,
+	);
 	expect(checkFailed.session?.activeWorkspaceKey).toBe("acme");
 
 	expect(readWhoami("not json", read).failure).toBeDefined();
@@ -857,7 +977,9 @@ test("readWhoami understands every shape CLI 11 answers in", () => {
 
 test("sessionFileOf takes the session path from whoami, whatever the CLI names it", () => {
 	// The CLI owns the file's name and shape, and both have changed across releases; orqi asks rather than guesses.
-	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe("/home/u/.orq/sessions/my.orq.ai.json");
+	expect(sessionFileOf('{"authenticated":true,"session_file":"/home/u/.orq/sessions/my.orq.ai.json"}')).toBe(
+		"/home/u/.orq/sessions/my.orq.ai.json",
+	);
 	expect(sessionFileOf('{"authenticated":true,"session_file":""}')).toBeUndefined();
 	expect(sessionFileOf("you are not logged in")).toBeUndefined();
 });
@@ -874,7 +996,8 @@ test("isAuthError tells a rejected credential from a server that fell over", () 
 test("authReason pulls the server's reason out of the MCP SDK's wrapping", () => {
 	// "not valid for this workspace" and "expired" need different fixes; the
 	// bare hint used to send both to `orq auth login`.
-	const sdk = 'Streamable HTTP error: Error POSTing to endpoint: {"error":"invalid_token","error_description":"API key is not valid for this workspace. Ensure you are using the correct API key."}';
+	const sdk =
+		'Streamable HTTP error: Error POSTing to endpoint: {"error":"invalid_token","error_description":"API key is not valid for this workspace. Ensure you are using the correct API key."}';
 	expect(authReason(new Error(sdk))).toBe("API key is not valid for this workspace. Ensure you are using the correct API key.");
 	expect(authReason(new Error('Error POSTing to endpoint: {"error":"invalid_token"}'))).toBe("invalid_token");
 	expect(authReason(new Error("HTTP 401 Unauthorized\nmore"))).toBe("HTTP 401 Unauthorized");
@@ -912,7 +1035,18 @@ function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, 
 	factory(pi);
 	const input = () => handlers.get("input")!({ type: "input", text: "hi", source: "interactive" }, ctx);
 	return {
-		pi, ctx, handlers, commands, registered, widgets, status, notices, header, toolNames, factory, input,
+		pi,
+		ctx,
+		handlers,
+		commands,
+		registered,
+		widgets,
+		status,
+		notices,
+		header,
+		toolNames,
+		factory,
+		input,
 		setRegisterTool: (fn: (tool: { name: string }) => void) => {
 			registerToolImpl = fn;
 		},
@@ -968,7 +1102,6 @@ test("a rejected boot pins the warning, and the next message reconnects", async 
 	// Connected: the hook is a no-op from here on.
 	await h.input();
 	expect(calls.length).toBe(1);
-
 });
 
 test("a stall during recovery is reported and does not end recovery", async () => {
@@ -1003,7 +1136,12 @@ test("a rejection after a retry re-pins the widget with the new reasons", async 
 	stored = [{ token: "sk-orq-expired", source: "/login key" }, bad];
 	await h.input();
 	expect(h.notices).toEqual([]); // the refusal is pinned, not repeated as a notice
-	expect(h.widgets.get("orq-auth")).toEqual(authLines([{ source: "/login key", reason: "nope" }, { source: "ORQ_API_KEY", reason: "nope" }]));
+	expect(h.widgets.get("orq-auth")).toEqual(
+		authLines([
+			{ source: "/login key", reason: "nope" },
+			{ source: "ORQ_API_KEY", reason: "nope" },
+		]),
+	);
 	// Same refused set: no re-knock.
 	const before = h.notices.length;
 	await h.input();
@@ -1047,7 +1185,11 @@ test("a failed /workspace switch says the tools are still on the previous worksp
 			h.header.workspace = "other";
 			return { credential: session, added: [] };
 		},
-		{ candidates: [bad, session], readCandidates: () => ({ candidates: [bad, session] }), header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" } },
+		{
+			candidates: [bad, session],
+			readCandidates: () => ({ candidates: [bad, session] }),
+			header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" },
+		},
 	);
 	expect(pickForWorkspace([bad, session])).toEqual([session]);
 	expect(pickForWorkspace([bad])).toEqual([bad]);
@@ -1066,7 +1208,11 @@ test("a failed /workspace switch says the tools are still on the previous worksp
 			narrowed.header.workspace = "other";
 			return { credential: session, added: [] };
 		},
-		{ candidates: [bad], readCandidates: () => ({ candidates: [session] }), header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" } },
+		{
+			candidates: [bad],
+			readCandidates: () => ({ candidates: [session] }),
+			header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" },
+		},
 	);
 	// Connected boot (no rejections) switching to a workspace whose token is rejected.
 	await narrowed.commands.get("reconnect")!("", narrowed.ctx);
@@ -1102,7 +1248,12 @@ test("a refused stored /login key is one pinned line, not re-tried as a workspac
 			calls.push(candidates);
 			return rejectAllBut("sk-orq-session")(candidates);
 		},
-		{ candidates: [stale, session], readCandidates: () => ({ candidates: [stale, session] }), loginRefused: true, header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" } },
+		{
+			candidates: [stale, session],
+			readCandidates: () => ({ candidates: [stale, session] }),
+			loginRefused: true,
+			header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" },
+		},
 	);
 	h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
 	expect(h.widgets.get("orq-auth")).toEqual(LOGIN_REFUSED);
@@ -1126,7 +1277,13 @@ test("a stored /login key that only stalled at boot is tried on the first messag
 				calls.push(candidates);
 				return rejectAllBut("sk-orq-slow")(candidates);
 			},
-			{ agentDir: dir, candidates: [slow, env], readCandidates: () => ({ candidates: [slow, env] }), loginRefused: false, header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" } },
+			{
+				agentDir: dir,
+				candidates: [slow, env],
+				readCandidates: () => ({ candidates: [slow, env] }),
+				loginRefused: false,
+				header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" },
+			},
 		);
 		h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
 		expect(h.widgets.get("orq-auth")).toBeUndefined();
@@ -1140,11 +1297,16 @@ test("a stored /login key that only stalled at boot is tried on the first messag
 });
 
 test("authLines picks its headline from what actually happened", () => {
-	expect(authLines([{ source: "ORQ_API_KEY", reason: "x" }])[0]).toBe("⚠ orq is not connected: every credential was rejected (ORQ_API_KEY: x)");
-	expect(authLines([{ source: NO_CREDENTIAL, reason: "x" }])[0]).toBe("⚠ orq is not connected: no credential found");
-	expect(authLines([{ source: WORKSPACE_SWITCH, workspace: "acme", reason: "x" }, { source: "orq login session", reason: "y" }])[0]).toBe(
-		"⚠ orq is still on acme: the switch failed (orq login session: y)",
+	expect(authLines([{ source: "ORQ_API_KEY", reason: "x" }])[0]).toBe(
+		"⚠ orq is not connected: every credential was rejected (ORQ_API_KEY: x)",
 	);
+	expect(authLines([{ source: NO_CREDENTIAL, reason: "x" }])[0]).toBe("⚠ orq is not connected: no credential found");
+	expect(
+		authLines([
+			{ source: WORKSPACE_SWITCH, workspace: "acme", reason: "x" },
+			{ source: "orq login session", reason: "y" },
+		])[0],
+	).toBe("⚠ orq is still on acme: the switch failed (orq login session: y)");
 });
 
 test("loginKey reads what pi's /login stored: a pasted key or a browser sign-in", () => {
@@ -1172,14 +1334,15 @@ test("authLines says what was rejected, why, and the way out", () => {
 		{ source: "orq login session", reason: "expired" },
 	]);
 	// Two lines, not one per candidate: what happened with the server's reason, then the way out.
-	expect(lines).toEqual(["⚠ orq is not connected: every credential was rejected (ORQ_API_KEY, orq login session: API key is not valid for this workspace.)", LOGIN_CTA]);
+	expect(lines).toEqual([
+		"⚠ orq is not connected: every credential was rejected (ORQ_API_KEY, orq login session: API key is not valid for this workspace.)",
+		LOGIN_CTA,
+	]);
 	expect(LOGIN_CTA).toContain("/login");
 	expect(LOGIN_CTA).toContain("/key");
 	expect(LOGIN_HINT).toContain("/login"); // the browser sign-in
 	expect(LOGIN_HINT).toContain("/key"); // the masked paste
 });
-
-
 
 test("serverOf reads the host out of either whoami shape", () => {
 	// A profile answers with `server`; a browser login answers with `urls.api_base_url`
@@ -1233,22 +1396,29 @@ test("workspaceOfKey reads the workspace out of an orq API key", () => {
 
 test("sessionToken finds the workspace's token across CLI versions", () => {
 	// 6.x: tokens are project-scoped, keyed `<workspace>#<projectId>`.
-	expect(sessionToken({
-		activeWorkspaceKey: "orq-research", activeProjectId: "30365aee",
-		workspaceTokens: { "orq-research#30365aee": { token: "tok-6x" } },
-	})).toBe("tok-6x");
+	expect(
+		sessionToken({
+			activeWorkspaceKey: "orq-research",
+			activeProjectId: "30365aee",
+			workspaceTokens: { "orq-research#30365aee": { token: "tok-6x" } },
+		}),
+	).toBe("tok-6x");
 
 	// 5.x: bare workspace key, no project in the mix at all.
-	expect(sessionToken({
-		activeWorkspaceKey: "orq-research",
-		workspaceTokens: { "orq-research": { token: "tok-5x" } },
-	})).toBe("tok-5x");
+	expect(
+		sessionToken({
+			activeWorkspaceKey: "orq-research",
+			workspaceTokens: { "orq-research": { token: "tok-5x" } },
+		}),
+	).toBe("tok-5x");
 
 	// activeProjectId missing or stale: fall back to any entry for the workspace.
-	expect(sessionToken({
-		activeWorkspaceKey: "orq-research",
-		workspaceTokens: { "orq-research#other-project": { token: "tok-fallback" } },
-	})).toBe("tok-fallback");
+	expect(
+		sessionToken({
+			activeWorkspaceKey: "orq-research",
+			workspaceTokens: { "orq-research#other-project": { token: "tok-fallback" } },
+		}),
+	).toBe("tok-fallback");
 
 	expect(sessionToken(undefined)).toBeUndefined();
 	expect(sessionToken({ activeWorkspaceKey: "orq-research", workspaceTokens: {} })).toBeUndefined();
@@ -1438,9 +1608,13 @@ test("a failed update check cannot overwrite a concurrent successful check", asy
 	const dir = mkdtempSync(join(tmpdir(), "orqi-update-concurrent-"));
 	try {
 		let finishFailed: (latest: undefined) => void = () => {};
-		const failed = checkNow(dir, () => new Promise((resolve) => {
-			finishFailed = resolve;
-		}));
+		const failed = checkNow(
+			dir,
+			() =>
+				new Promise((resolve) => {
+					finishFailed = resolve;
+				}),
+		);
 
 		expect(await checkNow(dir, async () => "9.9.9")).toBe("9.9.9");
 		const successfulRecord = readFileSync(join(dir, "update-check.json"), "utf8");
@@ -1551,11 +1725,7 @@ test("runUpdate preserves the installed binary across download, extraction, and 
 	writeVersionBinary(target, VERSION);
 	writeFileSync(corrupt, "not a tarball");
 	try {
-		for (const url of [
-			`file://${join(root, "missing.tar.gz")}`,
-			`file://${corrupt}`,
-			`file://${wrongVersion}`,
-		]) {
+		for (const url of [`file://${join(root, "missing.tar.gz")}`, `file://${corrupt}`, `file://${wrongVersion}`]) {
 			expect(await runUpdate([], join(root, "agent"), { execPath: target, releaseUrl: () => url, fetchText: sidecarFetch() })).toBe(1);
 			expect(readFileSync(target, "utf8")).toBe(original);
 		}
@@ -1574,7 +1744,9 @@ test("verifyChecksum: match passes, everything else is refused except a 404 on a
 		const reason = (result: Awaited<ReturnType<typeof verifyChecksum>>) => (result.ok ? "" : result.reason);
 		expect(await verifyChecksum(tarball, url, true, sidecarFetch())).toEqual({ ok: true, unverified: false });
 		// A wrong digest: refused, and the message names both so a report is useful.
-		expect(reason(await verifyChecksum(tarball, url, true, sidecarFetch({ status: 200, body: `${"0".repeat(64)}  x\n` })))).toContain("checksum mismatch");
+		expect(reason(await verifyChecksum(tarball, url, true, sidecarFetch({ status: 200, body: `${"0".repeat(64)}  x\n` })))).toContain(
+			"checksum mismatch",
+		);
 		// A captive portal's HTML, or an empty body, is not a digest.
 		for (const body of ["<!DOCTYPE html><html>sign in</html>", ""]) {
 			expect(reason(await verifyChecksum(tarball, url, true, sidecarFetch({ status: 200, body })))).toContain("not a sha256 digest");
@@ -1601,7 +1773,8 @@ test("runUpdate refuses a tarball whose sidecar does not match, and keeps the in
 	const prior = process.env.ORQI_VERSION;
 	process.env.ORQI_VERSION = "999.0.0";
 	writeVersionBinary(target, VERSION);
-	const run = () => runUpdate([], join(root, "agent"), { execPath: target, releaseUrl: () => `file://${tarball}`, fetchText: sidecarFetch() });
+	const run = () =>
+		runUpdate([], join(root, "agent"), { execPath: target, releaseUrl: () => `file://${tarball}`, fetchText: sidecarFetch() });
 	try {
 		writeSidecar(tarball, `${"f".repeat(64)}  release.tar.gz\n`);
 		expect(await run()).toBe(1);
@@ -1803,7 +1976,13 @@ async function updateWithFakeNpm(
 	mkdirSync(dirname(execPath), { recursive: true });
 	writeVersionBinary(execPath, "0.0.1");
 
-	const prior = { path: process.env.PATH, version: process.env.ORQI_VERSION, error: console.error, log: console.log, write: process.stderr.write };
+	const prior = {
+		path: process.env.PATH,
+		version: process.env.ORQI_VERSION,
+		error: console.error,
+		log: console.log,
+		write: process.stderr.write,
+	};
 	const errors: string[] = [];
 	const logs: string[] = [];
 	process.env.PATH = npmScript === null ? fakeBin : `${fakeBin}:${prior.path}`;
@@ -1882,17 +2061,10 @@ test("refusal names both the method and the found path for every channel orqi do
 });
 
 test("releaseUrl builds the same two forms install.sh does, pinned or latest", () => {
-	expect(releaseUrl("orqi-macos-arm64.tar.gz")).toBe(
-		`https://github.com/${REPO}/releases/latest/download/orqi-macos-arm64.tar.gz`,
-	);
-	expect(releaseUrl("orqi-linux-x64.tar.gz", "v0.2.0")).toBe(
-		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
-	);
-	expect(releaseUrl("orqi-linux-x64.tar.gz", "0.2.0")).toBe(
-		`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`,
-	);
+	expect(releaseUrl("orqi-macos-arm64.tar.gz")).toBe(`https://github.com/${REPO}/releases/latest/download/orqi-macos-arm64.tar.gz`);
+	expect(releaseUrl("orqi-linux-x64.tar.gz", "v0.2.0")).toBe(`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`);
+	expect(releaseUrl("orqi-linux-x64.tar.gz", "0.2.0")).toBe(`https://github.com/${REPO}/releases/download/v0.2.0/orqi-linux-x64.tar.gz`);
 });
-
 
 test("every bundled plugin command loads in pi with no diagnostic", async () => {
 	// One unparseable frontmatter upstream is a "Prompt conflicts" block at every boot.

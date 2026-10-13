@@ -52,7 +52,7 @@ export const TOOL_HINTS: Record<string, string> = {
 		"    usage, cost, latency, model_performance -> provider, model, project_id",
 		"    errors                                  -> provider, model, project_id, http_status_code",
 		"    agents                                  -> provider, model, project_id, http_status_code, agent_name",
-		"- `agent_name` works ONLY with `metric: \"agents\"`.",
+		'- `agent_name` works ONLY with `metric: "agents"`.',
 	].join("\n"),
 };
 
@@ -134,7 +134,9 @@ export function authReason(error: unknown): string {
 
 /** An error's first line: what fits in a notice without the stack. */
 export function firstLine(error: unknown): string {
-	return String(error instanceof Error ? error.message : error).trim().split("\n")[0]!;
+	return String(error instanceof Error ? error.message : error)
+		.trim()
+		.split("\n")[0]!;
 }
 
 /** Ask the API whether a token is accepted. Throws "401 …" for a rejection, anything else for a stall. */
@@ -202,7 +204,13 @@ export function summarize(text: string): string {
 	const size = humanSize(Buffer.byteLength(text));
 	try {
 		const parsed = JSON.parse(text);
-		const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : Array.isArray(parsed?.items) ? parsed.items : undefined;
+		const rows = Array.isArray(parsed)
+			? parsed
+			: Array.isArray(parsed?.data)
+				? parsed.data
+				: Array.isArray(parsed?.items)
+					? parsed.items
+					: undefined;
 		if (rows) return `${rows.length} ${rows.length === 1 ? "item" : "items"} · ${size}`;
 		const keys = parsed && typeof parsed === "object" ? Object.keys(parsed) : [];
 		return keys.length ? `${keys.slice(0, 6).join(", ")}${keys.length > 6 ? ", …" : ""} · ${size}` : size;
@@ -235,7 +243,11 @@ export function orqMcp(signedIn: boolean) {
 					renderCall: (args: unknown, theme: any, context: any) => {
 						const seconds = context.durationMs !== undefined ? `  ${(context.durationMs / 1000).toFixed(1)} s` : "";
 						const summary = argSummary(args as Record<string, unknown>);
-						return new Text(`${theme.fg("accent", "▌")} ${theme.fg("toolTitle", bareName(toolName))}${summary ? `  ${theme.fg("muted", summary)}` : ""}${theme.fg("dim", seconds)}`, 0, 0);
+						return new Text(
+							`${theme.fg("accent", "▌")} ${theme.fg("toolTitle", bareName(toolName))}${summary ? `  ${theme.fg("muted", summary)}` : ""}${theme.fg("dim", seconds)}`,
+							0,
+							0,
+						);
 					},
 					renderResult: (result: any, options: any, theme: any, context: any) => {
 						const text = textOf(result.content);
@@ -257,7 +269,9 @@ export function orqMcp(signedIn: boolean) {
 		/** The orq tools pi has registered and not hidden, by bare name. */
 		toolNames: (): string[] => {
 			try {
-				return (current?.getAllTools() ?? []).filter((tool) => tool.name.startsWith(TOOL_PREFIX) && tool.exposure !== "hidden").map((tool) => bareName(tool.name));
+				return (current?.getAllTools() ?? [])
+					.filter((tool) => tool.name.startsWith(TOOL_PREFIX) && tool.exposure !== "hidden")
+					.map((tool) => bareName(tool.name));
 			} catch {
 				return [];
 			}
@@ -270,13 +284,20 @@ export function orqMcp(signedIn: boolean) {
  * tools call tools, not commands, so these open a short-lived connection of
  * their own. Retried once on a fresh connection, because the server stalls.
  */
-export async function callOrqTool(name: string, args: Record<string, unknown>, token = process.env.ORQ_API_KEY ?? ""): Promise<{ text: string; isError: boolean }> {
+export async function callOrqTool(
+	name: string,
+	args: Record<string, unknown>,
+	token = process.env.ORQ_API_KEY ?? "",
+): Promise<{ text: string; isError: boolean }> {
 	let lastError: unknown;
 	for (let attempt = 1; attempt <= 2; attempt++) {
 		const client = new Client({ name: "orqi", version: VERSION });
 		client.onerror = () => {};
 		try {
-			await client.connect(new StreamableHTTPClientTransport(new URL(mcpUrl()), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }), { timeout: 15_000 });
+			await client.connect(
+				new StreamableHTTPClientTransport(new URL(mcpUrl()), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }),
+				{ timeout: 15_000 },
+			);
 			const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 20_000 });
 			return { text: textOf(result.content), isError: Boolean(result.isError) };
 		} catch (error) {
@@ -314,8 +335,12 @@ export function schemaLines(schema: any, indent = ""): string[] {
 	const width = Math.min(24, Math.max(...names.map((name) => name.length)));
 	return names.flatMap((name) => {
 		const prop = properties[name] ?? {};
-		const flags = [required.has(name) ? "required" : "", prop.default !== undefined ? `default ${JSON.stringify(prop.default)}` : ""].filter(Boolean).join(", ");
-		const description = String(prop.description ?? "").replace(/\s+/g, " ").trim();
+		const flags = [required.has(name) ? "required" : "", prop.default !== undefined ? `default ${JSON.stringify(prop.default)}` : ""]
+			.filter(Boolean)
+			.join(", ");
+		const description = String(prop.description ?? "")
+			.replace(/\s+/g, " ")
+			.trim();
 		const head = `${indent}${name.padEnd(width)}  ${typeOf(prop)}${flags ? `  (${flags})` : ""}`;
 		const lines = [head, ...(description ? [`${indent}${" ".repeat(width + 2)}${description}`] : [])];
 		const nested = prop.type === "object" ? prop : prop.type === "array" && prop.items?.type === "object" ? prop.items : undefined;
