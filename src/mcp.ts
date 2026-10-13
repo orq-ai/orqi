@@ -15,6 +15,7 @@ import { dirname } from "node:path";
 import { Type } from "typebox";
 import { LOGIN_HINT, mcpUrl, type Credential } from "./auth.ts";
 import { VERSION } from "./branding.ts";
+import { argSummary } from "./trajectory.ts";
 
 // The orq MCP server answers tools/list in ~1s most of the time, but hangs
 // outright often enough (roughly one call in three) that a plain fetch-on-boot
@@ -392,6 +393,13 @@ export async function connectOrqTools(
 					details: { failed },
 					isError: failed,
 				};
+			},
+			// Tool name, the one or two arguments that identify the call, and how
+			// long it took: pi's default prints the whole argument object.
+			renderCall: (args, theme, context) => {
+				const seconds = context.durationMs !== undefined ? `  ${(context.durationMs / 1000).toFixed(1)} s` : "";
+				const summary = argSummary(args as Record<string, unknown>);
+				return new Text(`${theme.fg("accent", "▌")} ${theme.fg("toolTitle", `${TOOL_PREFIX}${tool.name}`)}${summary ? `  ${theme.fg("muted", summary)}` : ""}${theme.fg("dim", seconds)}`, 0, 0);
 			},
 			renderResult: (result, options, theme) => {
 				const text = textOf(result.content);

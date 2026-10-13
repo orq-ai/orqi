@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { credentialCandidates, LOGIN_HINT, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
-import { CHANGELOG_URL, headerLines, type HeaderInfo, VERSION } from "./branding.ts";
+import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
 
@@ -271,22 +271,6 @@ export function orqCommands(
 			description: "list the orq workspace tools",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(`${toolNames.length} orq tools\n${groupTools(toolNames)}`);
-			},
-		});
-
-		// Not `/changelog`: that name is pi's. It is in BUILTIN_SLASH_COMMANDS, its
-		// dispatch is hardcoded ahead of extensions, and pi drops any extension
-		// command whose name collides with a built-in, so registering it here would
-		// silently do nothing and still show pi's own release notes. Owning
-		// `/changelog` needs an override hook upstream.
-		pi.registerCommand("whatsnew", {
-			description: "open the orq.ai changelog",
-			handler: async (_args, ctx) => {
-				// Opening the URL beats fetching it: nothing to parse, and no scraper to
-				// break when the docs site changes shape.
-				const opener = process.platform === "darwin" ? "open" : "xdg-open";
-				const opened = Bun.spawnSync([opener, CHANGELOG_URL]).success;
-				ctx.ui.notify(opened ? `Opened ${CHANGELOG_URL}` : CHANGELOG_URL, opened ? "info" : "warning");
 			},
 		});
 

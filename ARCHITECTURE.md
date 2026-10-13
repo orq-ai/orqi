@@ -31,6 +31,10 @@ orqi
 | `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, plus `/tools /whoami /workspace /reconnect /doctor /whatsnew /update` |
 | `src/update.ts` | `orqi update`: daily release check, header note, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
+| `src/harness.ts` | The teaching harness extension: footer, minimap, working indicator, agent mode, `/cost /trace /open /trajectory /whatsnew /feedback /agents /agent /panel` |
+| `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
+| `src/footer.ts` / `src/minimap.ts` / `src/panel.ts` | Pure renderers: footer line by width band, minimap rows, boxed overlay panels |
+| `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows and inspect view; the changelog parser |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
 | `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
 
@@ -58,6 +62,24 @@ by presence: `ORQI_ALL_TOOLS=0` still filters.
 Results render as a one-line summary (`23 items · 6.0 KB`) with `ctrl+o` expanding to
 pretty-printed JSON, because the server answers with a single unbroken line. The model always
 receives the full payload.
+
+## Seeing what the platform does
+
+Every router call carries `X-ORQ-THREAD-ID: <pi session id>`, `x-client-type: pi` and
+`X-ORQ-METADATA-source/repo/tag`, as `$ENV` templates on the provider's headers that pi resolves per
+request. So a session is one thread in Studio, `/new` and `/fork` start another, and subagents land
+in their parent's thread with `X-ORQ-METADATA-subagent: <name>` added by a one-line extension on
+their own session.
+
+`src/harness.ts` feeds pi's events into one `Trajectory` (`src/trajectory.ts`), which everything
+visible reads: the footer, the minimap, `/cost` and `/trajectory`. It is built from pi's messages,
+which already carry usage, model, tool calls and durations, so a resumed or forked branch rebuilds
+the same steps. Prices come from the workspace catalogue (`million_tokens_*` in `/v2/models`), so
+the footer's cost and pi's `/session` are real numbers rather than zero.
+
+`/trace` reads the router's `x-orq-trace-id` header off each response and asks `list_spans` for the
+spans, leading with the `auto-router` span when a smart router answered: that is how platform
+routing becomes visible without a client-side classifier.
 
 ## Models
 

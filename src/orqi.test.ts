@@ -8,6 +8,7 @@ import { apiBaseUrl, credentialCandidates, credentialsFile, readWhoami, loginKey
 import { headerLines, VERSION } from "./branding.ts";
 import { authLines, groupTools, NO_CREDENTIAL, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
+import { orqHarness } from "./harness.ts";
 import { authReason, connectOrqTools, CredentialsRejected, DENYLISTED_TOOLS, describe, isAuthError, keptTools, openFirstAccepted, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
@@ -692,8 +693,10 @@ test("our commands never collide with a pi built-in", () => {
 		appendEntry: () => {},
 	} as any;
 	orqCommands(noReconnect, ["orq_list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
+	orqHarness({ agentDir: tmpdir(), catalogue: () => [], toolCount: () => 0, callTool: async () => ({ text: "", isError: false }), workspace: () => undefined })({ ...pi, registerShortcut: () => {} });
 
 	expect(registered).toContain("whatsnew");
+	expect(registered).toContain("trajectory");
 	expect(registered.filter((name) => builtins.has(name))).toEqual([]);
 });
 

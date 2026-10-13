@@ -28,6 +28,7 @@ import { authLines, orqCommands } from "./commands.ts";
 import { connectOrqTools, firstLine } from "./mcp.ts";
 import { createOrqModelRuntime, pickModel } from "./model.ts";
 import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
+import { orqHarness } from "./harness.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { currentUpdateCommand, maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
 
@@ -58,6 +59,16 @@ Sign in with \`orq auth login\` or export ORQ_API_KEY.`);
 }
 if (oneShot === "update") {
 	process.exit(await runUpdate(process.argv.slice(3), AGENT_DIR));
+}
+
+/** `owner/repo` of the working directory's origin, or "" outside a repo. */
+function repoName(): string {
+	try {
+		const url = Bun.spawnSync(["git", "remote", "get-url", "origin"], { stderr: "ignore" }).stdout.toString().trim();
+		return url.replace(/^.*[:/]([^/:]+\/[^/]+?)(\.git)?$/, "$1");
+	} catch {
+		return "";
+	}
 }
 
 /**
@@ -118,6 +129,9 @@ if (oneShot && !orq.credential) {
 }
 // With nothing accepted the model runs on the best guess; a bad key only
 // degrades the model catalogue to its fallback, and /login replaces it.
+// Every router call names the repo it came from, so a team's Threads tab can be
+// filtered by project. The remote is stripped of any credentials it embeds.
+process.env.ORQI_REPO ??= repoName();
 const models = await createOrqModelRuntime(AGENT_DIR, orq.credential?.token ?? candidates[0]!.token);
 const modelRuntime = models.runtime;
 const model = pickModel(models);
@@ -171,6 +185,19 @@ const services = await createAgentSessionServices({
 				AGENT_DIR,
 				{ rejections: orq.rejections, candidates },
 			),
+			orqHarness({
+				agentDir: AGENT_DIR,
+				catalogue: () => models.catalogue,
+				toolCount: () => orq.tools.length,
+				callTool: async (name, args) => {
+					const tool = orq.tools.find((candidate) => candidate.name === `orq_${name}`);
+					if (!tool) throw new Error(`orq_${name} is not available on this connection`);
+					// The MCP server stalls now and then (AGENTS.md); a slash command must not hang on it.
+					const result = await tool.execute(`orqi-${name}`, args as any, AbortSignal.timeout(20_000), undefined, undefined as any);
+					return { text: (result.content as { text?: string }[]).map((block) => block.text ?? "").join("\n"), isError: Boolean((result as { isError?: boolean }).isError) };
+				},
+				workspace: () => header.workspace,
+			}),
 		],
 	},
 });
