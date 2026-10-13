@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { apiBaseUrl, credentialCandidates, credentialsFile, readWhoami, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
-import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
+import { authLines, LOGIN_CTA, LOGIN_REFUSED, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { orqHarness } from "./harness.ts";
 import { authReason, CredentialsRejected, DENYLISTED_TOOLS, hintsSection, isAuthError, keptTools, orqServerConfig, pickCredential, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
@@ -883,7 +883,7 @@ test("a rejected boot pins the warning, and the next message reconnects", async 
 	h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
 	expect(h.widgets.get("orq-auth")).toEqual(authLines(rejected));
 	expect(h.status.get("orq-workspace")).toBe("orq:not connected");
-	expect(h.notices).toEqual(["orq is not connected: every credential was rejected."]);
+	expect(h.notices).toEqual([]); // pinned once, not also notified
 
 	// Nothing changed since boot: the turn does not knock on the server again,
 	// not even on the first message.
@@ -938,7 +938,7 @@ test("a rejection after a retry re-pins the widget with the new reasons", async 
 	});
 	stored = [{ token: "sk-orq-expired", source: "/login key" }, bad];
 	await h.input();
-	expect(h.notices.at(-1)).toBe(`orq still rejects every credential. ${LOGIN_HINT}`);
+	expect(h.notices).toEqual([]); // the refusal is pinned, not repeated as a notice
 	expect(h.widgets.get("orq-auth")).toEqual(authLines([{ source: "/login key", reason: "nope" }, { source: "ORQ_API_KEY", reason: "nope" }]));
 	// Same refused set: no re-knock.
 	const before = h.notices.length;
@@ -947,8 +947,7 @@ test("a rejection after a retry re-pins the widget with the new reasons", async 
 	// No candidates at all: the headline stops claiming a rejection.
 	stored = [];
 	await h.input();
-	expect(h.widgets.get("orq-auth")![0]).toBe("orq is not connected: no credential found.");
-	expect(h.notices.at(-1)).toBe(`No orq credential found. ${LOGIN_HINT}`);
+	expect(h.widgets.get("orq-auth")![0]).toBe("⚠ orq is not connected: no credential found");
 });
 
 test("/reconnect always tries, and reports already connected without knocking twice", async () => {
@@ -1008,10 +1007,9 @@ test("a failed /workspace switch says the tools are still on the previous worksp
 	// Connected boot (no rejections) switching to a workspace whose token is rejected.
 	await narrowed.commands.get("reconnect")!("", narrowed.ctx);
 	expect(calls.length).toBe(1);
-	expect(narrowed.widgets.get("orq-auth")![0]).toBe("orq is still on the previous workspace: the switch failed.");
-	expect(narrowed.widgets.get("orq-auth")).toContain(`  ${WORKSPACE_SWITCH} (acme): the new credential was rejected`);
+	expect(narrowed.widgets.get("orq-auth")).toEqual(["⚠ orq is still on acme: the switch failed (orq login session: expired)", LOGIN_CTA]);
 	expect(narrowed.status.get("orq-workspace")).toBe("orq:acme (switch failed)");
-	expect(narrowed.notices.at(-1)).toBe(`orq rejected the credential for that workspace; still on acme. ${LOGIN_HINT}`);
+	expect(narrowed.notices.at(-1)).toBe("orq rejected that credential; still on acme."); // /reconnect asked, so it answers
 	// The widget is up, so the hook engages on the next message; same set, refused: skip.
 	await narrowed.input();
 	expect(calls.length).toBe(1);
@@ -1020,7 +1018,7 @@ test("a failed /workspace switch says the tools are still on the previous worksp
 	await narrowed.commands.get("reconnect")!("", narrowed.ctx);
 	expect(calls.length).toBe(2);
 	expect(narrowed.notices.at(-1)).toBe("orq did not answer: Request timed out. Retrying on your next message, or run /reconnect.");
-	expect(narrowed.widgets.get("orq-auth")![0]).toBe("orq is still on the previous workspace: the switch failed.");
+	expect(narrowed.widgets.get("orq-auth")![0]).toStartWith("⚠ orq is still on acme: the switch failed");
 	await narrowed.input();
 	expect(calls.length).toBe(3);
 	// Accepted: everything clears and the footer moves.
@@ -1031,11 +1029,30 @@ test("a failed /workspace switch says the tools are still on the previous worksp
 	expect(narrowed.status.get("orq-workspace")).toBe("orq:other");
 });
 
+test("a refused stored /login key is one pinned line, not re-tried as a workspace switch", async () => {
+	const stale: Credential = { token: "sk-orq-stale", source: "/login key" };
+	const session: Credential = { token: "sk-orq-session", source: "orq login session", workspace: "acme" };
+	const calls: Credential[][] = [];
+	const h = recoveryHarness(
+		async (candidates) => {
+			calls.push(candidates);
+			return rejectAllBut("sk-orq-session")(candidates);
+		},
+		{ candidates: [stale, session], readCandidates: () => ({ candidates: [stale, session] }), loginRefused: true, header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" } },
+	);
+	h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
+	expect(h.widgets.get("orq-auth")).toEqual(LOGIN_REFUSED);
+	expect(h.notices).toEqual([]);
+	// The first message does not knock with the token the boot already refused.
+	await h.input();
+	expect(calls.length).toBe(0);
+});
+
 test("authLines picks its headline from what actually happened", () => {
-	expect(authLines([{ source: "ORQ_API_KEY", reason: "x" }])[0]).toBe("orq is not connected: every credential was rejected.");
-	expect(authLines([{ source: NO_CREDENTIAL, reason: "x" }])[0]).toBe("orq is not connected: no credential found.");
+	expect(authLines([{ source: "ORQ_API_KEY", reason: "x" }])[0]).toBe("⚠ orq is not connected: every credential was rejected (ORQ_API_KEY: x)");
+	expect(authLines([{ source: NO_CREDENTIAL, reason: "x" }])[0]).toBe("⚠ orq is not connected: no credential found");
 	expect(authLines([{ source: WORKSPACE_SWITCH, workspace: "acme", reason: "x" }, { source: "orq login session", reason: "y" }])[0]).toBe(
-		"orq is still on the previous workspace: the switch failed.",
+		"⚠ orq is still on acme: the switch failed (orq login session: y)",
 	);
 });
 
@@ -1063,12 +1080,10 @@ test("authLines says what was rejected, why, and the way out", () => {
 		{ source: "ORQ_API_KEY", workspace: "acme", reason: "API key is not valid for this workspace." },
 		{ source: "orq login session", reason: "expired" },
 	]);
-	expect(lines).toEqual([
-		"orq is not connected: every credential was rejected.",
-		"  ORQ_API_KEY (acme): API key is not valid for this workspace.",
-		"  orq login session: expired",
-		LOGIN_HINT,
-	]);
+	// Two lines, not one per candidate: what happened with the server's reason, then the way out.
+	expect(lines).toEqual(["⚠ orq is not connected: every credential was rejected (ORQ_API_KEY, orq login session: API key is not valid for this workspace.)", LOGIN_CTA]);
+	expect(LOGIN_CTA).toContain("/login");
+	expect(LOGIN_CTA).toContain("/key");
 	expect(LOGIN_HINT).toContain("/login"); // the browser sign-in
 	expect(LOGIN_HINT).toContain("/key"); // the masked paste
 });

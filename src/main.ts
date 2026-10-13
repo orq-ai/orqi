@@ -24,7 +24,7 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
-import { orqOAuth } from "./oauth.ts";
+import { orqOAuth, refreshStoredSignIn } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./commands.ts";
 import { callOrqTool, CredentialsRejected, firstLine, hintsSection, orqMcp, pickCredential, type Reconnected, type Rejection } from "./mcp.ts";
@@ -145,6 +145,13 @@ if (oneShot && !credential) {
 }
 // pi's MCP reads the server's Authorization header from here, per connection.
 if (credential) process.env.ORQ_API_KEY = credential.token;
+// The stored /login credential is candidate #0 and pi's model runtime prefers it,
+// so one the API refused breaks every model call even though the tools connected
+// on something else. A stale browser sign-in is refreshed from the session in
+// place; a refused pasted key gets one pinned line saying how to replace it.
+const storedLogin = candidates.find((candidate) => candidate.source === "/login key");
+const loginRefused =
+	credential && storedLogin && credential.token !== storedLogin.token && !(credential.source === SESSION_SOURCE && refreshStoredSignIn(AUTH_PATH, credential.token));
 const mcp = orqMcp(Boolean(credential));
 // With nothing accepted the model runs on the best guess; a bad key only
 // degrades the model catalogue to its fallback, and /login replaces it.
@@ -223,6 +230,7 @@ const commands = orqCommands(
 		rejections: candidates.length === 0 ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : bootRejections,
 		candidates,
 		welcome,
+		loginRefused: Boolean(loginRefused),
 	},
 );
 

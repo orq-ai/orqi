@@ -106,7 +106,8 @@ the CLI's own stderr above the login hint.
 | session expired | the CLI's own message, e.g. `Error: Invalid refresh token!` |
 | whoami says `authenticated: false` (CLI 11.0.1+) | the credential whoami vouched for (the login session, or the api-key login) is not tried; its `auth_error` is shown, e.g. `orq login session rejected: 401 …`. A failed check (`auth_check_error`: timeout, 5xx) is no verdict and changes nothing |
 | api-key login file gone or corrupt | `api-key login file unreadable: <path> (…)` |
-| every candidate refused | the TUI opens signed out, with a warning pinned above the editor naming each candidate tried and the server's reason (`ORQ_API_KEY (acme): API key is not valid for this workspace…`), then the hint, and the welcome below. One-shot prints the same block and exits 1 |
+| every candidate refused | the TUI opens signed out, with a two-line warning pinned above the editor: `⚠ orq is not connected: every credential was rejected (ORQ_API_KEY: API key is not valid for this workspace…)`, then `→ /login to sign in again, or /key to paste an API key`, and the welcome below. One-shot prints the same two lines, with the one-shot hint, and exits 1 |
+| the stored `/login` credential refused, another accepted | a browser sign-in is refreshed from the login session, silently; a pasted key pins `⚠ the key stored with /login or /key was refused, so the model cannot answer` and how to replace it |
 | the credential check stalled | orqi boots on the first candidate and says `orq did not answer the credential check (…)`; pi's MCP retries the connection |
 | nothing above, just no credential | one-shot: the hint alone, exit 1. TUI: a welcome with three paths (sign in with the browser, which runs `orq auth login`; paste an API key, stored where `/login` keeps it; look around without a workspace) |
 
@@ -127,7 +128,7 @@ server, which makes pi reconnect it with the new credential.
 | `/key` or `/login`, with a credential for the right workspace | send any message: `Connected to orq: acme (/login key); its tools arrive as the server connects (/mcp shows it).` |
 | `orq auth login` in another terminal | send any message, or `/reconnect` |
 | fixed `ORQ_API_KEY` | restart: the environment cannot change under a running process |
-| `/workspace <key>` and the new token was rejected or the server stalled | the old connection stays up and the widget says so: `orq is still on the previous workspace: the switch failed.` Fix the credential, or `/reconnect` |
+| `/workspace <key>` and the new token was rejected or the server stalled | the old connection stays up and the widget says so: `⚠ orq is still on acme: the switch failed (…)`. Fix the credential, or `/reconnect` |
 
 A stall clears the memo, so the next message retries even a set that was refused earlier; a
 rejection records the set, so the same keys are not sent again until something changes.

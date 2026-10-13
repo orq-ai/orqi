@@ -12,6 +12,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 
 export interface DeviceLogin {
 	url?: string;
@@ -90,6 +91,27 @@ export function orqOAuth(
 		refreshToken: async (_credentials: unknown) => fresh(),
 		getApiKey: (credentials: { access: string }) => credentials.access,
 	};
+}
+
+/**
+ * A browser sign-in pi stored whose token the API refused, while the login
+ * session it copies was accepted: write the session's token over it, which is
+ * what pi's refresh would have done had it known the token was stale. pi
+ * re-reads auth.json when the file changes, so the model runtime, which
+ * prefers this entry over ORQ_API_KEY, stops failing with 401. A pasted key
+ * is never touched: it is not the session's to replace. True when rewritten.
+ */
+export function refreshStoredSignIn(authPath: string, sessionToken: string): boolean {
+	try {
+		const data = JSON.parse(readFileSync(authPath, "utf8"));
+		const stored = data?.orq;
+		if (stored?.type !== "oauth" || stored.access === sessionToken) return false;
+		data.orq = { ...stored, access: sessionToken, expires: expiresAt(sessionToken) };
+		writeFileSync(authPath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /** Run the orq CLI, streaming its output; the abort signal kills it. */

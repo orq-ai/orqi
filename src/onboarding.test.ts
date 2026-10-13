@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { loginKey } from "./auth.ts";
 import { normalizeCommand } from "./frontmatter.ts";
-import { expiresAt, orqOAuth, parseDeviceLogin } from "./oauth.ts";
+import { expiresAt, orqOAuth, parseDeviceLogin, refreshStoredSignIn } from "./oauth.ts";
 import { headerLines } from "./branding.ts";
 import { NO_CREDENTIAL, orqCommands } from "./commands.ts";
 import { learnRows, LEARN_PROMPTS, loginUrl, MaskedInput, maskKey, plausibleKey, saveLoginKey, WELCOME_OPTIONS, welcomeChoice } from "./onboarding.ts";
@@ -236,4 +236,24 @@ test("a /login session token expires when the token says, not after a fixed TTL"
 	expect(expiresAt("sk-orq-opaque", now)).toBe(now + 50 * 60_000);
 	// Already expired: at least a minute out, so pi does not refresh in a loop.
 	expect(expiresAt(jwt({ exp: now / 1000 - 10 }), now)).toBe(now + 60_000);
+});
+
+test("a refused browser sign-in is refreshed from the session in place; a pasted key never is", () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-signin-"));
+	try {
+		const path = join(dir, "auth.json");
+		writeFileSync(path, JSON.stringify({ orq: { type: "oauth", access: "stale", refresh: "orq-cli-session", expires: 9e15 }, other: { type: "api_key", key: "k" } }));
+		expect(refreshStoredSignIn(path, "fresh")).toBe(true);
+		const data = JSON.parse(readFileSync(path, "utf8"));
+		expect(data.orq).toMatchObject({ type: "oauth", access: "fresh", refresh: "orq-cli-session" });
+		expect(data.orq.expires).toBeLessThan(9e15); // the fresh token's own expiry, not the stale one's
+		expect(data.other).toEqual({ type: "api_key", key: "k" }); // other providers untouched
+		expect(refreshStoredSignIn(path, "fresh")).toBe(false); // already current
+		writeFileSync(path, JSON.stringify({ orq: { type: "api_key", key: "sk-orq-pasted" } }));
+		expect(refreshStoredSignIn(path, "fresh")).toBe(false);
+		expect(JSON.parse(readFileSync(path, "utf8")).orq.key).toBe("sk-orq-pasted");
+		expect(refreshStoredSignIn(join(dir, "missing.json"), "fresh")).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
