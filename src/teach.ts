@@ -96,8 +96,8 @@ export const GLOSSARY: Record<string, Concept> = {
 	},
 	feedback: {
 		title: "feedback",
-		body: "Human ratings and corrections attached to a trace or log: ground truth for checking that an evaluator agrees with people.",
-		docs: "feedback/overview",
+		body: "A note to the orq.ai team about the platform, its tools or its docs, sent as an email to support. Each call sends one, so orqi asks before it runs.",
+		docs: "",
 	},
 	docs: {
 		title: "docs",

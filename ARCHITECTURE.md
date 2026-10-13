@@ -31,7 +31,7 @@ orqi
 | `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, plus `/tools /whoami /workspace /reconnect /doctor /whatsnew /update` |
 | `src/update.ts` | `orqi update`: daily release check, header note, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
-| `src/harness.ts` | The teaching harness extension: footer, side panel, working indicator, agent mode, exit summary, `/cost /trace /open /trajectory /whatsnew /feedback /agents /agent /panel /teach /context` |
+| `src/harness.ts` | The teaching harness extension: footer, side panel, working indicator, agent mode, exit summary, `/cost /trace /open /trajectory /whatsnew /agents /agent /panel /teach /context` |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the side panel shows after a run |
 | `src/router.ts` | `orq/auto` and the `orq-decisions` classifier provider: pool, policy, Decisions API adapter, route log |

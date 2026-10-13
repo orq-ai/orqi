@@ -264,7 +264,7 @@ export function orqMcp(signedIn: boolean) {
 }
 
 /**
- * One tool call for a slash command (/trace, /agents, /feedback): pi lets
+ * One tool call for a slash command (/trace, /agents): pi lets
  * tools call tools, not commands, so these open a short-lived connection of
  * their own. Retried once on a fresh connection, because the server stalls.
  */

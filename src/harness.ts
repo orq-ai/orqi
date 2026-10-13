@@ -1184,27 +1184,6 @@ export function orqHarness(deps: HarnessDeps) {
 			},
 		});
 
-		pi.registerCommand("feedback", {
-			description: "send feedback to the orq.ai team: /feedback <text> (prefix with feature: for a request)",
-			handler: async (args, ctx) => {
-				const text = args.trim();
-				if (!text) {
-					ctx.ui.notify("usage: /feedback <what went wrong, or feature: what you want>", "warning");
-					return;
-				}
-				const feature = /^feature:/i.test(text);
-				try {
-					const result = await deps.callTool("submit_feedback", {
-						message: `${feature ? text.replace(/^feature:\s*/i, "") : text}\n\n(sent from orqi ${VERSION}, thread ${ctx.sessionManager.getSessionId()})`,
-						category: feature ? "feature_request" : "bug",
-					});
-					ctx.ui.notify(result.isError ? `Feedback not sent: ${result.text.slice(0, 200)}` : `Sent to the orq.ai team, thank you. ${result.text.slice(0, 120)}`, result.isError ? "error" : "info");
-				} catch (error) {
-					ctx.ui.notify(`Feedback not sent: ${error instanceof Error ? error.message : error}`, "error");
-				}
-			},
-		});
-
 		const talkTo = async (key: string, ctx: ExtensionContext) => {
 			const model = ctx.modelRegistry.find("orq", `agent/${key}`);
 			if (!model) {

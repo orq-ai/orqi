@@ -218,7 +218,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (`readSkill`: description, other frontmatter, path, files beside it). `i` opens the instructions
   on their own, as `j` opens a tool's raw schema; `u` puts `/skill:<name> ` in the editor.
 - **Slash commands make their own short MCP call** (`callOrqTool`). pi lets tools call tools, not
-  commands, so `/trace`, `/agents` and `/feedback` open a one-call connection, retried once.
+  commands, so `/trace` and `/agents` open a one-call connection, retried once.
 - **Session services are built per session, not once** (`makeServices` in `src/main.ts`). pi marks
   a session's extension handles stale when `/new`, `/resume` or `/fork` replaces it; with one shared
   services object every extension kept calling through dead handles, and the footer's first frame
