@@ -16,7 +16,8 @@
 		"build": "bun run assets && bun build --compile --outfile orqi src/main.ts",
 		"dist": "bun dist.ts",
 		"format": "biome format --write",
-		"format:check": "biome format"
+		"format:check": "biome format",
+		"lint": "biome lint"
 	},
 	"dependencies": {
 		"@earendil-works/pi-ai": "^1.2.0",

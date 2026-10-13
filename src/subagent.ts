@@ -18,7 +18,6 @@ import {
 	SettingsManager,
 	type ExtensionAPI,
 	type ModelRuntime,
-	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Model, Usage } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
