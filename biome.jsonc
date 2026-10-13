@@ -25,7 +25,22 @@
 		}
 	},
 	"linter": {
-		"enabled": false
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"suspicious": {
+				// pi's extension API, MCP payloads and test doubles are untyped at the boundary;
+				// typing 115 sites is a refactor of its own, not a lint fix.
+				"noExplicitAny": "off",
+				// Stripping and matching ANSI escapes (\x1b) is the point of those regexes.
+				"noControlCharactersInRegex": "off"
+			},
+			"style": {
+				// Used after a length or lookup check the compiler cannot follow; replacing
+				// 79 of them with guards would change control flow.
+				"noNonNullAssertion": "off"
+			}
+		}
 	},
 	"assist": {
 		"enabled": false
@@ -41,6 +56,17 @@
 			"javascript": {
 				"formatter": {
 					"quoteStyle": "single"
+				}
+			}
+		},
+		{
+			// The launcher is CommonJS (no "type": "module") and declares node >=14, so its
+			// 'use strict' is not redundant and require("node:...") would break Node < 14.18.
+			"includes": ["npm/orqi/bin/orqi.js"],
+			"linter": {
+				"rules": {
+					"suspicious": { "noRedundantUseStrict": "off" },
+					"style": { "useNodejsImportProtocol": "off" }
 				}
 			}
 		}
