@@ -1,9 +1,9 @@
 /** Checks for the bits with real branching. Run with `bun test`. */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { apiBaseUrl, credentialCandidates, credentialsFile, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
 import { authLines, groupTools, NO_CREDENTIAL, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
@@ -35,6 +35,8 @@ import {
 	REPO,
 	runUpdate,
 	checkNow,
+	type FetchText,
+	verifyChecksum,
 	type SuccessfulUpdateCache,
 	type UpdateCache,
 	pendingUpdate,
@@ -67,6 +69,22 @@ function releaseFixture(root: string, version: string): string {
 	if (!packed.success) throw new Error(packed.stderr.toString());
 	return tarball;
 }
+
+/** The sidecar for a release fixture: the real digest, or whatever body the test wants served. */
+function writeSidecar(tarball: string, body?: string): string {
+	const path = `${tarball}.sha256`;
+	writeFileSync(path, body ?? checksumLine(sha256Hex(readFileSync(tarball)), basename(tarball)));
+	return path;
+}
+
+/** A fetchText that serves the sidecar beside a file:// tarball URL, or a fixed answer. */
+const sidecarFetch =
+	(answer?: { status: number; body: string }): FetchText =>
+	async (url) => {
+		if (answer) return answer;
+		const path = url.replace(/^file:\/\//, "");
+		return existsSync(path) ? { status: 200, body: readFileSync(path, "utf8") } : { status: 404, body: "" };
+	};
 
 function installerEnv(root: string, tarball: string): Record<string, string | undefined> {
 	const fakeBin = join(root, "fake-bin");
@@ -1490,6 +1508,7 @@ test("runUpdate verifies and atomically replaces a binary from a release tarball
 	const root = mkdtempSync(join(tmpdir(), "orqi-update-integration-"));
 	const target = join(root, "orqi");
 	const tarball = releaseFixture(root, "999.0.0");
+	writeSidecar(tarball);
 	const prior = process.env.ORQI_VERSION;
 	process.env.ORQI_VERSION = "999.0.0";
 	writeVersionBinary(target, VERSION);
@@ -1497,6 +1516,7 @@ test("runUpdate verifies and atomically replaces a binary from a release tarball
 		const code = await runUpdate([], join(root, "agent"), {
 			execPath: target,
 			releaseUrl: () => `file://${tarball}`,
+			fetchText: sidecarFetch(),
 		});
 		expect(code).toBe(0);
 		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("999.0.0");
@@ -1523,9 +1543,67 @@ test("runUpdate preserves the installed binary across download, extraction, and 
 			`file://${corrupt}`,
 			`file://${wrongVersion}`,
 		]) {
-			expect(await runUpdate([], join(root, "agent"), { execPath: target, releaseUrl: () => url })).toBe(1);
+			expect(await runUpdate([], join(root, "agent"), { execPath: target, releaseUrl: () => url, fetchText: sidecarFetch() })).toBe(1);
 			expect(readFileSync(target, "utf8")).toBe(original);
 		}
+	} finally {
+		if (prior === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("verifyChecksum: match passes, everything else is refused except a 404 on a pinned version", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-checksum-"));
+	try {
+		const tarball = releaseFixture(root, "999.0.0");
+		const url = `file://${writeSidecar(tarball)}`;
+		const reason = (result: Awaited<ReturnType<typeof verifyChecksum>>) => (result.ok ? "" : result.reason);
+		expect(await verifyChecksum(tarball, url, true, sidecarFetch())).toEqual({ ok: true, unverified: false });
+		// A wrong digest: refused, and the message names both so a report is useful.
+		expect(reason(await verifyChecksum(tarball, url, true, sidecarFetch({ status: 200, body: `${"0".repeat(64)}  x\n` })))).toContain("checksum mismatch");
+		// A captive portal's HTML, or an empty body, is not a digest.
+		for (const body of ["<!DOCTYPE html><html>sign in</html>", ""]) {
+			expect(reason(await verifyChecksum(tarball, url, true, sidecarFetch({ status: 200, body })))).toContain("not a sha256 digest");
+		}
+		// 404: refused for latest, tolerated with a flag for a pinned version.
+		expect(reason(await verifyChecksum(tarball, url, false, sidecarFetch({ status: 404, body: "" })))).toContain("no checksum published");
+		expect(await verifyChecksum(tarball, url, true, sidecarFetch({ status: 404, body: "" }))).toEqual({ ok: true, unverified: true });
+		// Anything else, pinned or not, is a failed fetch.
+		expect(reason(await verifyChecksum(tarball, url, true, sidecarFetch({ status: 503, body: "" })))).toContain("HTTP 503");
+		const reset: FetchText = async () => {
+			throw new Error("connection reset");
+		};
+		expect(reason(await verifyChecksum(tarball, url, true, reset))).toContain("connection reset");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runUpdate refuses a tarball whose sidecar does not match, and keeps the installed binary", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-checksum-"));
+	const target = join(root, "orqi");
+	const tarball = releaseFixture(root, "999.0.0");
+	const original = `#!/bin/sh\nprintf '%s\\n' '${VERSION}'\n`;
+	const prior = process.env.ORQI_VERSION;
+	process.env.ORQI_VERSION = "999.0.0";
+	writeVersionBinary(target, VERSION);
+	const run = () => runUpdate([], join(root, "agent"), { execPath: target, releaseUrl: () => `file://${tarball}`, fetchText: sidecarFetch() });
+	try {
+		writeSidecar(tarball, `${"f".repeat(64)}  release.tar.gz\n`);
+		expect(await run()).toBe(1);
+		expect(readFileSync(target, "utf8")).toBe(original);
+		// A pinned version with no sidecar installs, with the warning.
+		rmSync(`${tarball}.sha256`);
+		const warnings: string[] = [];
+		const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => void warnings.push(String(args[0])));
+		try {
+			expect(await run()).toBe(0);
+		} finally {
+			spy.mockRestore();
+		}
+		expect(warnings.some((line) => line.includes("installing UNVERIFIED"))).toBe(true);
+		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("999.0.0");
 	} finally {
 		if (prior === undefined) delete process.env.ORQI_VERSION;
 		else process.env.ORQI_VERSION = prior;
