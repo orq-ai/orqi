@@ -114,6 +114,16 @@ export function refreshStoredSignIn(authPath: string, sessionToken: string): boo
 	}
 }
 
+/** A browser sign-in pi stored whose token is past the expiry pi would refresh it at. */
+export function signInExpired(authPath: string, now = Date.now()): boolean {
+	try {
+		const stored = JSON.parse(readFileSync(authPath, "utf8"))?.orq;
+		return stored?.type === "oauth" && typeof stored.expires === "number" && stored.expires <= now;
+	} catch {
+		return false;
+	}
+}
+
 /** Run the orq CLI, streaming its output; the abort signal kills it. */
 function runCli(args: string[], onOutput: (chunk: string) => void, signal?: AbortSignal): Promise<number> {
 	return new Promise((resolve) => {

@@ -133,6 +133,12 @@ server, which makes pi reconnect it with the new credential.
 A stall clears the memo, so the next message retries even a set that was refused earlier; a
 rejection records the set, so the same keys are not sent again until something changes.
 
+A browser sign-in stores a copy of the login session's 30-minute token, and pi refreshes that copy
+only at the model call, which runs after the `input` event. So when the stored copy has expired, the
+`input` event first refreshes it from the login session (one `whoami`), then switches to the fresh
+token. Without that step, a session left idle past the token's life knocked with the expired copy
+and pinned `the switch failed` while the model, refreshed a moment later, kept working.
+
 ## 5. Which workspace is shown
 
 The header names the active workspace, because it scopes every tool call and

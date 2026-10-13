@@ -12,6 +12,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { credentialCandidates, LOGIN_HINT, loginKey, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
+import { refreshStoredSignIn, signInExpired } from "./oauth.ts";
 import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
 
@@ -370,11 +371,20 @@ export function orqCommands(
 			// and the header learns its workspace. Reading auth.json costs nothing;
 			// the whoami re-read only happens when the stored token actually changed.
 			if (rejections.length === 0) {
-				const stored = loginKey(authPath);
+				let stored = loginKey(authPath);
+				// A browser sign-in is a copy of the login session's 30-minute token, and
+				// pi refreshes it only at the model call, after this hook: an expired copy
+				// is no new credential. Refresh it from the session first, as pi would.
+				if (stored && signInExpired(authPath)) {
+					const session = readCandidates(authPath).candidates.find((c) => c.source === SESSION_SOURCE)?.token;
+					if (!session || !refreshStoredSignIn(authPath, session)) return;
+					stored = session;
+				}
 				// Tried once per stored token: a refused one must not knock on every message.
 				if (!stored || stored === process.env.ORQ_API_KEY || stored === switchTried) return;
 				switchTried = stored;
-				const outcome = await recover(pi, ctx, (all) => all.filter((candidate) => candidate.token === stored));
+				// Once: a refreshed sign-in and the login session carry the same token.
+				const outcome = await recover(pi, ctx, (all) => all.filter((candidate) => candidate.token === stored).slice(0, 1));
 				if (outcome && worthNotice(outcome)) ctx.ui.notify(outcome);
 				return;
 			}
