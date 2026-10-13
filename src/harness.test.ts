@@ -8,11 +8,11 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
-import { brandTitle, costLines, repoOf, repriced, topModel } from "./harness.ts";
-import { minimapRow, minimapRows, minimapSummary, peekLines } from "./minimap.ts";
+import { brandTitle, contextSplit, costLines, repoOf, repriced, topModel } from "./harness.ts";
+import { contextLines, minimapRow, minimapRows, minimapSummary, peekLines, sectionLines, signalLines, type ContextSplit } from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
-import { schemaLines } from "./mcp.ts";
+import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
@@ -520,4 +520,50 @@ test("signals: a loop is the same tool with the same arguments three times in th
 	trajectory.gate("nope", "one_way", "denied");
 	expect(trajectory.steps).toHaveLength(1);
 	expect(signals(trajectory.steps).oneWay).toBe(1);
+});
+
+test("panel sections: a rule, an indented body, one calm line when empty", () => {
+	expect(sectionLines("teach", [], 36)).toEqual([" ─ teach ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
+	const split: ContextSplit = { prompt: 4_440, hints: 680, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: [], skills: 24, hinted: 1, turns: 2, results: 2 } };
+	expect(contextLines(split, 36)).toEqual([
+		" ─ context ".padEnd(36, "─"),
+		"  prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k",
+		"  tools  ▇▇▇▇▇▇▁▁ 17.8k msgs    2.4k",
+		"  cache 94% · 27.3k/1.1M · /context ",
+	]);
+	expect(signalLines({ errors: 0, tools: 6, oneWay: 0, pending: 0 }, 36).slice(1).map((line) => line.trimEnd())).toEqual(["  no warnings · 0 one-way calls"]);
+	expect(signalLines({ loop: { tool: "get_span", count: 4 }, errors: 1, tools: 6, oneWay: 0, pending: 0 }, 40).slice(1).map((line) => line.trimEnd())).toEqual([
+		"  ⚠ tool loop  get_span ×4 same args",
+		"  errors 1/6 · one-way calls 0",
+	]);
+	expect(signalLines({ errors: 0, tools: 2, oneWay: 0, pending: 1 }, 36)[1]!.trimEnd()).toBe("  one-way calls 0 · pending 1");
+	expect(minimapSummary([], 2, 0.014, 1)).toBe("0 steps · turn 2 · $0.014 · ⚠ 1");
+});
+
+test("minimap rows mark a call waiting on the gate and the step a teach card is about", () => {
+	const step: Step = { id: 5, turn: 1, role: "tool", label: "delete_dataset", detail: "", status: "running", ts: 0, gate: "waiting" };
+	expect(bare(minimapRow(step, 36, false)).trimEnd()).toBe(" ⠋ tool   delete_dataset ?");
+	const done: Step = { ...step, status: "ok", gate: "allowed" };
+	expect(bare(minimapRow(done, 36, false, 0, undefined, true)).trimEnd()).toBe(" ⚙ tool   delete_dataset ✓ ▸");
+	expect(bare(minimapRows([done], 36, 3, undefined, 0, undefined, 5)[0]!)).toContain("✓ ▸");
+});
+
+test("the context split: prompt and skills index apart, active schemas, the rest is messages", () => {
+	const prompt = `You are orqi.\n${hintsSection()}\n\nThe following skills provide specialized instructions for specific tasks.\n<available_skills>\n  <skill>a</skill>\n  <skill>b</skill>\n</available_skills>`;
+	const tools = [
+		{ name: "mcp__orq__list_traces", description: "x".repeat(400), parameters: {} },
+		{ name: "mcp__orq__invoke_model", description: "y".repeat(400), parameters: {}, exposure: "hidden" },
+		{ name: "read", description: "z".repeat(40), parameters: {} },
+		{ name: "write", description: "w".repeat(40), parameters: {} },
+	];
+	const split = contextSplit({ systemPrompt: prompt, tools, active: ["mcp__orq__list_traces", "mcp__orq__invoke_model", "read"], used: 10_000, window: 272_000, steps: [{ id: 1, turn: 1, role: "assistant", label: "assist", detail: "", status: "ok", ts: 0, usage: { input: 1_000, output: 10, cacheRead: 9_000, cost: 0 } }], turns: 1 });
+	expect(split.hints).toBe(Math.ceil(hintsSection().length / 4));
+	expect(split.tools).toBe(Math.ceil(402 / 4) + Math.ceil(42 / 4)); // description + "{}"
+	expect(split.hidden).toBe(Math.ceil(402 / 4));
+	expect(split.counts).toMatchObject({ orq: 1, builtin: 1, hidden: ["invoke_model"], skills: 2, hinted: 1 });
+	expect(split.prompt + split.hints + split.tools + split.skills + split.messages).toBe(10_000);
+	expect(split.cache).toBe(0.9);
+	// Agent mode sends no prompt and no tools: nothing fixed, everything is messages.
+	const agent = contextSplit({ systemPrompt: "", tools, active: [], used: 500, window: 1, steps: [], turns: 0 });
+	expect([agent.prompt, agent.hints, agent.tools, agent.skills, agent.messages]).toEqual([0, 0, 0, 0, 500]);
 });

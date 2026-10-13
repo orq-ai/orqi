@@ -17,13 +17,13 @@ import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { apiBaseUrl, runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
 import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
-import { MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, SPINNER } from "./minimap.ts";
+import { contextLines, MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, signalLines, SPINNER, type ContextSplit } from "./minimap.ts";
 import { talkable, type ModelInfo } from "./model.ts";
-import { bareName, schemaLines, TOOL_PREFIX } from "./mcp.ts";
+import { bareName, hintsSection, schemaLines, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
-import { shortTool, toAtif, Trajectory, type StepUsage } from "./trajectory.ts";
+import { shortTool, signals, toAtif, Trajectory, type Step, type StepUsage } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
 import { DIFFICULTY_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
@@ -162,6 +162,57 @@ export function topModel(catalogue: ModelInfo[]): ModelInfo | undefined {
 		.sort((a, b) => (b.intelligence ?? 0) - (a.intelligence ?? 0) || (b.cost?.output ?? 0) - (a.cost?.output ?? 0))[0];
 }
 
+/** Where pi's skills index starts in the system prompt (`formatSkillsForPrompt`). */
+const SKILLS_MARK = "\n\nThe following skills provide specialized instructions";
+
+/**
+ * Where the context goes, from what pi will send: the system prompt (split at
+ * the skills index), the active tools' schemas, and whatever the last request
+ * counted beyond those, which is the messages. Characters over four: an
+ * estimate, which is all the panel claims.
+ */
+export function contextSplit(input: {
+	systemPrompt: string;
+	tools: { name: string; description?: string; parameters?: unknown; exposure?: string }[];
+	active: string[];
+	used: number;
+	window: number;
+	steps: Step[];
+	turns: number;
+}): ContextSplit {
+	const tok = (text: string) => Math.ceil(text.length / 4);
+	const schema = (tool: (typeof input.tools)[number]) => tok(`${tool.description ?? ""}${JSON.stringify(tool.parameters ?? {})}`);
+	const at = input.systemPrompt.indexOf(SKILLS_MARK);
+	const base = at >= 0 ? input.systemPrompt.slice(0, at) : input.systemPrompt;
+	const hinted = base && base.includes(hintsSection()) ? hintsSection() : "";
+	const active = new Set(input.active);
+	const live = input.tools.filter((tool) => active.has(tool.name) && tool.exposure !== "hidden");
+	const hidden = input.tools.filter((tool) => tool.exposure === "hidden" && tool.name.startsWith(TOOL_PREFIX));
+	const fixed = {
+		prompt: tok(base) - tok(hinted),
+		hints: tok(hinted),
+		tools: live.reduce((n, tool) => n + schema(tool), 0),
+		skills: at >= 0 ? tok(input.systemPrompt.slice(at)) : 0,
+	};
+	const last = [...input.steps].reverse().find((step) => step.role === "assistant" && step.usage && step.usage.input + step.usage.cacheRead > 0);
+	return {
+		...fixed,
+		hidden: hidden.reduce((n, tool) => n + schema(tool), 0),
+		messages: Math.max(0, input.used - fixed.prompt - fixed.hints - fixed.tools - fixed.skills),
+		window: input.window,
+		...(last?.usage ? { cache: last.usage.cacheRead / (last.usage.input + last.usage.cacheRead) } : {}),
+		counts: {
+			orq: live.filter((tool) => tool.name.startsWith(TOOL_PREFIX)).length,
+			builtin: live.filter((tool) => !tool.name.startsWith(TOOL_PREFIX)).length,
+			hidden: hidden.map((tool) => bareName(tool.name)),
+			skills: at >= 0 ? (input.systemPrompt.slice(at).match(/<skill>/g) ?? []).length : 0,
+			hinted: hinted ? Object.keys(TOOL_HINTS).length : 0,
+			turns: input.turns,
+			results: input.steps.filter((step) => step.role === "tool" || step.role === "subagent").length,
+		},
+	};
+}
+
 export function orqHarness(deps: HarnessDeps) {
 	return (pi: ExtensionAPI) => {
 		let ctxRef: ExtensionContext | undefined;
@@ -180,6 +231,25 @@ export function orqHarness(deps: HarnessDeps) {
 		let headerShown = false;
 		let statusOf: (key: string) => string | undefined = () => undefined;
 		let lastFooter = "";
+		let split: ContextSplit | undefined;
+		/** Read on session start, after each run and on a model switch: never in a render, where a handle may be stale. */
+		const measure = (ctx: ExtensionContext) => {
+			try {
+				const agent = isAgentModel(ctx.model?.id);
+				const usage = ctx.getContextUsage();
+				split = contextSplit({
+					systemPrompt: agent ? "" : ctx.getSystemPrompt(),
+					tools: pi.getAllTools(),
+					active: agent ? [] : pi.getActiveTools(),
+					used: usage?.tokens ?? 0,
+					window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
+					steps: trajectory.steps,
+					turns: trajectory.turn,
+				});
+			} catch {
+				// A stale handle: keep the last split.
+			}
+		};
 
 		// ── minimap state ─────────────────────────────────────────────────────
 		let minimapForced: boolean | undefined; // undefined = auto by width
@@ -302,28 +372,38 @@ export function orqHarness(deps: HarnessDeps) {
 		};
 
 		// ── minimap ───────────────────────────────────────────────────────────
-		/** The panel itself: a box as tall as the screen, one row per step. */
+		/** The panel itself: a box as tall as the screen, the minimap on top and its sections under it. */
 		const minimapView = (theme: { fg(token: string, text: string): string }): Component => ({
 			invalidate() {},
 			render(width: number): string[] {
 				const inner = Math.max(10, width - 2);
-				const height = Math.max(6, (process.stdout.rows ?? 30) - 5);
 				const rowPaint = {
 					bright: (text: string) => theme.fg("accent", text),
 					text: (text: string) => theme.fg("text", text),
 					dim: (text: string) => theme.fg("dim", text),
 					error: (text: string) => theme.fg("error", text),
 				};
+				const found = signals(trajectory.steps, trajectory.turn);
+				const sections = [...(split ? [contextLines(split, inner)] : []), signalLines(found, inner)];
+				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
+				const height = Math.max(3, (process.stdout.rows ?? 30) - 5 - below);
 				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
+				const blank = side(" ".repeat(inner));
+				const paintSection = (lines: string[]) => [
+					blank,
+					side(theme.fg("dim", lines[0]!)),
+					...lines.slice(1).map((line) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : "muted", line))),
+				];
 				const title = " minimap ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
 				const hint = minimapFocused ? "↑↓ move · enter peek · esc" : "alt+m hide · /panel focus";
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					...rows.map(side),
-					...Array.from({ length: Math.max(0, height - rows.length) }, () => side(" ".repeat(inner))),
-					side(theme.fg("dim", fit(minimapSummary(trajectory.steps, trajectory.turn, trajectory.totals().cost)))),
+					...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
+					...sections.flatMap(paintSection),
+					side(theme.fg("dim", fit(minimapSummary(trajectory.steps, trajectory.turn, trajectory.totals().cost, found.loop ? 1 : 0)))),
 					side(theme.fg("dim", fit(hint))),
 					theme.fg("border", `└${"─".repeat(inner)}┘`),
 				];
@@ -452,6 +532,7 @@ export function orqHarness(deps: HarnessDeps) {
 			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
 			trajectory.fromMessages(branchMessages(ctx));
 			traces.length = 0;
+			measure(ctx);
 			if (ctx.mode !== "tui") return;
 			installFooter(ctx);
 			ctx.ui.setWorkingIndicator({ frames: SPINNER.map((f) => ctx.ui.theme.fg("accent", f)), intervalMs: 80 });
@@ -478,8 +559,15 @@ export function orqHarness(deps: HarnessDeps) {
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
 		});
-		pi.on("agent_end", (_event, ctx) => ctx.ui.setWorkingMessage());
-		pi.on("model_select", () => render());
+		pi.on("agent_end", (_event, ctx) => {
+			ctx.ui.setWorkingMessage();
+			measure(ctx);
+			render();
+		});
+		pi.on("model_select", (_event, ctx) => {
+			measure(ctx);
+			render();
+		});
 		pi.on("after_provider_response", (event) => {
 			const header = (name: string) => event.headers[name] ?? event.headers[name.toLowerCase()];
 			const traceId = header("x-orq-trace-id");
