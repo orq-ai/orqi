@@ -301,6 +301,18 @@ test("vendor.ts and src/skills.ts agree on what counts as an upstream skill", ()
 	expect(script).toContain("/^(orq-[a-z0-9-]+|evaluatorq)$/");
 });
 
+test("every command AGENTS.md names exists", () => {
+	// Agents run what AGENTS.md tells them to. Same pattern as the factory-quality-scan
+	// agents_md_fresh check, which also reads prose like "just a stall" as a command,
+	// so a match here that is not a command means rewording the sentence.
+	const root = join(import.meta.dir, "..");
+	const scripts = Object.keys(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts);
+	const ok = new Set([...scripts, "install", "ci", "test", "start", "add", "remove", "dlx", "exec", "x", "i"]);
+	const named = [...readFileSync(join(root, "AGENTS.md"), "utf8").matchAll(/\b(npm run|pnpm(?: run)?|yarn|bun run|make|just)\s+([A-Za-z0-9:_.-]+)/g)];
+	// No Makefile or justfile, so any make/just target is stale.
+	expect(named.filter(([, tool, name]) => tool === "make" || tool === "just" || !ok.has(name)).map((m) => m[0])).toEqual([]);
+});
+
 test("vendoredNames keeps only real upstream skills", () => {
 	// This list decides what gets copied out of a downloaded tarball, so it is
 	// also the boundary that keeps odd entries from becoming directories.
