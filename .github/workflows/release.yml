@@ -25,6 +25,9 @@ jobs:
       published: ${{ steps.existing.outputs.published }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # git-cliff walks back to the previous tag for the release notes.
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -101,6 +104,17 @@ jobs:
         with:
           subject-path: dist/*.tar.gz
 
+      # Notes come from the conventional commits since the previous tag
+      # (cliff.toml), not from PR titles, so commits pushed straight to main
+      # are listed too.
+      - name: Generate the release notes
+        if: steps.existing.outputs.published != 'true'
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
       # Draft first: a draft is not returned by releases/latest, so install.sh
       # cannot resolve "latest" to a release whose assets are still uploading.
       # A tag with a "-" is a prerelease, which releases/latest also skips.
@@ -109,7 +123,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          flags="--draft --verify-tag --generate-notes"
+          flags="--draft --verify-tag --notes-file RELEASE_NOTES.md"
           case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
           # shellcheck disable=SC2086
           gh release create "$GITHUB_REF_NAME" $flags dist/*.tar.gz dist/*.tar.gz.sha256
