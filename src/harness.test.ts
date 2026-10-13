@@ -8,7 +8,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
-import { brandTitle, contextRows, contextSplit, costLines, exitSummary, repoOf, repriced, topModel } from "./harness.ts";
+import { brandTitle, exitSummary, repoOf } from "./harness.ts";
+import { contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
 	minimapRow,
