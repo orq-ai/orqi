@@ -321,10 +321,11 @@ capture with `script` and `grep -c 1049h` (the alternate-screen sequence).
 
 Every merge to `main` starts `.github/workflows/release.yml`. It resolves the next version from
 conventional commits since the last stable tag, writes that version to `package.json`, commits it to
-`main`, and tags that exact commit. `fix:`, `perf:`, and `revert:` make a patch release; `feat:`
-makes a minor release; `!` or a `BREAKING CHANGE:` footer makes a major release. `docs:`, `test:`,
-`ci:`, and `chore:` alone make no release. This means a feature branch can never tag or publish a
-release. The workflow token must be allowed to write its version commit and `v*` tag on `main`.
+`main`, and tags that exact commit. `fix:`, `perf:`, and `revert:` create a patch release; `feat:`
+creates a minor release; `!` or a `BREAKING CHANGE:` footer creates a major release. `docs:`,
+`test:`, `ci:`, and `chore:` alone do not trigger a release. This means a feature branch can never
+tag or publish a release. The workflow token must be allowed to write its version commit and `v*`
+tag on `main`.
 
 The release then checks its tag against `package.json`, runs the tests and typecheck, builds the
 three tarballs with a `.sha256` sidecar each (`bun run dist`), runs the linux one to prove it starts,
