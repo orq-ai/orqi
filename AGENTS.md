@@ -281,23 +281,22 @@ Developer ID signature plus notarization.
 - **`last-check` marks a check that completed, not one that started.** A one-shot run exits the
   moment it prints and can kill the update mid-flight; marking earlier pins skills for 24 h on a
   check that never happened, which is how a one-shot-only user never updates.
-- **The baked skills are a floor, not a ceiling.** Once a day `maybeUpdateSkills` asks GitHub
-  whether upstream has moved and, if so, downloads into `~/.orqi/agent/skills-live/current`,
-  which is listed *before* the bundled dir in `additionalSkillPaths`. pi resolves duplicate skill
-  names first-wins, so a fresher `orq-*` supersedes its bundled copy while the bundled `orqi-*`
-  still load. A skill the user installed themselves still wins over both, because pi puts
-  project/user/package skills ahead of `additionalSkillPaths` — but only under
-  `ORQI_LOCAL_SKILLS`, which is what loads them at all; by default the contest is bundled versus
-  live and nothing else. Bundled-loses-to-live is the normal state, not a fault, and pi renders
-  one amber block per collision with `quietStartup` on, so 15 vendored names would mean ~30 lines
-  at every boot: `skillResources` folds exactly those collisions into one warning naming what was
-  superseded, and leaves every other collision — live versus live, or a loser outside `skills/` —
-  alone. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
-  once at boot (`/reload` picks it up early); the check is fire-and-forget after the session is
-  up, so a slow or dead GitHub costs nothing; and every failure path is a silent return, because
-  the worst acceptable outcome is stale skills, never a broken boot. The header shows
-  `skills <sha8>` when live differs from the lock. `ORQI_SKILLS_UPDATE=0` pins and beats
-  `ORQI_REFRESH_SKILLS=1`.
+- **orqi follows the marketplace's `orq` plugin as one unit, and uses exactly one copy of it.**
+  The plugin (orq-ai/assistant-plugins) is skills, slash commands and a version. The binary carries
+  a vendored copy (`skills/orq-*`, `commands/`, pinned in `skills.lock.json` with the commit date
+  and plugin version); once a day `maybeUpdateSkills` installs upstream main into
+  `~/.orqi/agent/skills-live/current/{skills,commands}` only if it is NEWER than that copy, and
+  drops a live copy once the binary has caught up. `pluginResources` then hands pi one copy as
+  individual skill dirs and template files (live if newer, bundled otherwise) plus our `orqi-*`
+  skills. Nothing is offered twice, so pi reports no collision and startup stays quiet. The old
+  design listed live ahead of bundled and folded the collisions into a warning; a live copy 12
+  commits behind the binary then won, silently. Plugin commands skip names in `ORQI_COMMANDS`
+  (orqi's own `/workspace` wins dispatch anyway), and `normalizeCommand` quotes frontmatter values
+  YAML rejects (Claude Code tolerates `argument-hint: [a|b] [c]`; pi does not). Updates land on the
+  next run or `/reload`; every failure is silent; `ORQI_SKILLS_UPDATE=0` pins and beats
+  `ORQI_REFRESH_SKILLS=1`. The header shows `orq plugin <version> (updated)` while a live copy is in use.
+- **The system prompt's tool table is generated** (`toolTable`, the `{{ORQ_TOOLS}}` placeholder)
+  from the catalogue the session wrapped. It was hand-kept and drifted twice.
 - **`src/assets.generated.ts` is generated and gitignored.** `build.ts` writes it; never edit or
   commit it.
 - **Handoff notes go in `.context/`, not in this file.** Branch state, machine quirks and next steps

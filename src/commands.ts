@@ -21,6 +21,15 @@ import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WEL
  */
 export type ReconnectFn = (candidates: Credential[]) => Promise<Reconnected>;
 
+/**
+ * Every slash command orqi registers (here and in src/harness.ts). The orq
+ * plugin's own commands skip these names, and a test keeps the list honest.
+ */
+export const ORQI_COMMANDS = [
+	"key", "reconnect", "tools", "whoami", "workspace", "doctor", "update",
+	"panel", "trajectory", "open", "trace", "learn", "btw", "cost", "whatsnew", "feedback", "agent", "agents", "route",
+] as const;
+
 /** Rejection rows the extension writes itself, as opposed to the server's verdicts. */
 export const NO_CREDENTIAL = "no credential";
 export const WORKSPACE_SWITCH = "workspace switch";
@@ -78,6 +87,25 @@ export function groupTools(names: string[]): string {
 		.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
 		.map(([key, tools]) => `${key}s: ${tools.join(", ")}`)
 		.join("\n");
+}
+
+/**
+ * The system prompt's tool table, built at boot from the catalogue the session
+ * actually wrapped. It used to be written by hand and went stale twice ("30
+ * tools", tools that no longer existed); now a server-side change reaches the
+ * prompt with the next catalogue refresh, like the tools themselves.
+ */
+export function toolTable(names: string[]): string {
+	const bare = names.map((name) => name.replace(/^orq_/, ""));
+	if (bare.length === 0) return "**MCP tools:** not connected yet; they are listed to you as `orq_*` tools once orqi connects.";
+	const rows = groupTools(bare)
+		.split("\n")
+		.map((line) => {
+			const [subject, tools] = line.split(": ");
+			const label = subject!.charAt(0).toUpperCase() + subject!.slice(1);
+			return `| ${label} | ${tools!.split(", ").map((tool) => `\`${tool}\``).join(", ")} |`;
+		});
+	return [`**Available MCP tools (${bare.length} tools, ${rows.length} categories):**`, "", "| Category | Tools |", "|---|---|", ...rows].join("\n");
 }
 
 const HEADER_ENTRY = "orqi-header";

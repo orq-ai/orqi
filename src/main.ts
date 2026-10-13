@@ -24,11 +24,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { credentialCandidates, LOGIN_HINT_ONESHOT, mcpUrl, projectForCredential, type Credential } from "./auth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
-import { authLines, NO_CREDENTIAL, orqCommands } from "./commands.ts";
+import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, toolTable } from "./commands.ts";
 import { connectOrqTools, firstLine } from "./mcp.ts";
 import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, talkable } from "./model.ts";
 import { registerRouting } from "./router.ts";
-import { liveSkillsDir, liveSkillsNote, maybeUpdateSkills, skillResources } from "./skills.ts";
+import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { currentUpdateCommand, maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
@@ -171,7 +171,8 @@ const header: HeaderInfo = {
 	cwd: process.cwd().replace(homedir(), "~"),
 };
 
-const liveSkills = liveSkillsDir(AGENT_DIR);
+// The orq marketplace plugin (skills + commands), one copy: live when newer than the bundled one.
+const plugin = pluginResources(pkgDir, AGENT_DIR, ORQI_COMMANDS);
 
 // Services are built per session, not once: pi marks a session's extension
 // handles stale when the session is replaced (/new, /resume, /fork), and a
@@ -185,16 +186,17 @@ const makeServices = async () => {
 		agentDir: AGENT_DIR,
 		modelRuntime,
 		resourceLoaderOptions: {
-			systemPrompt: readFileSync(join(pkgDir, "orqi-system-prompt.txt"), "utf8"),
+			// The tool table is the live catalogue's, not a hand-kept copy.
+			systemPrompt: readFileSync(join(pkgDir, "orqi-system-prompt.txt"), "utf8").replace("{{ORQ_TOOLS}}", toolTable(orq.tools.map((tool) => tool.name))),
 			// Ship a predictable skill set: the bundled orq + orqi skills only.
 			// Ambient discovery finds every skill installed on the machine (100+ here),
 			// which both bloats the prompt and makes orqi behave differently per user.
 			noSkills: !process.env.ORQI_LOCAL_SKILLS,
-			// Live (daily-updated) skills ahead of the bundled ones: pi resolves
-			// duplicate skill names first-wins, so a fresher orq-* copy supersedes
-			// the bundled one while the bundled orqi-* skills keep loading. The
-			// override folds that expected collision into one warning line.
-			...skillResources(pkgDir, liveSkills),
+			// The orq plugin's skills and slash commands, as individual paths from
+			// exactly one copy (see src/skills.ts), plus orqi's own skills: no name is
+			// offered twice, so pi has no collision to report at startup.
+			additionalSkillPaths: plugin.additionalSkillPaths,
+			additionalPromptTemplatePaths: plugin.additionalPromptTemplatePaths,
 			additionalThemePaths: [join(pkgDir, "themes")],
 			extensionFactories: [
 				orqCommands(
@@ -271,9 +273,9 @@ function statusLine(connection: string, note = orq.note): string {
 		note,
 		// With no credential at all, "catalogue unavailable: 401" is noise: the welcome says why.
 		welcome && !orq.credential ? undefined : models.note,
-		// Skills newer than the binary shipped with; silent drift would otherwise be
+		// A plugin newer than the binary shipped with; silent drift would otherwise be
 		// invisible until someone diffed behaviour against a colleague's machine.
-		liveSkillsNote(AGENT_DIR),
+		plugin.note,
 	]
 		.filter(Boolean)
 		.join(" · ");

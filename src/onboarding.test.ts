@@ -4,7 +4,9 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "yaml";
 import { loginKey } from "./auth.ts";
+import { normalizeCommand } from "./frontmatter.ts";
 import { headerLines } from "./branding.ts";
 import { NO_CREDENTIAL, orqCommands } from "./commands.ts";
 import { learnRows, LEARN_PROMPTS, loginUrl, MaskedInput, maskKey, plausibleKey, saveLoginKey, WELCOME_OPTIONS, welcomeChoice } from "./onboarding.ts";
@@ -130,4 +132,14 @@ test("the masked input takes a bracketed paste, edits, submits and cancels", () 
 	expect(submitted).toBe("sk-orq-0123456789abcdef");
 	new MaskedInput("API key", () => {}, () => (cancelled = true)).handleInput("\x1b");
 	expect(cancelled).toBe(true);
+});
+
+test("plugin command frontmatter that YAML rejects is quoted, everything else is left alone", () => {
+	const bad = "---\nname: orq-manage-skills\nargument-hint: [list|get|create] [name-or-id]\nallowed-tools: AskUserQuestion, orq*\n---\n# Body $ARGUMENTS\n";
+	const fixed = normalizeCommand(bad);
+	expect(parse(fixed.split("---\n")[1]!)).toEqual({ name: "orq-manage-skills", "argument-hint": "[list|get|create] [name-or-id]", "allowed-tools": "AskUserQuestion, orq*" });
+	expect(fixed.endsWith("# Body $ARGUMENTS\n")).toBe(true);
+	const good = "---\ndescription: fine\nargument-hint: \"[x]\"\n---\nbody\n";
+	expect(normalizeCommand(good)).toBe(good);
+	expect(normalizeCommand("no frontmatter")).toBe("no frontmatter");
 });

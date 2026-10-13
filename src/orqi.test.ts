@@ -6,19 +6,19 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { apiBaseUrl, credentialCandidates, credentialsFile, readWhoami, loginKey, LOGIN_HINT, profileKey, profileOf, serverOf, sessionFileOf, sessionToken, spawnFailure, WHOAMI_ARGS, workspaceOfKey, type Credential } from "./auth.ts";
 import { headerLines, VERSION } from "./branding.ts";
-import { authLines, groupTools, NO_CREDENTIAL, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
+import { authLines, groupTools, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, toolTable, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { orqHarness } from "./harness.ts";
 import { authReason, connectOrqTools, CredentialsRejected, DENYLISTED_TOOLS, describe, isAuthError, keptTools, openFirstAccepted, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
-import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, loadSkills } from "@earendil-works/pi-coding-agent";
 import {
-	foldLiveSkillCollisions,
-	liveSkillsDir,
-	liveSkillsNote,
-	skillResources,
+	liveIsNewer,
+	pluginResources,
+	readLive,
 	SKILLS_LOCK,
+	updateAction,
 	updateDue,
 	vendoredNames,
 } from "./skills.ts";
@@ -247,15 +247,17 @@ test("skills.lock matches what is actually vendored", () => {
 	expect(SKILLS_LOCK.vendored.filter((name) => name.startsWith("orqi-"))).toEqual([]);
 });
 
-test("the system prompt's tool table is exactly the tools the session gets", () => {
-	// The prompt said "30 tools" and listed two that no longer existed for a
-	// month. Pinned to the committed catalogue snapshot, minus the denylist.
+test("the system prompt's tool table is generated from the tools the session gets", () => {
+	// It was hand-kept and said "30 tools" for a month; now it is built at boot.
 	const prompt = readFileSync(join(import.meta.dir, "..", "orqi-system-prompt.txt"), "utf8");
-	const table = prompt.slice(prompt.indexOf("**Available MCP tools"), prompt.indexOf("## Skills"));
+	expect(prompt.split("{{ORQ_TOOLS}}").length).toBe(2);
+	const kept = keptTools([...catalogueNames()].map((name) => ({ name })), false).map((t) => `orq_${t.name}`);
+	expect(kept).not.toContain("orq_invoke_model"); // the denylist applies before the table
+	const table = toolTable(kept);
 	const listed = [...table.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]!).sort();
-	const kept = keptTools([...catalogueNames()].map((name) => ({ name })), false).map((t) => t.name).sort();
-	expect(listed).toEqual(kept);
+	expect(listed).toEqual(kept.map((name) => name.replace(/^orq_/, "")).sort());
 	expect(table).toContain(`(${kept.length} tools,`);
+	expect(toolTable([])).toContain("not connected yet");
 });
 
 test("every skill the system prompt names ships, under its directory's name", () => {
@@ -309,111 +311,94 @@ test("the daily skills check is due only when it should be", () => {
 	}
 });
 
-test("the header never claims baked skills while live ones are in use", () => {
-	// No note means "you are running exactly what this binary shipped with". An
-	// unreadable sha beside a live dir would make that claim without checking.
-	const dir = mkdtempSync(join(tmpdir(), "orqi-note-"));
-	try {
-		expect(liveSkillsNote(dir)).toBeUndefined(); // no live dir: nothing to report
-		expect(liveSkillsDir(dir)).toBeUndefined();
-
-		const live = join(dir, "skills-live");
-		mkdirSync(join(live, "current"), { recursive: true });
-		writeFileSync(join(live, "current.sha"), ""); // present but empty
-		expect(liveSkillsDir(dir)).toBe(join(live, "current"));
-		expect(liveSkillsNote(dir)).toBe("skills unknown");
-
-		writeFileSync(join(live, "current.sha"), `${SKILLS_LOCK.sha}\n`);
-		expect(liveSkillsNote(dir)).toBeUndefined(); // live equals baked: no drift
-
-		writeFileSync(join(live, "current.sha"), `${"a".repeat(40)}\n`);
-		expect(liveSkillsNote(dir)).toBe(`skills ${"a".repeat(8)}`);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
+/** A fake pkg dir (bundled plugin + orqi skills) and agent dir with an optional live copy. */
+function pluginDirs(live?: { committed: string; sha?: string; skills?: string[]; commands?: string[]; version?: string }) {
+	const root = mkdtempSync(join(tmpdir(), "orqi-plugin-"));
+	const pkg = join(root, "pkg");
+	for (const name of ["orq-cli", "orq-build-agent", "orqi-platform-guide"]) mkdirSync(join(pkg, "skills", name), { recursive: true });
+	mkdirSync(join(pkg, "commands"), { recursive: true });
+	for (const name of ["traces", "workspace"]) writeFileSync(join(pkg, "commands", `${name}.md`), "x");
+	const agent = join(root, "agent");
+	if (live) {
+		const current = join(agent, "skills-live", "current");
+		for (const name of live.skills ?? ["orq-cli", "orq-build-agent", "orq-new-skill"]) mkdirSync(join(current, "skills", name), { recursive: true });
+		mkdirSync(join(current, "commands"), { recursive: true });
+		for (const name of live.commands ?? ["traces", "quickstart"]) writeFileSync(join(current, "commands", `${name}.md`), "x");
+		writeFileSync(join(agent, "skills-live", "current.json"), JSON.stringify({ sha: live.sha ?? "b".repeat(40), committed: live.committed, version: live.version ?? "3.10.0" }));
 	}
-});
-
-function writeSkill(dir: string, name: string, description: string): string {
-	mkdirSync(join(dir, name), { recursive: true });
-	const path = join(dir, name, "SKILL.md");
-	writeFileSync(path, `---\nname: ${name}\ndescription: ${description}\n---\n\nbody\n`);
-	return path;
+	return { root, pkg, agent };
 }
 
-// The precedence this whole feature turns on belongs to pi's loader, not to us,
-// so it is asserted through pi rather than against a hand-written fixture: a pi
-// upgrade that flipped to last-wins would silently reinstate the bug otherwise.
-test("a live skill supersedes its bundled copy, and the collision folds into one warning", () => {
-	const dir = mkdtempSync(join(tmpdir(), "orqi-skills-"));
+test("one copy of the orq plugin: bundled by default, so pi never sees a name twice", () => {
+	const { root, pkg, agent } = pluginDirs();
 	try {
-		const pkgDir = join(dir, "package");
-		const bundled = join(pkgDir, "skills");
-		const live = join(dir, "skills-live", "current");
-		writeSkill(bundled, "orq-cli", "bundled copy");
-		writeSkill(bundled, "orqi-only", "ours, never upstream");
-		const liveWinner = writeSkill(live, "orq-cli", "live copy");
-
-		const resources = skillResources(pkgDir, live);
-		expect(resources.additionalSkillPaths).toEqual([live, bundled]);
-
-		const loaded = loadSkills({ cwd: dir, agentDir: dir, skillPaths: resources.additionalSkillPaths, includeDefaults: false });
-		expect(loaded.skills.find((skill) => skill.name === "orq-cli")?.filePath).toBe(liveWinner);
-		expect(loaded.skills.map((skill) => skill.name).sort()).toEqual(["orq-cli", "orqi-only"]);
-		expect(loaded.diagnostics.some((d) => d.type === "collision")).toBe(true);
-
-		const folded = resources.skillsOverride?.(loaded).diagnostics ?? [];
-		expect(folded.some((d) => d.type === "collision")).toBe(false);
-		expect(folded.filter((d) => d.type === "warning").map((d) => d.message)).toEqual([
-			"Using the live copy of 1 skill instead of the bundled one: orq-cli.",
-		]);
+		const resources = pluginResources(pkg, agent, ["workspace"]);
+		expect(resources.additionalSkillPaths.map((p) => p.slice(pkg.length))).toEqual(["/skills/orq-build-agent", "/skills/orq-cli", "/skills/orqi-platform-guide"]);
+		// The plugin's commands become prompt templates, minus names orqi already owns.
+		expect(resources.additionalPromptTemplatePaths.map((p) => p.slice(pkg.length))).toEqual(["/commands/traces.md"]);
+		expect(resources.note).toBeUndefined();
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("no live dir means no override and the bundled path alone", () => {
-	const resources = skillResources("/pkg", undefined);
-	expect(resources.additionalSkillPaths).toEqual([join("/pkg", "skills")]);
-	expect(resources.skillsOverride).toBeUndefined();
+test("a live copy is used only when it is newer than the bundled one", () => {
+	const newer = pluginDirs({ committed: "2099-01-01T00:00:00Z" });
+	const older = pluginDirs({ committed: "2000-01-01T00:00:00Z" });
+	try {
+		const live = pluginResources(newer.pkg, newer.agent);
+		const names = live.additionalSkillPaths.map((p) => p.split("/").at(-1));
+		expect(names).toEqual(["orq-build-agent", "orq-cli", "orq-new-skill", "orqi-platform-guide"]); // no duplicates
+		expect(live.additionalSkillPaths.filter((p) => p.includes("skills-live")).length).toBe(3);
+		expect(live.additionalSkillPaths.find((p) => p.endsWith("orqi-platform-guide"))).toStartWith(newer.pkg); // ours always bundled
+		expect(live.additionalPromptTemplatePaths.map((p) => p.split("/").at(-1))).toEqual(["quickstart.md", "traces.md"]);
+		expect(live.note).toBe("orq plugin 3.10.0 (updated)");
+		// The bug this replaced: a live copy 12 commits behind the binary used to win.
+		const stale = pluginResources(older.pkg, older.agent);
+		expect(stale.additionalSkillPaths.every((p) => p.startsWith(older.pkg))).toBe(true);
+		expect(stale.note).toBeUndefined();
+	} finally {
+		rmSync(newer.root, { recursive: true, force: true });
+		rmSync(older.root, { recursive: true, force: true });
+	}
 });
 
-test("only the bundled-loses-to-live collision folds; the rest survive", () => {
-	const live = "/tmp/orqi-skills/skills-live/current";
-	const bundled = "/pkg/skills";
-	const collision = (
-		name: string,
-		winnerPath: string,
-		loserPath: string,
-		resourceType: "skill" | "prompt" = "skill",
-	): ResourceDiagnostic => ({
-		type: "collision",
-		message: `${name} collides`,
-		path: loserPath,
-		collision: { resourceType, name, winnerPath, loserPath },
-	});
-	const expected = collision("orq-cli", join(live, "orq-cli/SKILL.md"), join(bundled, "orq-cli/SKILL.md"));
-	// Two upstream dirs declaring the same frontmatter name: a real defect, never folded.
-	const liveVsLive = collision("orq-cli", join(live, "orq-cli/SKILL.md"), join(live, "orq-cli-v2/SKILL.md"));
-	// A project skill beating the bundled copy: nothing to do with the live tree.
-	const projectWins = collision("orq-cli", "/workspace/.pi/skills/orq-cli/SKILL.md", join(bundled, "orq-cli/SKILL.md"));
-	// Sibling directory whose name merely starts with the live dir's.
-	const sibling = collision("orq-cli", "/tmp/orqi-skills/skills-live/currently/orq-cli/SKILL.md", join(bundled, "orq-cli/SKILL.md"));
-	const notASkill = collision("orq-cli", join(live, "orq-cli/SKILL.md"), join(bundled, "orq-cli/SKILL.md"), "prompt");
-	const warning: ResourceDiagnostic = { type: "warning", message: "skill path does not exist", path: bundled };
+test("a pre-plugin live tree reads as absent", () => {
+	const { root, pkg, agent } = pluginDirs();
+	try {
+		mkdirSync(join(agent, "skills-live", "current", "orq-cli"), { recursive: true });
+		writeFileSync(join(agent, "skills-live", "current.sha"), "a".repeat(40));
+		expect(readLive(agent)).toBeUndefined();
+		expect(pluginResources(pkg, agent).additionalSkillPaths.every((p) => p.startsWith(pkg))).toBe(true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
-	const folded = foldLiveSkillCollisions([expected, liveVsLive, projectWins, sibling, notASkill, warning], live, bundled);
-	expect(folded).toEqual([
-		liveVsLive,
-		projectWins,
-		sibling,
-		notASkill,
-		warning,
-		{
-			type: "warning",
-			message: "Using the live copy of 1 skill instead of the bundled one: orq-cli.",
-			path: live,
-		},
-	]);
+test("the daily check installs only what is newer, and drops a stale live copy", () => {
+	const bundled = { sha: "a".repeat(40), committed: "2026-10-08T08:34:23Z" };
+	const live = { dir: "/x", sha: "b".repeat(40), committed: "2026-10-09T00:00:00Z" };
+	expect(updateAction({ sha: "c".repeat(40), committed: "2026-10-10T00:00:00Z" }, undefined, bundled)).toBe("install");
+	expect(updateAction({ sha: "c".repeat(40), committed: "2026-10-10T00:00:00Z" }, live, bundled)).toBe("install");
+	expect(updateAction({ sha: live.sha, committed: live.committed }, live, bundled)).toBe("none"); // already have it
+	expect(updateAction(bundled, live, bundled)).toBe("drop"); // the binary caught up with main
+	expect(updateAction(bundled, undefined, bundled)).toBe("none");
+	expect(updateAction({ sha: "d".repeat(40), committed: "2026-01-01T00:00:00Z" }, undefined, bundled)).toBe("none"); // never downgrade
+	expect(liveIsNewer(undefined)).toBe(false);
+});
+
+test("every command orqi registers is in ORQI_COMMANDS, so the plugin never shadows one", () => {
+	const registered: string[] = [];
+	const pi = { registerEntryRenderer: () => {}, registerCommand: (name: string) => registered.push(name), registerShortcut: () => {}, registerTool: () => {}, on: () => {}, appendEntry: () => {} } as any;
+	orqCommands(noReconnect, [], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
+	orqHarness({ agentDir: tmpdir(), catalogue: () => [], toolCount: () => 0, callTool: async () => ({ text: "", isError: false }), workspace: () => undefined })(pi);
+	expect([...registered].sort()).toEqual([...ORQI_COMMANDS].sort());
+});
+
+test("the lock records what a live update is compared against", () => {
+	expect(Number.isFinite(Date.parse(SKILLS_LOCK.committed))).toBe(true);
+	const commands = readdirSync(join(import.meta.dir, "..", "commands")).map((name) => name.replace(/\.md$/, "")).sort();
+	expect(SKILLS_LOCK.commands).toEqual(commands);
 });
 
 test("onlyOrq hides every provider except orq", async () => {
@@ -1815,3 +1800,21 @@ test("releaseUrl builds the same two forms install.sh does, pinned or latest", (
 	);
 });
 
+
+test("every bundled plugin command loads in pi with no diagnostic", async () => {
+	// One unparseable frontmatter upstream is a "Prompt conflicts" block at every boot.
+	const dir = join(import.meta.dir, "..", "commands");
+	const loader = new DefaultResourceLoader({
+		cwd: tmpdir(),
+		agentDir: mkdtempSync(join(tmpdir(), "orqi-prompts-")),
+		noSkills: true,
+		noExtensions: true,
+		noPromptTemplates: true,
+		noContextFiles: true,
+		additionalPromptTemplatePaths: readdirSync(dir).map((name) => join(dir, name)),
+	});
+	await loader.reload();
+	const loaded = (loader as any).getPrompts();
+	expect(loaded.diagnostics).toEqual([]);
+	expect(loaded.prompts.map((p: { name: string }) => p.name).sort()).toEqual(SKILLS_LOCK.commands);
+});

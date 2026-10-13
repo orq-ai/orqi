@@ -1,6 +1,8 @@
 {
 	"source": "orq-ai/assistant-plugins",
 	"sha": "680407f0d1d12cf7e4ff0d592cc00929c1dc22ba",
+	"committed": "2026-10-08T08:34:23Z",
+	"version": "3.9.0",
 	"vendored": [
 		"evaluatorq",
 		"orq-analyze-traces",
@@ -19,5 +21,13 @@
 		"orq-setup-observability",
 		"orq-shared",
 		"orq-simulate-agent"
+	],
+	"commands": [
+		"analytics",
+		"models",
+		"orq-manage-skills",
+		"quickstart",
+		"traces",
+		"workspace"
 	]
 }

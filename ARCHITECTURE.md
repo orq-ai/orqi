@@ -39,13 +39,12 @@ orqi
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
 | `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
 
-`skillResources` in `src/skills.ts` owns both halves of the live-skills wiring, so the path order
-and the diagnostic fold cannot name different directories. It passes the daily-updated
-`~/.orqi/agent/skills-live/current` directory ahead of the bundled `skills/` directory, so a live
-`orq-*` skill supersedes its bundled copy; project/user/package skills sit ahead of both, but only
-load under `ORQI_LOCAL_SKILLS`. Its `skillsOverride` folds the resulting bundled-loses-to-live
-collisions into a single warning naming what was superseded, and leaves any other collision
-visible. The updater is fire-and-forget and updates land on the next run.
+`pluginResources` in `src/skills.ts` hands pi exactly one copy of the orq marketplace plugin, its
+skills and its slash commands (as prompt templates), as individual paths: the daily-updated copy in
+`~/.orqi/agent/skills-live/current` when it is newer than the bundled one, the bundled one
+otherwise, plus orqi's own `orqi-*` skills. No name is offered twice, so startup shows no collision
+block. The updater is fire-and-forget, never installs an older commit, and updates land on the next
+run.
 
 ## Tools
 

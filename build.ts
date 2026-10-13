@@ -11,7 +11,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const ROOT = import.meta.dir;
-const TREES = ["skills", "themes"];
+const TREES = ["skills", "commands", "themes"];
 const FILES = ["orqi-system-prompt.txt"];
 
 function walk(dir: string): string[] {
