@@ -30,8 +30,8 @@ optional dependency gets a readable message instead of a `MODULE_NOT_FOUND` stac
 
 ## Publishing
 
-Tagged releases publish on their own; the release process is in `AGENTS.md`
-under "Releasing". The packages are staged from the assets of the published
+Releasable conventional-commit merges to `main` publish automatically; the release
+process is in `AGENTS.md` under "Releasing". The packages are staged from the assets of the published
 GitHub Release, after each tarball is checked against its `.sha256`, so npm
 carries the same bytes `install.sh` downloads whatever job is re-run. Two things `npm/stage.mjs` and the workflow rely on:
 
