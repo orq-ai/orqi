@@ -123,6 +123,33 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `retrieve_agent_response`, `orqServerConfig`). It saves ~6 KB of the 71 KB of schema in each
   request. `ORQI_ALL_TOOLS=1` shows them (by value: `=0` still hides). Denylisted names must never
   appear in a subagent's tool list; a test guards that.
+- **The one-way gate reads the verb, not the server.** The orq MCP server declares no tool
+  annotations, so `doorOf` in `src/gate.ts` is a static table: `list_`/`get_`/`search_`/`query_`/
+  `find_`/`retrieve_` are benign, `create_`/`update_` two-way (recorded, never stopped),
+  `delete_`/`submit_`/`invoke_` one-way. A verb not in the table is one-way: a new server tool asks
+  before it runs until someone adds it, and a test lists every server tool so that happens on
+  purpose. A classifier per call was rejected: it would sit in front of every read. The system
+  prompt no longer tells the model to ask before a delete; it tells it the dialog will. One-shot has
+  no one to ask, so a one-way call is blocked there with a reason that says to rerun interactively.
+- **The door question rides beside difficulty, and the keyword floor is only its fallback.**
+  `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would
+  delete a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()`
+  still runs when the classifier errors, 403s or times out. A response without a door answer has no
+  opinion; the router does not invent one.
+- **Teach lives in the side panel, never the transcript.** Cards are not session entries, so
+  `/trajectory` exports only the conversation and a resume shows no lessons. Without the panel
+  (regular mode, or a terminal too narrow for it) the card and any signal fall back to one widget
+  line above the editor, for the same reason. The glossary is static (`src/teach.ts`): no model
+  call and no docs fetch per card, and each concept shows once per session.
+- **The exit summary is written from `session_shutdown`, not from `main.ts`.** `InteractiveMode`
+  ends in `process.exit`, so `main.ts` never regains control. On quit pi leaves the alternate screen,
+  emits `session_shutdown` with reason `quit`, then prints its resume hint, so a stdout write in the
+  handler lands between the two. It never calls `studio()`, which fetches; the thread link is built
+  from what is already known, and falls back to the bare session id.
+- **Gate verdicts and the context split are session-local.** `door`/`gate` on a step come from live
+  `tool_call` events that a resume cannot replay, so the `?` and the exit summary's changes start
+  empty on a resumed session. The context split is measured on session start, after each run and on
+  a model switch, never in a render, where an extension handle may already be stale.
 - **`--version` and `--help` are answered before anything else runs** (`src/main.ts`). `argv[2]` is
   otherwise a prompt, so without those two branches `orqi --version` boots a session, connects to
   the MCP server and bills a model call. `install.sh` calls `--version` to prove the binary it just

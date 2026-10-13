@@ -31,10 +31,12 @@ orqi
 | `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, plus `/tools /whoami /workspace /reconnect /doctor /whatsnew /update` |
 | `src/update.ts` | `orqi update`: daily release check, header note, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
-| `src/harness.ts` | The teaching harness extension: footer, minimap, working indicator, agent mode, `/cost /trace /open /trajectory /whatsnew /feedback /agents /agent /panel` |
+| `src/harness.ts` | The teaching harness extension: footer, side panel, working indicator, agent mode, exit summary, `/cost /trace /open /trajectory /whatsnew /feedback /agents /agent /panel /teach /context` |
+| `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
+| `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the side panel shows after a run |
 | `src/router.ts` | `orq/auto` and the `orq-decisions` classifier provider: pool, policy, Decisions API adapter, route log |
 | `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
-| `src/footer.ts` / `src/minimap.ts` / `src/panel.ts` | Pure renderers: footer line by width band, minimap rows, boxed overlay panels |
+| `src/footer.ts` / `src/minimap.ts` / `src/panel.ts` | Pure renderers: footer line by width band, minimap rows and the panel's teach, context and signals sections, boxed overlay panels |
 | `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows and inspect view; the changelog parser |
 | `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
 | `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
@@ -76,6 +78,16 @@ which already carry usage, model, tool calls and durations, so a resumed or fork
 the same steps. Prices come from the workspace catalogue (`million_tokens_*` in `/v2/models`), so
 the footer's cost and pi's `/session` are real numbers rather than zero.
 
+The side panel stacks three sections under the minimap: teach (with `/teach on`), the context
+split (system prompt, tool schemas, skills index, messages, as characters over four, measured after
+each run and never in a render) and signals (a tool called three times with the same arguments in
+one turn, errors, one-way calls). `/context` opens the same split as a table with the levers that
+move it. On quit, an exit summary of the session prints above pi's resume hint.
+
+Before an orq tool runs, `src/gate.ts` reads its door off the verb: reads are benign,
+`create_`/`update_` are two-way and only recorded, `delete_`/`submit_`/`invoke_` and any verb not
+in the table are one-way and wait for the user in a dialog (allow once, allow for this turn, deny).
+
 `/trace` reads the router's `x-orq-trace-id` header off each response and asks `list_spans` for the
 spans, leading with the `auto-router` span when a smart router answered: that is how platform
 routing becomes visible without a client-side classifier.
@@ -91,8 +103,11 @@ plus an `orq-decisions` classifier provider over `POST /v3/router/decisions`.
 On a user turn it asks `typesafe/jev-latest` the `general_v2` difficulty question from
 orq-smart-router (RES-1619) and cuts the expected tier (`p_medium + 2 p_hard`) at 0.5 and 1.5.
 Tool follow-ups and retries stay on the turn's model so the prompt cache holds; an overload or
-context overflow on retry moves one rung up; delete, `auto_run`, and agent or evaluator changes
-never go below hard. The rungs come from the workspace catalogue's intelligence index, within the
+context overflow on retry moves one rung up. The same Decisions call asks the door question
+(evaluatorq's benign / two_way / one_way, reworded for a request): a request that changes state
+never goes below hard, while a question about one ("which tool would delete a dataset?") is routed
+on its difficulty. A keyword floor (delete, `auto_run`, agent or evaluator changes) stands in only
+when the classifier errors, 403s or times out. The rungs come from the workspace catalogue's intelligence index, within the
 default model's provider: hard is the most capable, medium the default, easy the cheapest with at
 least 70% of hard's index. Under `orq/auto` the `investigator` and `docs` subagents run on easy and
 `analyst` on medium. Each decision is a step in the trajectory and an `orqi-route` session entry,
