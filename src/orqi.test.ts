@@ -336,7 +336,7 @@ function pluginDirs(live?: { committed: string; sha?: string; skills?: string[];
 	const pkg = join(root, "pkg");
 	for (const name of ["orq-cli", "orq-build-agent", "orqi-platform-guide"]) mkdirSync(join(pkg, "skills", name), { recursive: true });
 	mkdirSync(join(pkg, "commands"), { recursive: true });
-	for (const name of ["traces", "workspace"]) writeFileSync(join(pkg, "commands", `${name}.md`), "x");
+	for (const name of ["traces", "workspace", "models"]) writeFileSync(join(pkg, "commands", `${name}.md`), "x");
 	const agent = join(root, "agent");
 	if (live) {
 		const current = join(agent, "skills-live", "current");
@@ -353,7 +353,7 @@ test("one copy of the orq plugin: bundled by default, so pi never sees a name tw
 	try {
 		const resources = pluginResources(pkg, agent, ["workspace"]);
 		expect(resources.additionalSkillPaths.map((p) => p.slice(pkg.length))).toEqual(["/skills/orq-build-agent", "/skills/orq-cli", "/skills/orqi-platform-guide"]);
-		// The plugin's commands become prompt templates, minus names orqi already owns.
+		// The plugin's commands become prompt templates, minus names orqi already owns and the ones it drops.
 		expect(resources.additionalPromptTemplatePaths.map((p) => p.slice(pkg.length))).toEqual(["/commands/traces.md"]);
 		expect(resources.note).toBeUndefined();
 	} finally {

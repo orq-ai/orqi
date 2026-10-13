@@ -350,7 +350,7 @@ Developer ID signature plus notarization.
   skills. Nothing is offered twice, so pi reports no collision and startup stays quiet. The old
   design listed live ahead of bundled and folded the collisions into a warning; a live copy 12
   commits behind the binary then won, silently. Plugin commands skip names in `ORQI_COMMANDS`
-  (orqi's own `/workspace` wins dispatch anyway), and `normalizeCommand` quotes frontmatter values
+  (orqi's own `/workspace` wins dispatch anyway) and in `DROPPED_COMMANDS` (`/models`, which duplicates pi's `/model` at the cost of a turn), and `normalizeCommand` quotes frontmatter values
   YAML rejects (Claude Code tolerates `argument-hint: [a|b] [c]`; pi does not). Updates land on the
   next run or `/reload`; every failure is silent; `ORQI_SKILLS_UPDATE=0` pins and beats
   `ORQI_REFRESH_SKILLS=1`. The header shows `orq plugin <version> (updated)` while a live copy is in use.
