@@ -13,7 +13,7 @@ import { credentialCandidates, LOGIN_HINT, runOrq, SESSION_SOURCE, type Credenti
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
-import { loginUrl, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
+import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
 
 /**
  * Re-point the orq tools at the first of `candidates` the server accepts.
@@ -213,6 +213,30 @@ export function orqCommands(
 	};
 
 	/**
+	 * Ask for a key without ever drawing it (pi's `/login` prompt shows it in
+	 * clear text), store it where `/login orq` would, and reconnect.
+	 */
+	const connectWithKey = async (pi: ExtensionAPI, ctx: { ui: Ui & { custom?: (factory: any) => Promise<unknown> } }) => {
+		if (!ctx.ui.custom) {
+			ctx.ui.notify(`This needs the terminal UI. ${LOGIN_HINT}`, "warning");
+			return;
+		}
+		const typed = (await ctx.ui.custom((_tui: unknown, theme: { fg(token: string, text: string): string }, _keys: unknown, done: (value: string | undefined) => void) =>
+			new MaskedInput("orq API key", (value) => done(value), () => done(undefined), { label: (t) => theme.fg("accent", t), dim: (t) => theme.fg("dim", t) }),
+		)) as string | undefined;
+		if (typed === undefined) return;
+		const key = plausibleKey(typed);
+		if (!key) {
+			ctx.ui.notify(`That does not look like an API key. ${LOGIN_HINT}`, "warning");
+			return;
+		}
+		saveLoginKey(authPath, key);
+		ctx.ui.notify("connecting to orq…");
+		const outcome = await recover(pi, ctx, (all) => all);
+		if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+	};
+
+	/**
 	 * The first run with no credential: sign in from inside the session
 	 * rather than being sent away with exit 1. Each path ends in the same
 	 * recovery the `input` hook runs.
@@ -220,15 +244,7 @@ export function orqCommands(
 	const welcome = async (pi: ExtensionAPI, ctx: { ui: Ui & { select(title: string, options: string[]): Promise<string | undefined>; input(title: string, placeholder?: string): Promise<string | undefined> } }) => {
 		const choice = welcomeChoice(await ctx.ui.select(WELCOME_TITLE, Object.values(WELCOME_OPTIONS)));
 		if (choice === "key") {
-			const key = plausibleKey(await ctx.ui.input("API key", "sk-orq-…"));
-			if (!key) {
-				ctx.ui.notify(`No key pasted. ${LOGIN_HINT}`, "warning");
-				return;
-			}
-			saveLoginKey(authPath, key);
-			ctx.ui.notify("connecting to orq…");
-			const outcome = await recover(pi, ctx, (all) => all);
-			if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+			await connectWithKey(pi, ctx);
 			return;
 		}
 		if (choice === "browser") {
@@ -309,6 +325,13 @@ export function orqCommands(
 			if (rejections.length === 0) return;
 			const outcome = await recover(pi, ctx);
 			if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+		});
+
+		pi.registerCommand("key", {
+			description: "paste an orq API key (masked), store it like /login orq, and reconnect",
+			handler: async (_args, ctx) => {
+				await connectWithKey(pi, ctx as any);
+			},
 		});
 
 		pi.registerCommand("reconnect", {

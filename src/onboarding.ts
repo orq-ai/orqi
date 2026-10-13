@@ -10,6 +10,7 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { matchesKey, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 
 export const WELCOME_TITLE = "orqi talks to your orq.ai workspace. How do you want to sign in?";
 export const WELCOME_OPTIONS = {
@@ -68,4 +69,65 @@ export const LEARN_PROMPTS: { area: string; prompt: string }[] = [
 
 export function learnRows(): string[] {
 	return LEARN_PROMPTS.map((item, i) => `${i + 1}  ${item.area.padEnd(12)} ${item.prompt}`);
+}
+
+/**
+ * How a key is drawn while it is typed or pasted: dots, then the last four
+ * characters so you can tell the paste landed, then its length. The key
+ * itself never reaches the screen (or a screenshot, or a recording).
+ */
+export function maskKey(value: string): string {
+	if (!value) return "";
+	const tail = value.length > 8 ? value.slice(-4) : "";
+	return `${"•".repeat(Math.min(24, value.length - tail.length))}${tail}  (${value.length} chars)`;
+}
+
+/**
+ * A one-line secret input. pi-tui's `Input` draws what it holds, and pi's
+ * own `/login` uses it, so a pasted key shows in clear text there; this is
+ * what orqi's own key prompts (`/key`, the first-run welcome) use instead.
+ */
+export class MaskedInput implements Component {
+	private value = "";
+	private pasting = false;
+
+	constructor(
+		private label: string,
+		private onSubmit: (value: string) => void,
+		private onCancel: () => void,
+		private paint: { label(text: string): string; dim(text: string): string } = { label: (s) => s, dim: (s) => s },
+	) {}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const shown = this.value ? maskKey(this.value) : this.paint.dim("paste the key, then enter");
+		return [
+			truncateToWidth(`${this.paint.label(this.label)}  ${shown}`, width),
+			truncateToWidth(this.paint.dim("enter save · esc cancel · the key is never shown"), width),
+		];
+	}
+
+	handleInput(data: string): void {
+		// Bracketed paste arrives wrapped in markers, sometimes split across chunks.
+		let text = data;
+		if (text.includes("\x1b[200~")) {
+			this.pasting = true;
+			text = text.replace("\x1b[200~", "");
+		}
+		if (text.includes("\x1b[201~")) {
+			this.pasting = false;
+			text = text.replace("\x1b[201~", "");
+			this.value += text.replace(/[\x00-\x1f\x7f]/g, "");
+			return;
+		}
+		if (this.pasting) {
+			this.value += text.replace(/[\x00-\x1f\x7f]/g, "");
+			return;
+		}
+		if (matchesKey(text, "enter")) this.onSubmit(this.value.trim());
+		else if (matchesKey(text, "escape")) this.onCancel();
+		else if (matchesKey(text, "backspace")) this.value = this.value.slice(0, -1);
+		else if (!/[\x00-\x1f\x7f]/.test(text)) this.value += text; // typed characters (or an unbracketed paste)
+	}
 }

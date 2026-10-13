@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { loginKey } from "./auth.ts";
 import { headerLines } from "./branding.ts";
 import { NO_CREDENTIAL, orqCommands } from "./commands.ts";
-import { learnRows, LEARN_PROMPTS, loginUrl, plausibleKey, saveLoginKey, WELCOME_OPTIONS, welcomeChoice } from "./onboarding.ts";
+import { learnRows, LEARN_PROMPTS, loginUrl, MaskedInput, maskKey, plausibleKey, saveLoginKey, WELCOME_OPTIONS, welcomeChoice } from "./onboarding.ts";
 
 test("a pasted key lands where pi's /login orq keeps it, merged and owner-only", () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-auth-"));
@@ -38,6 +38,7 @@ test("the welcome's helpers", () => {
 async function runWelcome(answers: (string | undefined)[], reconnectOk = true) {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-welcome-"));
 	const notices: string[] = [];
+	const drawn: string[] = [];
 	let reconnects = 0;
 	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
 	const pi = { registerEntryRenderer: () => {}, registerCommand: () => {}, registerTool: () => {}, appendEntry: () => {}, on: (name: string, fn: any) => handlers.set(name, fn) } as any;
@@ -50,6 +51,14 @@ async function runWelcome(answers: (string | undefined)[], reconnectOk = true) {
 			setWidget: () => {},
 			select: async () => queue.shift(),
 			input: async () => queue.shift(),
+			// The masked prompt: paste the next answer, then press enter, as a user would.
+			custom: (factory: any) =>
+				new Promise((resolve) => {
+					const component = factory(null, { fg: (_token: string, text: string) => text }, null, resolve);
+					component.handleInput(`\x1b[200~${queue.shift() ?? ""}\x1b[201~`);
+					drawn.push(...component.render(80));
+					component.handleInput("\r");
+				}),
 		},
 	};
 	const header = { name: "orqi", version: "v0", status: "", cwd: "~" };
@@ -71,12 +80,13 @@ async function runWelcome(answers: (string | undefined)[], reconnectOk = true) {
 	handlers.get("session_start")!({ type: "session_start", reason: "startup" }, ctx);
 	await new Promise((resolve) => setTimeout(resolve, 120));
 	rmSync(dir, { recursive: true, force: true });
-	return { notices, reconnects };
+	return { notices, reconnects, drawn };
 }
 
 test("welcome, paste a key: stored, then the same reconnect the input hook runs", async () => {
-	const { notices, reconnects } = await runWelcome([WELCOME_OPTIONS.key, "sk-orq-0123456789abcdef"]);
+	const { notices, reconnects, drawn } = await runWelcome([WELCOME_OPTIONS.key, "sk-orq-0123456789abcdef"]);
 	expect(reconnects).toBe(1);
+	expect(drawn.join("\n")).not.toContain("0123456789"); // the key is never drawn
 	expect(notices).toContain("connecting to orq…");
 	expect(notices.at(-1)).toStartWith("Connected to orq");
 });
@@ -90,7 +100,7 @@ test("welcome, look around: no connection attempted, the next steps named", asyn
 test("welcome, no key pasted: says so and keeps the hint", async () => {
 	const { notices, reconnects } = await runWelcome([WELCOME_OPTIONS.key, "   "]);
 	expect(reconnects).toBe(0);
-	expect(notices.at(-1)).toContain("No key pasted");
+	expect(notices.at(-1)).toContain("does not look like an API key");
 });
 
 test("the header names the day-one views", () => {
@@ -98,4 +108,26 @@ test("the header names the day-one views", () => {
 	expect(text).toContain("orqi (aka TonyBot) v0.2.0");
 	expect(text).toContain("/learn · /route · /cost · /trace · /agents · /whatsnew · alt+m minimap");
 	expect(text).not.toContain("changelog https://"); // /whatsnew replaces the bare URL
+});
+
+test("a pasted key is never drawn: dots and the last four characters only", () => {
+	expect(maskKey("sk-orq-01M45V72F0SX0RZM4CS2F5YZZT-96bca93010cf2938da1654")).toBe(`${"•".repeat(24)}1654  (56 chars)`);
+	expect(maskKey("abc")).toBe("•••  (3 chars)");
+	expect(maskKey("")).toBe("");
+});
+
+test("the masked input takes a bracketed paste, edits, submits and cancels", () => {
+	let submitted: string | undefined;
+	let cancelled = false;
+	const input = new MaskedInput("API key", (value) => (submitted = value), () => (cancelled = true));
+	input.handleInput("\x1b[200~sk-orq-0123456789abcdef\x1b[201~");
+	input.handleInput("x");
+	input.handleInput("\x7f"); // backspace
+	const screen = input.render(60).join("\n");
+	expect(screen).not.toContain("0123456789");
+	expect(screen).toContain("cdef");
+	input.handleInput("\r");
+	expect(submitted).toBe("sk-orq-0123456789abcdef");
+	new MaskedInput("API key", () => {}, () => (cancelled = true)).handleInput("\x1b");
+	expect(cancelled).toBe(true);
 });

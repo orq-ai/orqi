@@ -194,6 +194,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   The wrapper is marked with a symbol so the next session or `/reload` unwraps it before wrapping
   again; without that, each `/reload` nested one more minimap.
   Ask upstream for a sidebar slot before building more on this.
+- **`/key` exists beside pi's `/login`, and the hints point at it.** pi's `/login` draws the pasted
+  key in clear text (its provider search and its key prompt are pi-tui `Input`s, which have no mask),
+  and a built-in cannot be overridden. `/key` and the first-run welcome use `MaskedInput`
+  (`src/onboarding.ts`): dots and the last four characters, never the key, then the same storage and
+  recovery as `/login orq`.
 - **The minimap toggles on `alt+m`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle. Focus
   for ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/panel focus` is on, so
   the editor never loses the keyboard otherwise.

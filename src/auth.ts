@@ -373,6 +373,6 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 
 /** In-session: pi's /login stores a key orqi picks up on the next message. */
 export const LOGIN_HINT =
-	"Run /login orq and paste an API key for this workspace, or run `orq auth login` in another terminal. orqi reconnects on your next message.";
+	"Run /key and paste an API key for this workspace (masked; /login orq works too but shows the key), or run `orq auth login` in another terminal. orqi reconnects on your next message.";
 /** One-shot: there is no session to log in from. */
 export const LOGIN_HINT_ONESHOT = "Run `orq auth login`, or export an ORQ_API_KEY for this workspace.";
