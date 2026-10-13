@@ -501,19 +501,32 @@ export function orqHarness(deps: HarnessDeps) {
 		 * screen, the trajectory (one row per step, `minimapRows`) on top and the
 		 * teach, context and signals sections under it.
 		 */
-		const minimapView = (theme: { fg(token: string, text: string): string }): Component => ({
-			invalidate() {},
-			// The wheel scrolls the trajectory (fullscreen routes mouse events to the component under
-			// the pointer). Back at the newest step it follows new steps again.
-			handleMouse(event) {
-				if (event.type !== "wheel" || !event.wheelDelta) return undefined;
-				const last = trajectory.steps.length - 1;
-				if (last < 0) return { handled: true };
-				const next = (minimapSelected ?? last) + event.wheelDelta;
-				minimapSelected = next >= last ? undefined : Math.max(0, next);
-				return { handled: true };
-			},
-			render(width: number): string[] {
+		const minimapView = (theme: { fg(token: string, text: string): string }): Component => {
+			// Rendering must never throw: an exception here takes the whole TUI down.
+			// A frame that fails keeps the last good one, as the footer does.
+			let lastFrame: string[] = [];
+			return {
+				invalidate() {},
+				// The wheel scrolls the trajectory (fullscreen routes mouse events to the component under
+				// the pointer). Back at the newest step it follows new steps again.
+				handleMouse(event) {
+					if (event.type !== "wheel" || !event.wheelDelta) return undefined;
+					const last = trajectory.steps.length - 1;
+					if (last < 0) return { handled: true };
+					const next = (minimapSelected ?? last) + event.wheelDelta;
+					minimapSelected = next >= last ? undefined : Math.max(0, next);
+					return { handled: true };
+				},
+				render(width: number): string[] {
+					try {
+						lastFrame = inspectorFrame(width);
+					} catch {
+						// Keep the last good frame.
+					}
+					return lastFrame;
+				},
+			};
+			function inspectorFrame(width: number): string[] {
 				const inner = Math.max(10, width - 2);
 				const rowPaint = {
 					bright: (text: string) => theme.fg("accent", text),
@@ -552,8 +565,8 @@ export function orqHarness(deps: HarnessDeps) {
 					side(theme.fg("dim", fit(hint))),
 					theme.fg("border", `└${"─".repeat(inner)}┘`),
 				];
-			},
-		});
+			}
+		};
 
 		/** The fixed header's facts, read at draw time. */
 		const headerState = () => {
