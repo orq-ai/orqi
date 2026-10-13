@@ -9,7 +9,7 @@ import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from ".
 import { brandTitle, costLines, repoOf, repriced, topModel } from "./harness.ts";
 import { minimapRow, minimapRows, minimapSummary, peekLines } from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
-import { boxLines } from "./panel.ts";
+import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
 import { schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
@@ -461,4 +461,31 @@ test("a tool's parameters read as name, type, required, default and description"
 		"  project_id  string",
 	]);
 	expect(schemaLines({ type: "object" })).toEqual(["(no parameters)"]);
+});
+
+test("/tools filters as you type, and enter opens the tool you see, not the one at that position before", async () => {
+	expect(filterRows(["list_traces  List traces", "get_span  Get a span", "list_spans  List spans"], "span")).toEqual([1, 2]);
+	expect(filterRows(["list_traces  List traces", "list_spans  List spans"], "list  TRACES")).toEqual([0]); // every word, any case
+	let opened = -1;
+	let closed = false;
+	const panel = new Panel(
+		{ title: "orq tools", rows: ["create_agent", "get_span", "list_spans", "list_traces"], selectable: true, filterable: true, keys: { enter: (i) => void (opened = i) } },
+		plainPanel,
+		() => (closed = true),
+		() => {},
+	);
+	for (const ch of "spa") panel.handleInput(ch);
+	expect(panel.render(60).map(bare).join("\n")).toContain("filter: spa▏ · 2/4");
+	panel.handleInput("\x1b[B"); // down to the second match
+	panel.handleInput("\r");
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(opened).toBe(2); // list_spans, its original index
+	panel.handleInput("\x7f"); // backspace edits the filter
+	expect(panel.render(60).map(bare).join("\n")).toContain("filter: sp▏");
+	panel.handleInput("\x1b"); // esc clears the filter first
+	expect(closed).toBe(false);
+	expect(panel.render(60).map(bare).join("\n")).toContain("type to filter");
+	panel.handleInput("\x1b"); // then closes
+	expect(closed).toBe(true);
+	for (const ch of "zzz") new Panel({ title: "t", rows: ["a"], selectable: true, filterable: true }, plainPanel, () => {}, () => {}).handleInput(ch);
 });

@@ -778,7 +778,8 @@ export function orqHarness(deps: HarnessDeps) {
 					badge: `${tools.length} · mcp__orq__*`,
 					rows: tools.map((tool) => `${bareName(tool.name).padEnd(width)}  ${firstLine(tool.description)}`),
 					selectable: true,
-					hint: "enter definition · esc close",
+					filterable: true,
+					hint: "type to filter · ↑↓ move · enter definition · esc close",
 					keys: {
 						enter: (i) => {
 							void panel(ctx, detail(tools[i]!));
