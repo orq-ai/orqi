@@ -643,6 +643,13 @@ export function orqHarness(deps: HarnessDeps) {
 			});
 		};
 
+		/** Hand the keyboard back to the editor (and to any dialog over it). */
+		const blurMinimap = () => {
+			minimapFocused = false;
+			releaseKeys?.();
+			releaseKeys = undefined;
+		};
+
 		/** Keyboard focus without stealing the editor: raw input is intercepted only while focused. */
 		const focusMinimap = (ctx: ExtensionContext) => {
 			minimapForced = true;
@@ -652,10 +659,8 @@ export function orqHarness(deps: HarnessDeps) {
 				const steps = trajectory.steps;
 				const current = minimapSelected ?? steps.length - 1;
 				if (matchesKey(data, "escape")) {
-					minimapFocused = false;
 					minimapSelected = undefined;
-					releaseKeys?.();
-					releaseKeys = undefined;
+					blurMinimap();
 				} else if (matchesKey(data, "up")) {
 					minimapSelected = Math.max(0, current - 1);
 				} else if (matchesKey(data, "down")) {
@@ -674,11 +679,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		const toggleMinimap = () => {
 			minimapForced = !minimapVisible();
-			if (!minimapForced && minimapFocused) {
-				minimapFocused = false;
-				releaseKeys?.();
-				releaseKeys = undefined;
-			}
+			if (!minimapForced && minimapFocused) blurMinimap();
 			render();
 		};
 
@@ -754,7 +755,17 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// The one-way gate. Registered here so its verdicts reach the trajectory;
 		// pi's own MCP handler only waits for the server, so a block here still wins.
-		const gate = orqGate(trajectory);
+		// A one-way dialog needs the keys /panel focus would otherwise swallow, so
+		// focus is released the moment the gate starts waiting.
+		const gate = orqGate({
+			gate: (toolCallId, door, verdict) => {
+				if (verdict === "waiting" && minimapFocused) {
+					blurMinimap();
+					render();
+				}
+				trajectory.gate(toolCallId, door, verdict);
+			},
+		});
 		pi.on("tool_call", (event, ctx) => gate.onToolCall(event, ctx));
 		pi.on("agent_end", (_event, ctx) => {
 			gate.endTurn();
