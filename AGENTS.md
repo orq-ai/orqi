@@ -246,7 +246,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   in the factory closures (`orqCommands`), and the harness rebuilds from the branch. Renderers still
   wrap their work in try/catch: an exception in a render takes the TUI down.
 - **The inspector reaches into pi's fullscreen layout root.** It was the minimap until it grew
-  sections; the code (`minimap.ts`, `minimapView`, `attachMinimap`) keeps the old name. pi has no
+  sections; its rows live in `inspector-rows.ts`, while `minimapView` and `attachMinimap` keep the old name. pi has no
   side-panel API, and an overlay covers the transcript's right edge, where prose wraps. In
   fullscreen the TUI has a `layoutRoot` (pi's chat viewport); `attachMinimap` in `src/harness.ts`
   wraps it in an `HStack` with the panel as a fixed 38-column entry, so the transcript reflows

@@ -29,7 +29,7 @@ import {
 	signalLines,
 	SPINNER,
 	type ContextSplit,
-} from "./minimap.ts";
+} from "./inspector-rows.ts";
 import { DEFAULT_MODEL, talkable, type ModelInfo } from "./model.ts";
 import { bareName, hintsSection, schemaLines, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";

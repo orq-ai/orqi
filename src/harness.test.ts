@@ -18,7 +18,7 @@ import {
 	sectionLines,
 	signalLines,
 	type ContextSplit,
-} from "./minimap.ts";
+} from "./inspector-rows.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
 import { hintsSection, schemaLines } from "./mcp.ts";
