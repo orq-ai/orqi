@@ -269,7 +269,8 @@ function statusLine(connection: string, note = orq.note): string {
 		`${models.ids.length} models`,
 		agents ? `${agents} agents` : "",
 		note,
-		models.note,
+		// With no credential at all, "catalogue unavailable: 401" is noise: the welcome says why.
+		welcome && !orq.credential ? undefined : models.note,
 		// Skills newer than the binary shipped with; silent drift would otherwise be
 		// invisible until someone diffed behaviour against a colleague's machine.
 		liveSkillsNote(AGENT_DIR),
