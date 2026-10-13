@@ -9,7 +9,7 @@ for the rules that apply when changing the code, see [AGENTS.md](AGENTS.md).
 orqi
 ├── pi agent session (@earendil-works/pi-coding-agent)
 │   ├── built-in tools           read / bash / edit / write
-│   ├── orq_* tools              MCP client → pi tools           src/mcp.ts
+│   ├── mcp__orq__* tools        pi's native MCP, server `orq`   src/mcp.ts
 │   ├── subagent tool            recursive in-process sessions   src/subagent.ts
 │   ├── skills                   bundled skills/                 (additionalSkillPaths)
 │   ├── system prompt            orqi-system-prompt.txt
@@ -25,7 +25,7 @@ orqi
 |---|---|
 | `src/main.ts` | Wiring and startup order; one-shot vs `InteractiveMode` |
 | `src/auth.ts` | Credential candidates, workspace resolution, `runOrq()` |
-| `src/mcp.ts` | orq MCP to pi tools, catalogue cache, result rendering |
+| `src/mcp.ts` | The `orq` server registered with pi's MCP, credential choice, result rendering, hints |
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
 | `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, plus `/tools /whoami /workspace /reconnect /doctor /whatsnew /update` |
@@ -48,20 +48,19 @@ run.
 
 ## Tools
 
-The orq MCP server's catalogue is fetched once and wrapped as native pi tools with an `orq_`
-prefix (pi has no MCP support by design). The wrapped list is what the session, the subagents and
-`/tools` all read, so filtering happens in exactly one place.
+The orq MCP server is registered with pi's own MCP support as server `orq`, so its tools reach the
+model as `mcp__orq__<tool>`, declared `direct`, exactly as a plain pi user would see them. pi owns
+the connection (retries, reconnects, `/mcp`, resources, OAuth); orqi owns which credential goes
+into `ORQ_API_KEY`, which the server's `Authorization` header reads per connection.
 
-Three invocation tools (`invoke_model`, `invoke_agent`, `retrieve_agent_response`) are filtered out
-by default, by `keptTools()` in `src/mcp.ts`. What that saves, measured against the 46-tool
-catalogue: 6 KB of the 71 KB of tool schema that ships with every request. The larger 96 KB those
-three occupy in the cached catalogue is mostly `outputSchema`, which the wrapper never forwards, so
-the request-side win is the 6 KB, not the 96 KB. `ORQI_ALL_TOOLS=1` restores them, by value and not
-by presence: `ORQI_ALL_TOOLS=0` still filters.
+Three invocation tools (`invoke_model`, `invoke_agent`, `retrieve_agent_response`) are hidden with
+`toolExposure`. That saves 6 KB of the 71 KB of tool schema in every request (measured against the
+46-tool catalogue). `ORQI_ALL_TOOLS=1` shows them, by value: `ORQI_ALL_TOOLS=0` still hides.
 
 Results render as a one-line summary (`23 items · 6.0 KB`) with `ctrl+o` expanding to
 pretty-printed JSON, because the server answers with a single unbroken line. The model always
-receives the full payload.
+receives the full payload. Subagents call the tools through the parent session's `executeTool`;
+slash commands, which pi gives no way to run tools, make one short direct call.
 
 ## Seeing what the platform does
 
@@ -130,7 +129,7 @@ vars, the three-key token lookup and every failure message - as tables.
 
 Credentials are tried in order (the key pi's `/login` stored, then a pinned profile's key, then
 `ORQ_API_KEY`, then the key `orq auth login --api-key` stored, then the login session) on the
-real MCP connection: a 401 selects the next candidate, and so does a stall, which is the server's
+API, one REST call each: a 401 selects the next candidate, and so does a stall, which is the server's
 problem and no verdict on that key; the boot only fails when nothing was accepted (see [AGENTS.md](AGENTS.md) for why
 they are not pre-probed). The startup line always names the credential that won.
 
@@ -145,20 +144,17 @@ credential takes precedence over the configured `ORQ_API_KEY` for the model, and
 #0 for the tools for the same reason. Router wiring mirrors `orq launch pi`, ported to TypeScript
 in `src/model.ts`.
 
-A boot on which every credential is rejected still opens. The tools are wrapped from the cached
-catalogue (any age) or not at all, a warning naming each rejection is pinned above the editor, and
-the extension reconnects on the next message once `/login` or `orq auth login` has produced a
-credential the server accepts, registering the tools into the running session if the boot had none.
-Only the one-shot form exits once a candidate existed, because it has no session to log in from;
-a boot with no candidate at all exits in one-shot mode and, in the TUI, opens a welcome that
-signs in from inside the session (paste a key, `orq auth login`, or look around).
+A boot on which every credential is rejected still opens, with a warning naming each rejection
+pinned above the editor, and reconnects on the next message once `/key`, `/login` or `orq auth login`
+has produced a credential the API accepts: `ORQ_API_KEY` moves to it and the `orq` server is
+re-registered, which makes pi reconnect. Only the one-shot form exits once a candidate existed;
+with no candidate at all the TUI opens a welcome instead.
 
 ## Known rough edges
 
-- **The orq MCP server intermittently hangs** on `initialize` and `tools/list`, roughly one call in
-  three. Worked around with short timeouts, retries and a 24 h catalogue cache in
-  `~/.orqi/agent/tool-catalogue.json`, so a stall costs a wait rather than a failed boot. The
-  numbers behind that workaround, and why it must stay, are in [AGENTS.md](AGENTS.md).
+- **The orq MCP server intermittently stalls** on `initialize` and `tools/list`. pi retries
+  network errors and 5xx, reconnects on the next call, and orqi sets a 30 s per-request timeout;
+  there is no cached catalogue any more, so a stall at boot means the tools arrive late.
 - Fullscreen TUI mode is upstream-experimental. `ORQI_TUI=regular` renders inline instead.
 - The binary is only ad-hoc signed, so macOS quarantines a bare `orqi` that arrives by any route
   other than the tarball. `install.sh` extracts from a tarball for exactly that reason.

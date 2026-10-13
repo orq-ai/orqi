@@ -8,8 +8,8 @@ token refresh and the session file; orqi shells out to it and reads what it is t
 
 ## 1. Which credential
 
-Up to five candidates, best first. None is probed up front — they are tried on the real MCP
-connection, where a 401 selects the next one. A stall past the connect retries moves on too: it is
+Up to five candidates, best first. Each is tried with one REST call (`GET /v2/projects`), where a 401
+selects the next one; the winner goes into `ORQ_API_KEY`, which pi's MCP sends to the orq server. A stall past the connect retries moves on too: it is
 the server's problem, not the key's, and a good login session at candidate 3 must not be lost to a
 hang on candidate 2. Only when nothing is accepted does the boot report, and a stall anywhere is
 reported ahead of the rejections.

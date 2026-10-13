@@ -38,6 +38,8 @@ export interface Step {
 	model?: string;
 	usage?: StepUsage;
 	toolCallId?: string;
+	/** The tool's full name (`mcp__orq__list_traces`) when the label shortens it. */
+	toolName?: string;
 	args?: Record<string, unknown>;
 	/** Full text, for the peek view and the export. */
 	text?: string;
@@ -73,6 +75,9 @@ type AnyMessage = {
 	durationMs?: number;
 	details?: unknown;
 };
+
+/** MCP tools are `mcp__<server>__<tool>`; views show the tool. */
+export const shortTool = (name: string) => name.replace(/^mcp__[a-z0-9_-]+?__/, "");
 
 const oneLine = (text: string, max = 200) => text.replace(/\s+/g, " ").trim().slice(0, max);
 
@@ -211,7 +216,8 @@ export class Trajectory {
 				if (existing) continue;
 				this.push({
 					role: subagent ? "subagent" : "tool",
-					label: subagent ? String(block.arguments?.agent ?? "subagent") : (block.name ?? "tool"),
+					label: subagent ? String(block.arguments?.agent ?? "subagent") : shortTool(block.name ?? "tool"),
+					toolName: block.name,
 					detail: subagent ? oneLine(String(block.arguments?.task ?? "")) : argSummary(block.arguments),
 					status: "running",
 					ts: message.timestamp ?? Date.now(),
@@ -258,7 +264,8 @@ export class Trajectory {
 			const subagent = toolName === "subagent";
 			this.push({
 				role: subagent ? "subagent" : "tool",
-				label: subagent ? String(args?.agent ?? "subagent") : toolName,
+				label: subagent ? String(args?.agent ?? "subagent") : shortTool(toolName),
+				toolName,
 				detail: subagent ? oneLine(String(args?.task ?? "")) : argSummary(args),
 				status: "running",
 				ts: Date.now(),
@@ -385,7 +392,7 @@ export function toAtif(steps: Step[], meta: AtifMeta): Record<string, unknown> {
 			out.push(current);
 		}
 		const id = step.toolCallId ?? `call_${step.id}`;
-		(current.tool_calls ??= []).push({ tool_call_id: id, function_name: step.role === "subagent" ? "subagent" : step.label, arguments: step.args ?? {} });
+		(current.tool_calls ??= []).push({ tool_call_id: id, function_name: step.role === "subagent" ? "subagent" : (step.toolName ?? step.label), arguments: step.args ?? {} });
 		const result: Record<string, unknown> = { source_call_id: id, content: step.text ?? "" };
 		if (step.role === "subagent" && step.children?.length) {
 			const trajectoryId = `${meta.sessionId}/subagent-${step.id}`;

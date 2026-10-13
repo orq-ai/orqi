@@ -74,7 +74,7 @@ async function runWelcome(answers: (string | undefined)[], reconnectOk = true) {
 			if (!reconnectOk) throw new Error("stalled");
 			return { credential: next[0]!, added: [] };
 		},
-		[],
+		() => [],
 		header,
 		dir,
 		{ rejections: [{ source: NO_CREDENTIAL, reason: "nothing found" }], welcome: true, readCandidates: candidates as any },

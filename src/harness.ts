@@ -19,7 +19,7 @@ import { MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines
 import { talkable, type ModelInfo } from "./model.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
-import { toAtif, Trajectory, type StepUsage } from "./trajectory.ts";
+import { shortTool, toAtif, Trajectory, type StepUsage } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
 import { DIFFICULTY_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
@@ -467,7 +467,7 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("tool_execution_start", (event, ctx) => {
 			if (event.parentToolCallId) return;
 			trajectory.toolStart(event.toolCallId, event.toolName, event.args ?? {});
-			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : event.toolName);
+			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : shortTool(event.toolName));
 		});
 		pi.on("tool_execution_end", (event, ctx) => {
 			if (event.parentToolCallId) return;

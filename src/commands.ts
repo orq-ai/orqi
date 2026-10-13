@@ -131,7 +131,8 @@ export interface Boot {
 
 export function orqCommands(
 	reconnect: ReconnectFn,
-	toolNames: string[],
+	/** The orq tools pi's MCP has registered, by bare name: read live, they arrive when the server connects. */
+	toolNames: () => string[],
 	header: HeaderInfo,
 	agentDir = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"),
 	boot: Boot = {},
@@ -143,10 +144,6 @@ export function orqCommands(
 	// re-knock on the server with the same keys. Seeded with the boot's own set:
 	// unseeded, the first message after a rejected boot always re-knocked.
 	let triedTokens = tokenKey(boot.candidates ?? []);
-	// Tools wrapped after boot. pi holds the boot's customTools by value, so
-	// these are registered by hand, and again whenever the factory re-runs
-	// (/reload) because a fresh pi handle knows nothing about them.
-	const lateTools: ToolDefinition[] = [];
 	let inFlight: Promise<string | undefined> | undefined;
 
 	const showWorkspace = (ctx: { ui: Ui }) =>
@@ -224,17 +221,8 @@ export function orqCommands(
 		}
 		triedTokens = key;
 		rejections = [];
-		// A boot with no cached catalogue wrapped no tools; register the ones the
-		// live connection produced so this session can call them. A stale pi
-		// handle (after /new) cannot, and says so instead of claiming a stall.
-		lateTools.push(...result.added);
-		toolNames.push(...result.added.map((tool) => tool.name));
-		let unregistered = "";
-		try {
-			for (const tool of result.added) pi.registerTool(tool);
-		} catch (error) {
-			unregistered = ` ${result.added.length} tools could not be registered in this session (${firstLine(error)}); run /reload.`;
-		}
+		// The tools themselves come through pi's MCP, which reconnected the server
+		// with this credential; nothing to register by hand.
 		showAuth(ctx);
 		// The session still holds the fallback model object, priced at $0: pick
 		// the same model again from the reloaded catalogue.
@@ -244,7 +232,7 @@ export function orqCommands(
 			if (fresh) await pi.setModel(fresh as never).catch(() => false);
 		}
 		const note = result.note ? ` ${result.note}.` : "";
-		return `Connected to orq: ${toolNames.length} tools in ${result.credential.workspace ?? "workspace"} (${result.credential.source}).${note}${unregistered}`;
+		return `Connected to orq: ${result.credential.workspace ?? "workspace"} (${result.credential.source}); its tools arrive as the server connects (/mcp shows it).${note}`;
 	};
 
 	/**
@@ -308,9 +296,6 @@ export function orqCommands(
 	};
 
 	return (pi: ExtensionAPI) => {
-		// Registering during load is allowed; a /reload re-runs this with a
-		// fresh handle that has never seen the tools a reconnect produced.
-		for (const tool of lateTools) pi.registerTool(tool);
 		// The header lives in the transcript rather than on stdout: fullscreen mode
 		// runs on the terminal's alternate screen, where anything printed before
 		// the TUI starts is never seen.
@@ -380,7 +365,8 @@ export function orqCommands(
 		pi.registerCommand("tools", {
 			description: "list the orq workspace tools",
 			handler: async (_args, ctx) => {
-				ctx.ui.notify(`${toolNames.length} orq tools\n${groupTools(toolNames)}`);
+				const names = toolNames();
+				ctx.ui.notify(names.length ? `${names.length} orq tools (mcp__orq__*)\n${groupTools(names)}` : "No orq tools yet: the MCP server is still connecting, or not connected. /mcp shows its state.");
 			},
 		});
 

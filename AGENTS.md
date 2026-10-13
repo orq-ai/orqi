@@ -22,17 +22,20 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 `orq auth login` or `ORQ_API_KEY`.
 
 ## Things that will look wrong but are deliberate
-
-- **The MCP server intermittently hangs.** Roughly one call in three, on `initialize` *and*
-  `tools/list`, no error, just a stall (measured: 1.3 s, 120 s timeout, 0.4 s). Hence the 20 s
-  timeouts, three attempts on a fresh connection, and the 24 h catalogue cache in
-  `~/.orqi/agent/tool-catalogue.json`. Do not simplify that away. It is not auth: the same token
-  succeeds on retry, and real auth failures return 401 immediately.
-- **A failed connect closes its client** (`connectOnce`). Without it the dead transport's error
-  surfaces later as an unhandled rejection and kills the process mid-credential-fallback.
-- **Credentials are tried on the real MCP connection**, not pre-probed. A pre-probe would need a
-  second round-trip against a server that stalls, and a stall would then be misread as a bad
-  credential.
+- **The orq MCP server goes through pi's own MCP support, as server `orq`.** Tools reach the model
+  as `mcp__orq__<tool>` (`orqMcp` in `src/mcp.ts`), the same names any pi user gets, declared
+  `direct`. pi handles the connection: retries on network errors and 408/429/5xx, reconnects a
+  dropped connection on the next call, `/mcp` to inspect and reconnect, the server's resources,
+  and OAuth (`/mcp login orq`; the server publishes resource metadata). The server still stalls
+  now and then, so its per-request timeout is 30 s, not pi's 60. orqi's old bridge (a cached
+  catalogue, three attempts per call, a wrap of every tool) is gone; booting without the server
+  now means no orq tools until it connects, which pi waits up to 10 s for on the first prompt.
+- **Which credential is decided by one REST call per candidate** (`pickCredential`), then written
+  to `ORQ_API_KEY`, which the server's `Authorization: Bearer ${ORQ_API_KEY}` header reads per
+  connection. A 401 selects the next candidate; a stall or 5xx moves on too, being no verdict on the
+  key, and is reported ahead of the rejections when nothing was accepted. A credential change
+  re-registers the server with a NEW config object: pi reconnects a registered server exactly when
+  its config object changes (identity, not content).
 - **`sessionToken()` tries three keys, not one.** CLI 5.x keyed `workspaceTokens` by workspace key;
   6.x keys it `<workspaceKey>#<projectId>`, because a token is now project-scoped. An exact-key
   lookup on 6.x finds nothing and silently loses the login-session credential, so the lookup tries
@@ -52,10 +55,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   file has already been through a layout migration, every step of it is optional: a moved file or a
   keyless profile warns and falls through to the next candidate rather than failing the boot.
   Retire it the day the CLI can hand the key over.
-- **A rejected credential does not stop the boot.** The session opens with the tools wrapped from
-  the cached catalogue, whatever its age (stale tools beat none when the server cannot be asked;
-  the normal 24 h TTL applies again on reconnect, which wraps whatever the session lacks), or with
-  none, and a warning pinned above the editor names each candidate and the server's
+- **A rejected credential does not stop the boot.** The session opens without orq tools, and a
+  warning pinned above the editor names each candidate and the server's
   `error_description`: "not valid for this workspace" and "expired" need different fixes, and the
   bare hint used to send both to `orq auth login`. Recovery runs on the `input` event because
   pi fires no event when `/login` stores a key and its auth store has no listener, and `input`
@@ -64,11 +65,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   still working, which is delivered as steering and starts no run; `before_agent_start` misses
   steering and `turn_start` runs after the snapshot, both tried and rejected. The hook compares
   the candidate tokens first so a set the server refused never re-knocks; a stall clears that
-  memo, because it is no verdict and the notice promises a retry. Only the reconnect itself sits
-  inside the recovery's try: an error after the server answered (a stale pi handle after `/new`
-  refusing `registerTool`) is reported as what it is, with `/reload` as the fix, and the factory
-  re-registers late tools on every run for exactly that. A failed `/workspace` switch leaves the
-  old connection up (mcp.ts closes it only once a replacement is accepted), so the widget says
+  memo, because it is no verdict and the notice promises a retry. A failed `/workspace` switch leaves the
+  old connection up (the server is re-registered only once a new credential is accepted), so the widget says
   "still on the previous workspace" rather than "not connected" over tools that keep answering.
   The stored `/login` key is candidate #0 for the tools because pi's model runtime already
   prefers it. Only one-shot exits, having no session to log in from - but a boot with no
@@ -80,8 +78,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit
   it. [docs/credentials.md](docs/credentials.md) tabulates the whole resolution.
 - **Tool results render as a one-line summary.** The server answers with a single unbroken line of
-  JSON, so pi's built-in 10-line preview never trims anything and one call wraps a whole screen.
-  `renderResult` in `src/mcp.ts` summarises; the model still gets the full payload.
+  JSON, so pi's built-in 10-line preview never trims anything. `orqMcp` registers a tool renderer
+  for `mcp__orq__*` (call: tool + identifying args + duration; result: `23 items · 6.0 KB`, ctrl+o
+  expands). The model still gets the full payload.
 - **`onlyOrq()` proxies the ModelRuntime.** pi composes built-in providers from whatever keys are in
   the environment: 1410 models across 40 providers on the dev machine versus 133 from the
   workspace. The proxy filters every model read to `provider === "orq"`.
@@ -105,11 +104,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   look. The cost is real and known: a failed tool call reads much like a successful one, and
   syntax highlighting carries less information. `ORQI_THEME=dark` selects `orq-dark`, which keeps
   turquoise for success and red for errors, and `/theme` switches mid-session.
-- **Tool descriptions carry constraints the server's schema omits** (`TOOL_HINTS` in
-  `src/mcp.ts`). `query_analytics` advertises one `group_by` enum for every metric and an optional
-  `project_id`, so the model composes calls the server rejects. The matrix in the hint was
-  measured against a live workspace. Drop an entry once the server documents it; a test fails if a
-  hinted tool disappears.
+- **Constraints the server's schema omits ride in the system prompt** (`TOOL_HINTS`,
+  `{{ORQ_TOOL_HINTS}}`). pi gives no hook to append to an MCP tool's description. The
+  `query_analytics` matrix was measured against a live workspace; drop an entry once the server
+  documents it; a test fails if a hinted tool disappears.
 - **The header has two shapes, chosen at render time.** Mark plus ORQI needs 52 columns and 30
   rows; anything smaller falls back to the compact form with the detail lines beside the mark.
   `headerLines` takes the size as an argument so the gate is testable. Prose lines may still wrap
@@ -118,11 +116,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   screen, where anything printed before the TUI starts is never seen. It is appended only on
   `session_start` reason `startup`/`new`, because entries are session-persisted and a resume would
   otherwise stack a second header.
-- **Three invocation tools are denylisted at wrap time, not at cache write**
-  (`keptTools()` in `src/mcp.ts`). The cache keeps the full server list, so flipping
-  `ORQI_ALL_TOOLS=1` needs no refetch. It saves ~6 KB of the 71 KB of schema in each request, not
-  the 96 KB those tools occupy on disk: `outputSchema` is never forwarded, so cache bytes are not
-  request bytes. Do not quote the 96 KB as a per-request saving again. Denylisted names must never
+- **Three invocation tools are hidden with `toolExposure`** (`invoke_model`, `invoke_agent`,
+  `retrieve_agent_response`, `orqServerConfig`). It saves ~6 KB of the 71 KB of schema in each
+  request. `ORQI_ALL_TOOLS=1` shows them (by value: `=0` still hides). Denylisted names must never
   appear in a subagent's tool list; a test guards that.
 - **`--version` and `--help` are answered before anything else runs** (`src/main.ts`). `argv[2]` is
   otherwise a prompt, so without those two branches `orqi --version` boots a session, connects to
@@ -179,6 +175,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `optionalDependencies` rather than keeping its own.
 - **The version has one source**: `package.json`, read by `src/branding.ts` and inlined at compile
   time. `release.yml` fails the release when the pushed tag and that version disagree.
+- **Subagents reach the orq tools through the parent's `executeTool`.** pi connects the server in
+  the parent session; a subagent's child session gets proxies (same names, same schemas) that run
+  each call through `ctx.executeTool`, so no second MCP handshake and the parent's hooks apply.
+- **Slash commands make their own short MCP call** (`callOrqTool`). pi lets tools call tools, not
+  commands, so `/trace`, `/agents` and `/feedback` open a one-call connection, retried once.
 - **Session services are built per session, not once** (`makeServices` in `src/main.ts`). pi marks
   a session's extension handles stale when `/new`, `/resume` or `/fork` replaces it; with one shared
   services object every extension kept calling through dead handles, and the footer's first frame
@@ -276,7 +277,6 @@ Apple Silicon needs `macos-arm64`, Intel needs `macos-x64`. Distribution beyond 
 Developer ID signature plus notarization.
 
 ## Conventions
-
 - **Skills are vendored, and the vendoring is scripted.** `skills/orq-*` and `skills/evaluatorq`
   come from `orq-ai/assistant-plugins`; `skills/orqi-*` are ours and upstream never sees them.
   Run `bun run vendor` (optionally with a SHA) rather than copying by hand: it replaces the
