@@ -11,3 +11,6 @@ reports/
 .idea/
 *.swp
 *~
+
+# /trajectory writes its ATIF export to the working directory.
+/trajectory.json

@@ -1,0 +1,155 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "7c1e-session",
+  "agent": {
+    "name": "orqi",
+    "version": "0.2.0",
+    "model_name": "openai/gpt-5.6-terra"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "1970-01-01T00:00:01.000Z",
+      "source": "user",
+      "message": "why is support-triage slower?"
+    },
+    {
+      "step_id": 2,
+      "timestamp": "1970-01-01T00:00:02.000Z",
+      "source": "agent",
+      "message": "",
+      "model_name": "openai/gpt-5.6-terra",
+      "metrics": {
+        "prompt_tokens": 10000,
+        "completion_tokens": 300,
+        "cached_tokens": 0,
+        "cost_usd": 0.02
+      },
+      "tool_calls": [
+        {
+          "tool_call_id": "c1",
+          "function_name": "orq_list_traces",
+          "arguments": {
+            "agent": "support-triage",
+            "limit": 20
+          }
+        },
+        {
+          "tool_call_id": "c2",
+          "function_name": "subagent",
+          "arguments": {
+            "agent": "investigator",
+            "task": "find the first failure"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "c1",
+            "content": "{\"items\":[1,2,3]}"
+          },
+          {
+            "source_call_id": "c2",
+            "content": "timeout in tool.search_kb",
+            "subagent_trajectory_ref": [
+              {
+                "trajectory_id": "7c1e-session/subagent-4"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "1970-01-01T00:00:08.000Z",
+      "source": "agent",
+      "message": "Three traces timed out in tool.search_kb.",
+      "model_name": "openai/gpt-5.6-terra",
+      "metrics": {
+        "prompt_tokens": 12000,
+        "completion_tokens": 120,
+        "cached_tokens": 0,
+        "cost_usd": 0.025
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 28100,
+    "total_completion_tokens": 830,
+    "total_cached_tokens": 0,
+    "total_cost_usd": 0.049,
+    "total_steps": 3
+  },
+  "subagent_trajectories": [
+    {
+      "schema_version": "ATIF-v1.8",
+      "session_id": "7c1e-session",
+      "trajectory_id": "7c1e-session/subagent-4",
+      "agent": {
+        "name": "orqi",
+        "version": "0.2.0",
+        "model_name": "openai/gpt-5.6-luna"
+      },
+      "steps": [
+        {
+          "step_id": 1,
+          "timestamp": "1970-01-01T00:00:00.001Z",
+          "source": "user",
+          "message": "find the first failure"
+        },
+        {
+          "step_id": 2,
+          "timestamp": "1970-01-01T00:00:00.002Z",
+          "source": "agent",
+          "message": "",
+          "model_name": "openai/gpt-5.6-luna",
+          "metrics": {
+            "prompt_tokens": 3000,
+            "completion_tokens": 200,
+            "cached_tokens": 0,
+            "cost_usd": 0.002
+          },
+          "tool_calls": [
+            {
+              "tool_call_id": "s1",
+              "function_name": "orq_get_span",
+              "arguments": {
+                "span_id": "ab"
+              }
+            }
+          ],
+          "observation": {
+            "results": [
+              {
+                "source_call_id": "s1",
+                "content": "{}"
+              }
+            ]
+          }
+        },
+        {
+          "step_id": 3,
+          "timestamp": "1970-01-01T00:00:00.004Z",
+          "source": "agent",
+          "message": "timeout in tool.search_kb",
+          "model_name": "openai/gpt-5.6-luna",
+          "metrics": {
+            "prompt_tokens": 3100,
+            "completion_tokens": 210,
+            "cached_tokens": 0,
+            "cost_usd": 0.002
+          }
+        }
+      ],
+      "final_metrics": {
+        "total_prompt_tokens": 6100,
+        "total_completion_tokens": 410,
+        "total_cached_tokens": 0,
+        "total_cost_usd": 0.004,
+        "total_steps": 3
+      }
+    }
+  ]
+}

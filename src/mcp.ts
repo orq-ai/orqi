@@ -1,138 +1,89 @@
 /**
- * orq MCP server -> pi tools.
+ * The orq MCP server, through pi's own MCP support.
  *
- * pi ships no MCP support by design, so every orq workspace tool is wrapped as
- * a native pi tool. The MCP JSON schema is passed straight through, which keeps
- * this bridge indifferent to the server's tool catalogue.
+ * pi 1.2 connects MCP servers natively: retries on network errors and
+ * 408/429/5xx, reconnects a dropped connection on the next call, a per-request
+ * timeout, `${ENV}` headers, tool exposure, `/mcp` to inspect and reconnect,
+ * and OAuth (`/mcp login orq`; the orq server publishes its resource metadata).
+ * orqi registers one server, `orq`, so its tools reach the model as
+ * `mcp__orq__<tool>`, the same names any pi user gets.
+ *
+ * What orqi still owns:
+ * - which credential: the candidates (the /login key, a profile, ORQ_API_KEY,
+ *   the CLI login) are tried in order with one cheap REST call each, and the
+ *   winner goes into ORQ_API_KEY, which the server's Authorization header reads;
+ * - the denylist (three invocation tools, hidden through `toolExposure`);
+ * - how a call and its result are drawn (one line each, ctrl+o expands);
+ * - constraints the server's schema leaves out (TOOL_HINTS, now in the prompt);
+ * - one direct call for slash commands, which pi gives no way to run tools.
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { Type } from "typebox";
-import { LOGIN_HINT, mcpUrl, type Credential } from "./auth.ts";
+import { apiBaseUrl, mcpUrl, type Credential } from "./auth.ts";
 import { VERSION } from "./branding.ts";
+import { argSummary } from "./trajectory.ts";
 
-// The orq MCP server answers tools/list in ~1s most of the time, but hangs
-// outright often enough (roughly one call in three) that a plain fetch-on-boot
-// would strand the CLI. Hence: cache, short timeout, retry, stale fallback.
-const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
-const CALL_TIMEOUT_MS = 20_000;
-const ATTEMPTS = 3;
-
-interface McpTool {
-	name: string;
-	title?: string;
-	description?: string;
-	inputSchema: object;
-}
-
-function readCache(cachePath: string): McpTool[] | undefined {
-	if (!existsSync(cachePath)) return undefined;
-	try {
-		const tools = JSON.parse(readFileSync(cachePath, "utf8"));
-		return Array.isArray(tools) && tools.length > 0 ? tools : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-async function catalogue(
-	client: Client,
-	cachePath: string,
-	reconnect: () => Promise<Client>,
-): Promise<{ tools: McpTool[]; client: Client; note?: string }> {
-	const cached = readCache(cachePath);
-	const fresh =
-		cached && !process.env.ORQI_REFRESH_TOOLS && Date.now() - statSync(cachePath).mtimeMs < CATALOGUE_TTL_MS;
-	if (fresh) return { tools: cached, client };
-
-	let active = client;
-	for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-		try {
-			const { tools } = await active.listTools(undefined, { timeout: CALL_TIMEOUT_MS });
-			mkdirSync(dirname(cachePath), { recursive: true });
-			writeFileSync(cachePath, JSON.stringify(tools));
-			return { tools: tools as McpTool[], client: active };
-		} catch (error) {
-			if (attempt === ATTEMPTS) {
-				if (cached) return { tools: cached, client: active, note: "orq MCP unreachable; using cached tool catalogue" };
-				await active.close().catch(() => {});
-				throw error;
-			}
-			// A timed-out request leaves the stream wedged; start a fresh connection.
-			await active.close().catch(() => {});
-			active = await reconnect();
-		}
-	}
-	throw new Error("unreachable");
-}
-
-/** orq tool names are prefixed so they never collide with pi's built-ins. */
-export const TOOL_PREFIX = "orq_";
+/** pi names MCP tools `mcp__<server>__<tool>`; orqi's server is `orq`. */
+export const MCP_SERVER = "orq";
+export const TOOL_PREFIX = `mcp__${MCP_SERVER}__`;
 
 /**
- * Invocation surfaces, not orqi's job. Dropping them takes ~6 KB of the 71 KB
- * of tool schema that ships with every request (the 96 KB they occupy in the
- * cached catalogue is mostly `outputSchema`, which is never forwarded).
- * `ORQI_ALL_TOOLS=1` restores them.
+ * Invocation surfaces, not orqi's job. Hiding them takes ~6 KB of the 71 KB
+ * of tool schema that ships with every request. `ORQI_ALL_TOOLS=1` restores them.
  */
 export const DENYLISTED_TOOLS = new Set(["invoke_model", "invoke_agent", "retrieve_agent_response"]);
 
 /**
- * Constraints the server enforces but its schema does not express, appended to
- * the description the model reads when it composes a call.
- *
- * `query_analytics` offers one `group_by` enum for every metric, qualified only
- * by "Not all dimensions are available for all metrics", and lists `project_id`
- * as an ordinary optional filter. Both failures that follow are the model doing
- * exactly what the schema permits, so the fix belongs where it decides. The
- * matrix below was measured against a live workspace, one call per pair.
- *
- * Delete an entry once the server's own schema says it. Upstream wants
- * per-metric enums and a required `project_id`.
+ * Constraints the server enforces but its schema does not express. pi gives
+ * no hook to append to an MCP tool's description, so these go in the system
+ * prompt beside the tool naming rule. The matrix was measured against a live
+ * workspace, one call per pair. Delete an entry once the server's own schema
+ * says it; a test fails if a hinted tool disappears.
  */
 export const TOOL_HINTS: Record<string, string> = {
 	query_analytics: [
-		"",
-		"CONSTRAINTS the schema does not express:",
-		"- `filters.project_id` is REQUIRED when the API key spans several projects, which is the",
-		"  usual case. No tool lists projects. Get an id from `list_traces` at",
-		"  `items[].attributes.orq.project_id`, or from the ids this tool enumerates when it rejects",
-		"  the call. Ask the user which project they mean rather than picking one silently: each id",
-		"  is a slice of the workspace, so the wrong one answers confidently with the wrong data.",
-		"- `group_by` valid dimensions per metric, everything else fails as `Unknown expression",
-		"  identifier`:",
+		"- `filters.project_id` is REQUIRED when the API key spans several projects, which is the usual case.",
+		"  No tool lists projects: get an id from `list_traces` at `items[].attributes.orq.project_id`, or from",
+		"  the ids this tool enumerates when it rejects the call. Ask the user which project they mean.",
+		"- `group_by` valid dimensions per metric; everything else fails as `Unknown expression identifier`:",
 		"    usage, cost, latency, model_performance -> provider, model, project_id",
 		"    errors                                  -> provider, model, project_id, http_status_code",
 		"    agents                                  -> provider, model, project_id, http_status_code, agent_name",
-		"- `agent_name` therefore works ONLY with `metric: \"agents\"`. To break another metric down",
-		"  per agent, query `agents` instead of grouping the other metric by agent_name.",
+		"- `agent_name` works ONLY with `metric: \"agents\"`.",
 	].join("\n"),
 };
 
-/** Server description plus any constraint it left unsaid. */
-export function describe(tool: { name: string; description?: string }): string {
-	const base = tool.description ?? tool.name;
-	const hint = TOOL_HINTS[tool.name];
-	return hint ? `${base}\n${hint}` : base;
+/** The hints as a system prompt section. */
+export function hintsSection(): string {
+	return Object.entries(TOOL_HINTS)
+		.map(([tool, hint]) => `\`${TOOL_PREFIX}${tool}\` has constraints its schema does not express:\n${hint}`)
+		.join("\n\n");
+}
+
+/** Hidden unless ORQI_ALL_TOOLS=1 (by value: =0 still hides). */
+export function keptTools<T extends { name: string }>(tools: T[], allowAll = process.env.ORQI_ALL_TOOLS === "1"): T[] {
+	return allowAll ? tools : tools.filter((tool) => !DENYLISTED_TOOLS.has(tool.name));
 }
 
 /**
- * The tools the session actually sees.
- *
- * Filtered at wrap time, not at cache write: the cache keeps the full server
- * list, so flipping ORQI_ALL_TOOLS needs no refetch. Matches on the bare server
- * name, before `TOOL_PREFIX` goes on.
+ * The server entry pi connects. A NEW object on every call: pi re-connects a
+ * registered server when its config object changes, which is how a new
+ * credential (after /login, /key, a workspace switch) takes effect.
  */
-export function keptTools<T extends { name: string }>(
-	tools: T[],
-	allowAll = process.env.ORQI_ALL_TOOLS === "1",
-): T[] {
-	return allowAll ? tools : tools.filter((tool) => !DENYLISTED_TOOLS.has(tool.name));
+export function orqServerConfig(allowAll = process.env.ORQI_ALL_TOOLS === "1") {
+	return {
+		url: mcpUrl(),
+		headers: { Authorization: "Bearer ${ORQ_API_KEY}" },
+		// Declared to the model like built-in tools, as before; not behind codemode.
+		exposure: "direct" as const,
+		toolExposure: allowAll ? {} : Object.fromEntries([...DENYLISTED_TOOLS].map((name) => [name, "hidden" as const])),
+		// The server stalls now and then; a stalled call fails in 30 s rather than 60.
+		timeout: 30,
+		description: "The user's orq.ai workspace: agents, deployments, traces, analytics, datasets, evaluators, experiments, docs.",
+	};
 }
 
 /** One credential the server turned away, and what it said. */
@@ -149,117 +100,14 @@ export class CredentialsRejected extends Error {
 	}
 }
 
-/** What a reconnect produced: the credential that won, and tools wrapped for the first time. */
+/** What a reconnect produced. */
 export interface Reconnected {
 	credential: Credential;
-	added: ToolDefinition[];
-	/** Set when the catalogue refresh fell back to the cache. */
+	/** Kept for the commands extension's contract; tools now arrive through pi's MCP. */
+	added: never[];
 	note?: string;
-}
-
-/**
- * The boot's outcome plus the live client behind the tools.
- *
- * `credential`, `rejections` and `note` describe the boot and never change:
- * the extension in `src/commands.ts` owns the live connection state, because
- * it is the one that renders it. `reconnect` reports each attempt's outcome
- * through its return value or its rejection, never through these fields.
- */
-export interface OrqTools {
-	tools: ToolDefinition[];
-	/** The candidate the boot's server accepted; undefined when every one was rejected. */
-	readonly credential?: Credential;
-	/** Why the boot has no credential: one entry per candidate the server turned away. */
-	readonly rejections: Rejection[];
-	/** Set when the boot's catalogue came from cache because the server was unreachable. */
-	readonly note?: string;
-	/**
-	 * Re-point the wrapped tools at the first accepted credential (login,
-	 * workspace switch, or recovery from a rejected boot), then re-run the
-	 * catalogue under its normal rules and wrap any tool the session lacks.
-	 * Rejects with `CredentialsRejected` when no candidate is accepted, and
-	 * with the stall itself when the server did not answer.
-	 */
-	reconnect: (candidates: Credential[]) => Promise<Reconnected>;
-	close: () => Promise<void>;
-}
-
-async function connectOnce(credential: Credential): Promise<Client> {
-	const client = new Client({ name: "orqi", version: VERSION });
-	// A rejected connect leaves the transport open; its later error would surface
-	// as an unhandled rejection and take the process down while we are calmly
-	// trying the next credential.
-	client.onerror = () => {};
-	try {
-		await client.connect(
-			new StreamableHTTPClientTransport(new URL(mcpUrl()), {
-				requestInit: { headers: { Authorization: `Bearer ${credential.token}` } },
-			}),
-			{ timeout: CALL_TIMEOUT_MS },
-		);
-	} catch (error) {
-		await client.close().catch(() => {});
-		throw error;
-	}
-	return client;
-}
-
-/** `initialize` hangs as readily as `tools/list` does, so it retries too. */
-async function open(credential: Credential): Promise<Client> {
-	let lastError: unknown;
-	for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-		try {
-			return await connectOnce(credential);
-		} catch (error) {
-			lastError = error;
-			if (isAuthError(error)) throw error;
-		}
-	}
-	throw lastError;
-}
-
-function textOf(content: unknown): string {
-	if (!Array.isArray(content)) return JSON.stringify(content ?? null);
-	return content
-		.map((block: any) => (block?.type === "text" ? block.text : JSON.stringify(block)))
-		.join("\n");
-}
-
-/** Expanded view: indent the JSON so pi has real lines to lay out. */
-function prettify(text: string): string {
-	try {
-		return JSON.stringify(JSON.parse(text), null, 2);
-	} catch {
-		return text;
-	}
-}
-
-/** "12.4 KB" / "840 B" — the size of a payload the model just read. */
-function humanSize(bytes: number): string {
-	return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
-}
-
-/**
- * One-line summary of an orq tool result.
- *
- * The server answers with a single unbroken line of JSON, so pi's built-in
- * 10-line preview never trims anything and the terminal soft-wraps a whole
- * screen of it. Summarise the shape instead; the model still receives the full
- * payload, and ctrl+o expands the row.
- */
-export function summarize(text: string): string {
-	const size = humanSize(Buffer.byteLength(text));
-	try {
-		const parsed = JSON.parse(text);
-		const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : undefined;
-		if (rows) return `${rows.length} ${rows.length === 1 ? "item" : "items"} · ${size}`;
-		const keys = parsed && typeof parsed === "object" ? Object.keys(parsed) : [];
-		return keys.length ? `${keys.slice(0, 6).join(", ")}${keys.length > 6 ? ", …" : ""} · ${size}` : size;
-	} catch {
-		// Not JSON: fall back to the shape of the text itself.
-		const lines = text.split("\n").length;
-		return `${lines > 1 ? `${lines} lines · ` : ""}${size}`;
-	}
+	/** Set by the caller when the model catalogue was reloaded with this credential. */
+	modelsReloaded?: boolean;
 }
 
 /** A rejected credential, as opposed to the server stalling or falling over. */
@@ -268,23 +116,14 @@ export function isAuthError(error: unknown): boolean {
 	return /401|403|invalid_token|Unauthorized|audience/i.test(message);
 }
 
-/**
- * What the server said about a rejected credential.
- *
- * The MCP SDK wraps the 401 body in its own prose
- * (`Streamable HTTP error: Error POSTing to endpoint: {"error":"invalid_token",
- * "error_description":"API key is not valid for this workspace…"}`), and the
- * description is the only part that tells a wrong-workspace key from an
- * expired one. Falls back to the message's first line when the body is not
- * the JSON the orq server sends.
- */
+/** What the server said about a rejected credential: `error_description`, `message`, or the first line. */
 export function authReason(error: unknown): string {
 	const message = (error instanceof Error ? error.message : String(error)).trim();
 	const brace = message.indexOf("{");
 	if (brace >= 0) {
 		try {
 			const parsed = JSON.parse(message.slice(brace));
-			const reason = parsed?.error_description ?? parsed?.error;
+			const reason = parsed?.error_description ?? parsed?.message ?? parsed?.error;
 			if (typeof reason === "string" && reason) return reason;
 		} catch {
 			// Not JSON: fall through to the prose.
@@ -298,144 +137,188 @@ export function firstLine(error: unknown): string {
 	return String(error instanceof Error ? error.message : error).trim().split("\n")[0]!;
 }
 
+/** Ask the API whether a token is accepted. Throws "401 …" for a rejection, anything else for a stall. */
+export async function probeCredential(token: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+	const res = await fetchImpl(`${apiBaseUrl()}/v2/projects?limit=1`, {
+		headers: { Authorization: `Bearer ${token}` },
+		signal: AbortSignal.timeout(8_000),
+	});
+	if (res.status === 401 || res.status === 403) throw new Error(`${res.status} ${await res.text()}`);
+	if (!res.ok && res.status >= 500) throw new Error(`server ${res.status}`);
+}
+
 /**
- * Connect using the first credential the server actually accepts.
- *
- * Auth failures are immediate and explicit, so they select the next candidate.
- * A stall (the server's intermittent hangs, past `open`'s own retries) is the
- * server's problem and no verdict on that key, so it moves on too: a good
- * login session at candidate 3 must not be lost to a hang on candidate 2.
- * When nothing is accepted, a stall anywhere is reported ahead of the
- * rejections, because "every credential was rejected" would be a claim the
- * server never made. `connect` is injectable so the selection can be tested
- * without a server.
+ * The first candidate the API accepts. A 401 selects the next one; a stall or
+ * a 5xx is the server's problem and no verdict on the key, so it moves on too;
+ * when nothing was accepted, a stall is thrown instead of the rejections, and
+ * the boot keeps the first candidate as its best guess. One
+ * REST call per candidate, sub-second, where the old path needed a whole MCP
+ * handshake against a server that stalls.
  */
-export async function openFirstAccepted(
+export async function pickCredential(
 	candidates: Credential[],
-	connect: (credential: Credential) => Promise<Client> = open,
-): Promise<{ client: Client; credential: Credential }> {
-	const rejections: Rejection[] = [];
+	probe: (token: string) => Promise<void> = (token) => probeCredential(token),
+	/** Filled with the refusals (401/403) met on the way, stalls excluded, even when a later candidate wins. */
+	rejections: Rejection[] = [],
+): Promise<Credential> {
 	let stall: unknown;
 	for (const candidate of candidates) {
 		try {
-			return { client: await connect(candidate), credential: candidate };
+			await probe(candidate.token);
+			return candidate;
 		} catch (error) {
-			if (isAuthError(error)) {
-				rejections.push({ source: candidate.source, workspace: candidate.workspace, reason: authReason(error) });
-			} else {
-				stall = error;
-			}
+			if (isAuthError(error)) rejections.push({ source: candidate.source, workspace: candidate.workspace, reason: authReason(error) });
+			else stall = error;
 		}
 	}
 	if (stall !== undefined) throw stall;
 	throw new CredentialsRejected(rejections);
 }
 
-/**
- * Connect to the orq MCP server and expose its tools as pi tools.
- *
- * A rejected credential is not a failed boot: the session still opens, with
- * the tools wrapped from the cached catalogue (any age: stale tools beat none
- * when the server cannot be asked) or none at all, and `reconnect` fills in
- * the rest once a credential is accepted, re-running the catalogue under its
- * normal TTL so a stale cache taken at boot is refreshed then. Only the server
- * being unreachable throws. The wrapped tools read `client` lazily, per call,
- * so they need no connection to exist. `connect` is injectable for tests.
- */
-export async function connectOrqTools(
-	candidates: Credential[],
-	cachePath: string,
-	connect: (credential: Credential) => Promise<Client> = open,
-): Promise<OrqTools> {
-	let client: Client | undefined;
-	let credential: Credential | undefined;
-	let rejections: Rejection[] = [];
-	let note: string | undefined;
-	let tools: McpTool[] = [];
+function textOf(content: unknown): string {
+	if (!Array.isArray(content)) return JSON.stringify(content ?? null);
+	return content.map((block: any) => (block?.type === "text" ? block.text : JSON.stringify(block))).join("\n");
+}
+
+/** Expanded view: indent the JSON so pi has real lines to lay out. */
+function prettify(text: string): string {
 	try {
-		const accepted = await openFirstAccepted(candidates, connect);
-		credential = accepted.credential;
-		const listed = await catalogue(accepted.client, cachePath, () => connect(accepted.credential));
-		client = listed.client;
-		tools = listed.tools;
-		note = listed.note;
-	} catch (error) {
-		if (!(error instanceof CredentialsRejected)) throw error;
-		rejections = error.rejections;
-		tools = readCache(cachePath) ?? [];
+		return JSON.stringify(JSON.parse(text), null, 2);
+	} catch {
+		return text;
 	}
+}
 
-	const wrap = (tool: McpTool): ToolDefinition =>
-		defineTool({
-			name: `${TOOL_PREFIX}${tool.name}`,
-			label: tool.title ?? tool.name,
-			description: describe(tool),
-			// The MCP schema is already JSON Schema; Unsafe passes it through untouched.
-			parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema as object),
-			execute: async (_id, params, signal) => {
-				if (!client) {
-					// Tell the model, so it tells the user, rather than retrying blindly.
-					return {
-						content: [{ type: "text" as const, text: `orq is not connected: every credential was rejected. ${LOGIN_HINT}` }],
-						details: { failed: true },
-						isError: true,
-					};
-				}
-				const result = await client.callTool({ name: tool.name, arguments: params as Record<string, unknown> }, undefined, {
-					signal,
-				});
-				const failed = Boolean(result.isError);
-				return {
-					content: [{ type: "text" as const, text: textOf(result.content) }],
-					// pi keeps isError outside the result it hands to renderers, so the
-					// flag rides along in details for renderResult below.
-					details: { failed },
-					isError: failed,
-				};
-			},
-			renderResult: (result, options, theme) => {
-				const text = textOf(result.content);
-				if (options.expanded) return new Text(theme.fg("toolOutput", prettify(text)), 0, 0);
-				const failed = (result.details as { failed?: boolean })?.failed;
-				const label = failed ? theme.fg("error", text.slice(0, 200)) : theme.fg("muted", summarize(text));
-				return new Text(label, 0, 0);
-			},
-		});
-	// One array for the session's life: pi holds customTools by reference and the
-	// subagent tool filters it per call, so tools pushed here reach both.
-	const wrapped = keptTools(tools).map(wrap);
+function humanSize(bytes: number): string {
+	return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+}
 
+/**
+ * One-line summary of an orq tool result. The server answers with a single
+ * unbroken line of JSON, so pi's default preview wraps a whole screen of it.
+ * The model still receives the full payload; ctrl+o expands the row.
+ */
+export function summarize(text: string): string {
+	const size = humanSize(Buffer.byteLength(text));
+	try {
+		const parsed = JSON.parse(text);
+		const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : Array.isArray(parsed?.items) ? parsed.items : undefined;
+		if (rows) return `${rows.length} ${rows.length === 1 ? "item" : "items"} · ${size}`;
+		const keys = parsed && typeof parsed === "object" ? Object.keys(parsed) : [];
+		return keys.length ? `${keys.slice(0, 6).join(", ")}${keys.length > 6 ? ", …" : ""} · ${size}` : size;
+	} catch {
+		const lines = text.split("\n").length;
+		return `${lines > 1 ? `${lines} lines · ` : ""}${size}`;
+	}
+}
+
+/** The bare server tool name: `mcp__orq__list_traces` → `list_traces`. */
+export const bareName = (name: string) => (name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : name);
+
+/**
+ * The extension: registers the orq server with pi and draws its tools. Every
+ * session re-runs it (services are per session), so `refresh` always reaches
+ * the live handle.
+ */
+export function orqMcp(signedIn: boolean) {
+	let current: ExtensionAPI | undefined;
+	// Signed out, the server is not registered at all: pi would only report
+	// "requires authentication · run /mcp", pointing away from /login and /key.
+	let enabled = signedIn;
 	return {
-		tools: wrapped,
-		credential,
-		rejections,
-		note,
-		reconnect: async (next) => {
-			const accepted = await openFirstAccepted(next, connect);
-			await client?.close().catch(() => {});
-			client = undefined;
-			// The catalogue under its normal rules, now that the server can be
-			// asked: a fresh cache is reused, a stale one (or the any-age cache a
-			// rejected boot took) is refetched, and a stall keeps the cache with a
-			// note. Only names the session lacks are wrapped, and they are pushed
-			// into the one array pi and the subagents hold.
-			// ponytail: a tool that vanished from the server stays registered and
-			// fails at call time; a changed schema keeps the old one. Rebuild the
-			// session's tools if the catalogue ever varies per workspace.
-			// `client` is assigned once, after the catalogue: a failed fetch with no
-			// cache would otherwise leave it pointing at a connection the fetch
-			// already closed.
-			const listed = await catalogue(accepted.client, cachePath, () => connect(accepted.credential));
-			client = listed.client;
-			const known = new Set(wrapped.map((tool) => tool.name));
-			const added = keptTools(listed.tools)
-				.filter((tool) => !known.has(`${TOOL_PREFIX}${tool.name}`))
-				.map(wrap);
-			wrapped.push(...added);
-			return { credential: accepted.credential, added, note: listed.note };
+		extension: (pi: ExtensionAPI) => {
+			current = pi;
+			if (enabled) pi.registerMcpServer(MCP_SERVER, orqServerConfig());
+			pi.registerToolRenderer((toolName, next) => {
+				if (!toolName.startsWith(TOOL_PREFIX)) return next();
+				return {
+					renderCall: (args: unknown, theme: any, context: any) => {
+						const seconds = context.durationMs !== undefined ? `  ${(context.durationMs / 1000).toFixed(1)} s` : "";
+						const summary = argSummary(args as Record<string, unknown>);
+						return new Text(`${theme.fg("accent", "▌")} ${theme.fg("toolTitle", bareName(toolName))}${summary ? `  ${theme.fg("muted", summary)}` : ""}${theme.fg("dim", seconds)}`, 0, 0);
+					},
+					renderResult: (result: any, options: any, theme: any, context: any) => {
+						const text = textOf(result.content);
+						if (options.expanded) return new Text(theme.fg("toolOutput", prettify(text)), 0, 0);
+						return new Text(context?.isError ? theme.fg("error", text.slice(0, 200)) : theme.fg("muted", summarize(text)), 0, 0);
+					},
+				};
+			});
 		},
-		close: async () => {
-			await client?.close();
+		/** Reconnect with whatever credential ORQ_API_KEY holds now (the first time, connect at all). */
+		refresh: () => {
+			enabled = true;
+			try {
+				current?.registerMcpServer(MCP_SERVER, orqServerConfig());
+			} catch {
+				// A handle that died with its session: the next session registers afresh.
+			}
+		},
+		/** The orq tools pi has registered and not hidden, by bare name. */
+		toolNames: (): string[] => {
+			try {
+				return (current?.getAllTools() ?? []).filter((tool) => tool.name.startsWith(TOOL_PREFIX) && tool.exposure !== "hidden").map((tool) => bareName(tool.name));
+			} catch {
+				return [];
+			}
 		},
 	};
+}
+
+/**
+ * One tool call for a slash command (/trace, /agents): pi lets
+ * tools call tools, not commands, so these open a short-lived connection of
+ * their own. Retried once on a fresh connection, because the server stalls.
+ */
+export async function callOrqTool(name: string, args: Record<string, unknown>, token = process.env.ORQ_API_KEY ?? ""): Promise<{ text: string; isError: boolean }> {
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= 2; attempt++) {
+		const client = new Client({ name: "orqi", version: VERSION });
+		client.onerror = () => {};
+		try {
+			await client.connect(new StreamableHTTPClientTransport(new URL(mcpUrl()), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }), { timeout: 15_000 });
+			const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 20_000 });
+			return { text: textOf(result.content), isError: Boolean(result.isError) };
+		} catch (error) {
+			lastError = error;
+			if (isAuthError(error)) break;
+		} finally {
+			await client.close().catch(() => {});
+		}
+	}
+	throw lastError;
+}
+
+/** A JSON Schema type, short: `string`, `string[]`, `a | b`, `object`. */
+function typeOf(schema: any): string {
+	if (!schema || typeof schema !== "object") return "any";
+	if (Array.isArray(schema.enum)) return schema.enum.map((v: unknown) => JSON.stringify(v)).join(" | ");
+	if (schema.const !== undefined) return JSON.stringify(schema.const);
+	const variants = schema.anyOf ?? schema.oneOf;
+	if (Array.isArray(variants)) return variants.map(typeOf).join(" | ");
+	if (schema.type === "array") return `${typeOf(schema.items)}[]`;
+	if (Array.isArray(schema.type)) return schema.type.join(" | ");
+	return schema.type ?? (schema.properties ? "object" : "any");
+}
+
+/**
+ * A tool's parameters as readable lines: name, type, required, default,
+ * description; nested objects indented. What the /tools detail view shows;
+ * `j` there shows the raw schema instead.
+ */
+export function schemaLines(schema: any, indent = ""): string[] {
+	const properties = schema?.properties ?? {};
+	const required = new Set<string>(schema?.required ?? []);
+	const names = Object.keys(properties);
+	if (names.length === 0) return indent ? [] : ["(no parameters)"];
+	const width = Math.min(24, Math.max(...names.map((name) => name.length)));
+	return names.flatMap((name) => {
+		const prop = properties[name] ?? {};
+		const flags = [required.has(name) ? "required" : "", prop.default !== undefined ? `default ${JSON.stringify(prop.default)}` : ""].filter(Boolean).join(", ");
+		const description = String(prop.description ?? "").replace(/\s+/g, " ").trim();
+		const head = `${indent}${name.padEnd(width)}  ${typeOf(prop)}${flags ? `  (${flags})` : ""}`;
+		const lines = [head, ...(description ? [`${indent}${" ".repeat(width + 2)}${description}`] : [])];
+		const nested = prop.type === "object" ? prop : prop.type === "array" && prop.items?.type === "object" ? prop.items : undefined;
+		return nested ? [...lines, ...schemaLines(nested, `${indent}  `)] : lines;
+	});
 }

@@ -1,5 +1,5 @@
 ---
-name: optimize-cost
+name: orqi-optimize-cost
 description: >
   Analyze cost across models and agents, recommend model cascades (cheap model
   for easy queries, expensive for hard), and compare cost/quality tradeoffs.
@@ -18,7 +18,7 @@ You are an **orq.ai cost optimizer**. Your job is to analyze workspace spend, id
 - **NEVER** report cost numbers you didn't get from `query_analytics` or `get_analytics_overview`.
 - **ALWAYS** show the baseline before recommending changes.
 - **ALWAYS** quantify the expected savings (% and $ if possible).
-- **ALWAYS** recommend validating with `run-experiment` before switching production traffic.
+- **ALWAYS** recommend validating with `orq-run-experiment` before switching production traffic.
 
 ## Workflow Checklist
 
@@ -51,9 +51,9 @@ Cost Optimization:
 
 ## When NOT to use
 
-- **General workspace overview?** → use `workspace-health-check`
-- **Model quality comparison?** → use `compare-agents`
-- **Debug failures?** → use `investigate-root-cause`
+- **General workspace overview?** → use `orqi-workspace-health-check`
+- **Model quality comparison?** → use `orq-compare-agents`
+- **Debug failures?** → use `orqi-investigate-root-cause`
 
 ## Optimization Strategies
 
@@ -187,7 +187,7 @@ Aggregate requests and process in bulk during off-peak.
 
 ### Step 5: Validation
 
-8. **Propose experiment:** Always recommend `run-experiment` before switching production.
+8. **Propose experiment:** Always recommend `orq-run-experiment` before switching production.
 
 ## orq MCP Tools
 
@@ -200,7 +200,7 @@ Aggregate requests and process in bulk during off-peak.
 
 ## Companion Skills
 
-- Need quality comparison → `compare-agents`
-- Need to validate → `run-experiment`
-- Need test data → `generate-synthetic-dataset`
-- Prompt too long → `optimize-prompt`
+- Need quality comparison → `orq-compare-agents`
+- Need to validate → `orq-run-experiment`
+- Need test data → `orq-generate-synthetic-dataset`
+- Prompt too long → `orq-improve-agent`

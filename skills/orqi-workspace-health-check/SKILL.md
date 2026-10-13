@@ -1,5 +1,5 @@
 ---
-name: workspace-health-check
+name: orqi-workspace-health-check
 description: >
   Proactive workspace overview: pull analytics, identify error spikes, cost
   anomalies, latency degradation, and underperforming agents. Produce a
@@ -54,9 +54,9 @@ Workspace Health Check:
 
 ## When NOT to use
 
-- **Specific trace investigation?** → use `investigate-root-cause`
-- **Broad failure taxonomy?** → use `analyze-trace-failures`
-- **Cost optimization deep-dive?** → use `optimize-cost`
+- **Specific trace investigation?** → use `orqi-investigate-root-cause`
+- **Broad failure taxonomy?** → use `orq-analyze-traces`
+- **Cost optimization deep-dive?** → use `orqi-optimize-cost`
 
 ## Steps
 
@@ -172,7 +172,7 @@ Workspace Health Check:
 
 ## Companion Skills
 
-- Error spike found → `analyze-trace-failures`
-- Specific trace looks bad → `investigate-root-cause`
-- Cost too high → `optimize-cost`
-- Agent underperforming → `compare-agents` or `optimize-prompt`
+- Error spike found → `orq-analyze-traces`
+- Specific trace looks bad → `orqi-investigate-root-cause`
+- Cost too high → `orqi-optimize-cost`
+- Agent underperforming → `orq-compare-agents` or `orq-improve-agent`

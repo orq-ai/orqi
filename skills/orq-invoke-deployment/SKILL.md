@@ -4,14 +4,14 @@ description: >
   Invoke orq.ai deployments, agents, and models via the Python SDK or HTTP API.
   Use when a user wants to call a deployment with prompt variables, invoke an
   agent in a conversation, or call a model directly through the AI Router.
-  Do NOT use for creating or editing deployments/agents (use orq-optimize-prompt
+  Do NOT use for creating or editing deployments/agents (use orq-improve-agent
   or orq-build-agent). Do NOT use for running evaluations (use orq-run-experiment).
 allowed-tools: Bash(curl:*), Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__search_entities, mcp__orq-workspace__list_models, mcp__orq-workspace__list_traces
 ---
 
 # Invoke Deployment
 
-You are an **orq.ai integration engineer**. Your job is to help users invoke orq.ai resources — deployments, agents, and models — and integrate those calls into their application code using the Python SDK or HTTP API. The API key is pre-configured — do NOT check it.
+You are an **orq.ai integration engineer**. Your job is to help users invoke orq.ai resources — deployments, agents, and models — and integrate those calls into their application code using the Python SDK or HTTP API. The API key is pre-configured — do NOT prompt the user for it, but DO verify the target exists with it (step 3).
 
 ## Constraints
 
@@ -20,18 +20,18 @@ You are an **orq.ai integration engineer**. Your job is to help users invoke orq
 - **NEVER** skip `identity.id` in production calls — it links requests to contacts in orq.ai and enables per-user analytics and cost attribution.
 - **ALWAYS** prefer the Python SDK over raw curl in generated code — the SDK handles retries, auth, and streaming correctly.
 - **ALWAYS** use `stream=True` for user-facing invocations — streaming dramatically improves perceived latency.
-- **ALWAYS** confirm the deployment/agent key with `search_entities` before writing code — wrong keys are silent errors.
+- **ALWAYS** verify the deployment/agent key with the **run key** via REST/SDK before writing code — wrong keys are silent errors. Use `search_entities` to **browse** for keys, then verify with the run key (see [run-key preflight](../orq-shared/resources/run-key-preflight.md)).
 
 **Why these constraints:** Missing prompt variables produce incomplete output silently. Hardcoded API keys are a security risk. Wrong keys waste budget. Skipping identity makes traces unattributable.
 
 ## Companion Skills
 
-- `orq-optimize-prompt` — improve a deployment's prompt before invoking it
+- `orq-improve-agent` — improve a deployment's prompt before invoking it
 - `orq-build-agent` — create and configure an agent before invoking it
 - `orq-run-experiment` — evaluate invocation quality across a dataset
-- `orq-analyze-trace-failures` — diagnose failures from invocation traces
+- `orq-analyze-traces` — diagnose failures from invocation traces
 - `orq-setup-observability` — instrument the application that calls the deployment
-- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `-o json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## When to use
 
@@ -46,7 +46,7 @@ You are an **orq.ai integration engineer**. Your job is to help users invoke orq
 
 ## When NOT to use
 
-- **Need to create or edit a deployment/prompt?** → Use `orq-optimize-prompt`
+- **Need to create or edit a deployment/prompt?** → Use `orq-improve-agent`
 - **Need to build or configure an agent?** → Use `orq-build-agent`
 - **Need to evaluate quality?** → Use `orq-run-experiment`
 - **Traces not appearing?** → Use `orq-setup-observability`
@@ -55,7 +55,7 @@ You are an **orq.ai integration engineer**. Your job is to help users invoke orq
 
 ```
 Invoke Progress:
-- [ ] Phase 1: Discover — identify the target resource (deployment / agent / model)
+- [ ] Phase 1: Discover — identify and verify the target resource (deployment / agent / model)
 - [ ] Phase 2: Configure — determine inputs/variables, identity, and options
 - [ ] Phase 3: Invoke — call the resource and verify the response
 - [ ] Phase 4: Integrate — deliver production-ready code
@@ -77,13 +77,13 @@ Invoke Progress:
 
 ## orq.ai Documentation
 
-**Deployments:** [Overview](https://docs.orq.ai/docs/deployments/overview) · [Invoke API](https://docs.orq.ai/reference/deployments/orq-invoke-deployment) · [Stream API](https://docs.orq.ai/reference/deployments/stream-deployment) · [Get Config](https://docs.orq.ai/reference/deployments/get-deployment-config)
+**Deployments:** [Overview](https://docs.orq.ai/docs/deployments/overview) · [Invoke API](https://docs.orq.ai/reference/deployments/invoke) · [Stream API](https://docs.orq.ai/reference/deployments/stream) · [Get Config](https://docs.orq.ai/reference/deployments/get-config)
 
 **Agents:** [Agent API](https://docs.orq.ai/docs/agents/agent-api) · [Create Response](https://docs.orq.ai/reference/agents/create-response)
 
 **Models (AI Router):** [Getting Started](https://docs.orq.ai/docs/router/getting-started) · [OpenAI-Compatible API](https://docs.orq.ai/docs/proxy/openai-compatible-api) · [Supported Models](https://docs.orq.ai/docs/proxy/supported-models)
 
-**SDKs:** [Python SDK](https://docs.orq.ai/docs/sdk/python) · [Node.js SDK](https://docs.orq.ai/docs/sdk/node)
+**SDKs:** [Install and usage](https://docs.orq.ai/reference/client-libraries) · [Python SDK](https://github.com/orq-ai/orq-python) · [Node.js SDK](https://github.com/orq-ai/orq-node)
 
 ### Key Concepts
 
@@ -113,22 +113,17 @@ Follow these steps **in order**. Do NOT skip steps.
    - **Agent** — prompt + tools + memory + KB, multi-turn conversations via `responses.create`
    - **Model direct call** — OpenAI-compatible AI Router, no template
 
-2. **Find the resource key** if the user doesn't already know it, using `search_entities` MCP tool:
+2. **Find the resource key** (agents and deployments only — skip for model direct calls) if the user doesn't already know it, using `search_entities` MCP tool to **browse**:
    - Deployments: `type: "deployment"`
    - Agents: `type: "agent"`
 
-   If the user already knows the key, skip directly to step 3.
+3. **Verify the key with the run key** (agents and deployments only — skip for model direct calls) — whether the key came from MCP browsing or the user provided it directly. Follow the [run-key preflight](../orq-shared/resources/run-key-preflight.md) using the `ORQ_API_KEY` the invocation will use. For deployments, save the `get_config` response — it contains the prompt template needed in step 4. If `get_config` returns 204, the deployment has no published version — stop and ask the user to publish it before proceeding.
 
-3. **For deployments:** fetch the deployment config to discover `{{variable}}` placeholders **before** asking the user for a message or invoking:
-
-   ```bash
-   curl -s -H "Authorization: Bearer $ORQ_API_KEY" \
-     "https://api.orq.ai/v2/deployments/<key>/config"
-   ```
+4. **For deployments:** discover `{{variable}}` placeholders **before** asking the user for a message or invoking. Use the `get_config` response from step 3 — it already contains the prompt template.
 
    Scan the returned prompt template for `{{variable_name}}` patterns. These are the required `inputs` keys.
 
-   If the config endpoint returns 404 or no template, ask the user: *"Does this deployment use any `{{variable}}` placeholders? If so, what are they?"*
+   If the template is empty or has no variables, ask the user: *"Does this deployment use any `{{variable}}` placeholders? If so, what are they?"*
 
    Then identify which invocation pattern applies:
    - **Variable substitution** — the prompt contains `{{variable}}` placeholders → pass values via `inputs`
@@ -141,7 +136,7 @@ Follow these steps **in order**. Do NOT skip steps.
 
 ### Phase 2: Configure the Invocation
 
-4. **For deployments — determine the invocation pattern.**
+5. **For deployments — determine the invocation pattern.**
 
    | Pattern | When | What to pass |
    |---|---|---|
@@ -156,21 +151,21 @@ Follow these steps **in order**. Do NOT skip steps.
    | `{{customer_name}}` | `customer_name` | `"Jane Doe"` |
    | `{{issue}}` | `issue` | `"Payment failed"` |
 
-5. **Determine `identity`** (deployments and agents).
+6. **Determine `identity`** (deployments and agents).
 
    Always include at minimum `id` in production:
    ```json
    { "id": "user_<unique_id>", "display_name": "Jane Doe", "email": "jane@example.com" }
    ```
 
-6. **Choose streaming vs. non-streaming.**
+7. **Choose streaming vs. non-streaming.**
 
    | Use case | Mode |
    |---|---|
    | User-facing UI, chatbot | `stream=True` |
    | Background job, batch, eval | `stream=False` |
 
-7. **Determine additional options as needed.**
+8. **Determine additional options as needed.**
 
    | Option | Resource | Purpose |
    |---|---|---|
@@ -188,20 +183,20 @@ Follow these steps **in order**. Do NOT skip steps.
 
 ### Phase 3: Invoke
 
-8. **Invoke the resource.** See [resources/api-reference.md](resources/api-reference.md) for full API details.
+9. **Invoke the resource.** See [resources/api-reference.md](resources/api-reference.md) for full API details.
 
-9. **Verify the response:**
+10. **Verify the response:**
    - Deployment: check `choices[0].message.content` for the output text
    - Agent: check `response.output[0].parts[0].text` for the output text; save `response.task_id` for multi-turn
    - If wrong output: check for missing inputs, wrong key, or prompt issues
 
-10. **Find the trace** — direct user to [my.orq.ai](https://my.orq.ai/) → Traces, or use `response.telemetry.trace_id`.
+11. **Find the trace** — direct user to [my.orq.ai](https://my.orq.ai/) → Traces, or use `response.telemetry.trace_id`.
 
 ### Phase 4: Generate Integration Code
 
-11. **Ask for the user's language** if not already clear: Python or curl.
+12. **Ask for the user's language** if not already clear: Python or curl.
 
-12. **Generate code** using the templates below, filled with the actual key and variables.
+13. **Generate code** using the templates below, filled with the actual key and variables.
 
 ---
 

@@ -1,12 +1,12 @@
 ---
-name: investigate-root-cause
+name: orqi-investigate-root-cause
 description: >
   Drill into a specific failing trace or error pattern to find the first upstream
   failure. Classify as specification, generalization, tool/retrieval, or data/eval
   failure. Produce a root-cause report with fix hypothesis and confidence level.
   Use when a user has a specific trace ID or error pattern and needs to understand
   WHY it failed, not just WHAT failed. Do NOT use for broad failure analysis across
-  many traces (use analyze-trace-failures instead).
+  many traces (use orq-analyze-traces instead).
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, AskUserQuestion, orq*
 ---
 
@@ -54,9 +54,9 @@ Root Cause Investigation:
 
 ## When NOT to use
 
-- **Broad failure analysis across many traces?** → use `analyze-trace-failures`
-- **Multi-turn conversation debugging?** → use `debug-conversation`
-- **General workspace health?** → use `workspace-health-check`
+- **Broad failure analysis across many traces?** → use `orq-analyze-traces`
+- **Multi-turn conversation debugging?** → use `orqi-debug-conversation`
+- **General workspace health?** → use `orqi-workspace-health-check`
 
 ## Failure Classification
 
@@ -175,10 +175,10 @@ Timeouts, rate limits, wrong model version, missing API keys, permission errors.
 ```
 
 10. **Hand off:**
-    - Specification failure → `optimize-prompt`
-    - Tool/retrieval failure → `manage-knowledge-base` or tool config fix
-    - Generalization failure → model upgrade or `compare-agents`
-    - Data/eval failure → `build-evaluator`
+    - Specification failure → `orq-improve-agent`
+    - Tool/retrieval failure → `orqi-manage-knowledge-base` or tool config fix
+    - Generalization failure → model upgrade or `orq-compare-agents`
+    - Data/eval failure → `orq-build-evaluator`
     - Infrastructure → manual fix (config, keys, limits)
 
 ## orq MCP Tools

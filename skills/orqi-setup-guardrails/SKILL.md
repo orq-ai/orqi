@@ -1,5 +1,5 @@
 ---
-name: setup-guardrails
+name: orqi-setup-guardrails
 description: >
   Configure input/output guardrails on agents — safety filters, content policies,
   PII detection, jailbreak prevention. Guide evaluator creation for guardrail use,
@@ -53,9 +53,9 @@ Guardrail Setup:
 
 ## When NOT to use
 
-- **Quality evaluation (not safety)?** → use `build-evaluator`
-- **Agent is broken, not unsafe?** → use `investigate-root-cause`
-- **Want general agent config?** → use `build-agent`
+- **Quality evaluation (not safety)?** → use `orq-build-evaluator`
+- **Agent is broken, not unsafe?** → use `orqi-investigate-root-cause`
+- **Want general agent config?** → use `orq-build-agent`
 
 ## Guardrail Types
 
@@ -192,7 +192,7 @@ Filter what the agent sends back to users.
 
 ## Companion Skills
 
-- Need to test guardrail quality → `run-experiment`
-- Agent has other quality issues → `build-evaluator`
-- Need synthetic attack data → `generate-synthetic-dataset`
-- Agent config needs broader changes → `build-agent`
+- Need to test guardrail quality → `orq-run-experiment`
+- Agent has other quality issues → `orq-build-evaluator`
+- Need synthetic attack data → `orq-generate-synthetic-dataset`
+- Agent config needs broader changes → `orq-build-agent`

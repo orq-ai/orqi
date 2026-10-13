@@ -1,0 +1,190 @@
+[
+	{
+		"name": "create_agent",
+		"description": "Create an AI agent with model, instructions, and tools. Use list_models to find valid chat model IDs. The agent only supports chat models."
+	},
+	{
+		"name": "create_datapoints",
+		"description": "Create one or more datapoints in a dataset"
+	},
+	{
+		"name": "create_dataset",
+		"description": "Create a new dataset"
+	},
+	{
+		"name": "create_deployment",
+		"description": "Create a prompt deployment with a model configuration and messages. Use list_models to find valid chat model IDs. Messages support {{variable}} template syntax for dynamic content."
+	},
+	{
+		"name": "create_experiment",
+		"description": "Create an experiment from a dataset. Specify task type: \"prompt\" with model configurations, or \"agent\" with agent keys. Use auto_run to queue for immediate execution."
+	},
+	{
+		"name": "create_llm_eval",
+		"description": "Create an LLM-as-a-Judge evaluator. The model must support function calling. Use list_models to find valid model IDs. The prompt can reference {{output.response}}, {{input.user_query}}, {{input.expected_output}}, {{input.all_messages}}, {{input.system_instructions}}, {{input.retrievals}} and {{output.tools_called}}. Legacy {{log.*}} variables are still supported."
+	},
+	{
+		"name": "create_python_eval",
+		"description": "Create a Python code evaluator. The code must define an `evaluate(log)` function that returns a boolean or number. The `log` dict has keys: input, output, reference, expected_output (a duplicate of reference), retrievals, messages and tool_calls."
+	},
+	{
+		"name": "create_skill",
+		"description": "Create a new skill. Skills are modular markdown instructions that codify processes or conventions."
+	},
+	{
+		"name": "delete_datapoints",
+		"description": "Delete one or more datapoints from a dataset"
+	},
+	{
+		"name": "delete_dataset",
+		"description": "Delete a dataset and all its datapoints"
+	},
+	{
+		"name": "delete_entity",
+		"description": "Delete any entity in the workspace by type and ID. Supported types: agent, dataset, deployment, prompt, experiment, evaluator, knowledge, memory_store, prompt_snippet, sheet, tool."
+	},
+	{
+		"name": "delete_skill",
+		"description": "Permanently delete a skill by its ID."
+	},
+	{
+		"name": "find_log_patterns",
+		"description": "Find stable templates in a bounded sample of matching logs. Returns counts, percentages, time bounds, and bounded sample IDs rather than raw bodies."
+	},
+	{
+		"name": "get_agent",
+		"description": "Retrieve an agent by its key or ID. Returns the full agent configuration including model, instructions, tools, knowledge bases, and settings."
+	},
+	{
+		"name": "get_analytics_overview",
+		"description": "Get a quick workspace analytics snapshot: total requests, cost, tokens, errors, error rate, average latency, and top 5 models. Zero-config entry point for understanding workspace usage."
+	},
+	{
+		"name": "get_deployment",
+		"description": "Retrieve a deployment by its key or ID. Returns the deployment configuration including model, messages, and variant settings."
+	},
+	{
+		"name": "get_experiment_run",
+		"description": "Export an experiment run and return a signed download URL. The file contains the full row data including inputs, outputs, evaluator scores, cost, and latency."
+	},
+	{
+		"name": "get_llm_eval",
+		"description": "Retrieve an LLM-as-a-Judge evaluator by its key or ID. Returns the full evaluator configuration including prompt, model, output type, mode, and description."
+	},
+	{
+		"name": "get_log",
+		"description": "Retrieve one OpenTelemetry log record by its ID."
+	},
+	{
+		"name": "get_log_context",
+		"description": "Retrieve a log and matching records immediately before and after it, in chronological order."
+	},
+	{
+		"name": "get_python_eval",
+		"description": "Retrieve a Python code evaluator by its key or ID. Returns the full evaluator configuration including code, output type, and description."
+	},
+	{
+		"name": "get_skill",
+		"description": "Retrieve a skill by its ID. Returns the full skill configuration including instructions."
+	},
+	{
+		"name": "get_span",
+		"description": "Retrieve a single span by its ID. Use mode \"compact\" for metadata only (fast) or \"full\" to include the complete input/output content (slower)."
+	},
+	{
+		"name": "invoke_agent",
+		"description": "Invoke an agent using the Responses API. The model param must follow the format \"agent/{agent_key}\". Returns the full response resource."
+	},
+	{
+		"name": "invoke_model",
+		"description": "Invoke a model using the Responses API. The model param must follow the format \"provider/model\". Returns the full response resource."
+	},
+	{
+		"name": "list_datapoints",
+		"description": "List datapoints in a dataset"
+	},
+	{
+		"name": "list_experiment_runs",
+		"description": "List experiment runs (manifest snapshots) for the workspace. Optionally filter by sheet_id. Returns runs sorted newest-first with cursor pagination."
+	},
+	{
+		"name": "list_log_facet_values",
+		"description": "List bounded distinct values and counts for one native or dynamic log facet field."
+	},
+	{
+		"name": "list_log_facets",
+		"description": "Discover native and dynamic log fields with bounded top values and occurrence counts. Use this before constructing filters for unfamiliar data."
+	},
+	{
+		"name": "list_models",
+		"description": "list all the available AI models in the system"
+	},
+	{
+		"name": "list_skills",
+		"description": "List skills in the current workspace. Results are paginated using starting_after / ending_before cursors."
+	},
+	{
+		"name": "list_spans",
+		"description": "List all spans belonging to a specific trace. Returns span data (id, name, type, timing, parent_id) for tree reconstruction. Use get_span with mode \"full\" to retrieve input/output content for individual spans."
+	},
+	{
+		"name": "list_trace_logs",
+		"description": "List OpenTelemetry logs correlated to a trace, using the backend cursor unchanged."
+	},
+	{
+		"name": "list_traces",
+		"description": "List traces for a workspace with filtering support.\n\nAvailable filters:\n- model: Filter by LLM model (e.g. \"gpt-4o\", \"claude-sonnet-4-20250514\")\n- type: Filter by leading span type (e.g. \"generation\", \"retrieval\", \"agent\")\n- entity_key: Filter by deployment/entity key\n- project_id: Filter by project ID\n- trace_id: Filter by specific trace ID\n- thread_id: Filter by thread ID\n- identity_id: Filter by contact/identity ID (e.g. \"contact_01ARZ3NDEKTSV4RRFFQ69G5FAV\")\n- search: Full-text search across trace fields\n- start_time_after: Only return traces starting after this time (ISO 8601)\n- start_time_before: Only return traces starting before this time (ISO 8601)\n\nWithout time bounds, searches the last 24 hours. An end time alone searches the 24 hours ending at that time. A start time alone searches from that time until now. The applied window is returned in metadata and preserved across cursor pages.\n\nAnnotation/evaluation filters:\n- evaluator_key: Filter by annotation/evaluator key OR id (e.g. \"rating\" or \"01HXXX...\")\n- eval_score_min: Minimum evaluation score (inclusive)\n- eval_score_max: Maximum evaluation score (inclusive)\n- eval_passed: Filter by passed status (true/false)\n- eval_label: Filter by evaluation label value\n\nResults are sorted by timestamp descending (most recent first)."
+	},
+	{
+		"name": "query_analytics",
+		"description": "Flexible drill-down into workspace analytics. Query usage, cost, latency, errors, agent, or model performance metrics from pre-aggregated rollup tables. Supports time ranges, grouping, filtering, and granularity control."
+	},
+	{
+		"name": "query_log_aggregates",
+		"description": "Query log_count, error_count, and error_rate through the shared TelemetryService query envelope."
+	},
+	{
+		"name": "retrieve_agent_response",
+		"description": "Retrieve a previously created agent response by its ID. Returns the full response resource including output, usage, and status."
+	},
+	{
+		"name": "search_directories",
+		"description": "List direct child directories for a project, sorted by display_name ascending."
+	},
+	{
+		"name": "search_docs",
+		"description": "Search the orq.ai documentation for guides, API references, and tutorials. Returns matching pages with title, description, content snippet, and a direct link."
+	},
+	{
+		"name": "search_entities",
+		"description": "Search projects, datasets, prompts, evaluators, or experiments in the current workspace. Use type to scope results and query to match names, keys, or descriptions."
+	},
+	{
+		"name": "search_logs",
+		"description": "Search OpenTelemetry logs with free text and the shared telemetry filter dialect, or run an OQL `fetch logs` pipeline. Results are newest first and cursor-paginated."
+	},
+	{
+		"name": "submit_feedback",
+		"description": "Send feedback about orq.ai APIs, MCP tools, SDKs, or documentation by email to support@orq.ai. Include what happened and what you expected, with a request ID or relevant URL when available. Do not include API keys, tokens, passwords, or other secrets. Each submission sends a new email; do not retry automatically."
+	},
+	{
+		"name": "update_agent",
+		"description": "Update an existing agent's configuration and publish a new semantic version. Provide versionIncrement and versionDescription with every update."
+	},
+	{
+		"name": "update_datapoint",
+		"description": "Update a datapoint"
+	},
+	{
+		"name": "update_llm_eval",
+		"description": "Update an existing LLM-as-a-Judge evaluator. Only the fields provided in updates will be changed; all other fields remain unchanged."
+	},
+	{
+		"name": "update_python_eval",
+		"description": "Update an existing Python code evaluator. Only the fields provided in updates will be changed; all other fields remain unchanged."
+	},
+	{
+		"name": "update_skill",
+		"description": "Update an existing skill. Only the fields provided will change; omitted fields keep their current values."
+	}
+]

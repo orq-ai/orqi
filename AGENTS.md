@@ -22,17 +22,20 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 `orq auth login` or `ORQ_API_KEY`.
 
 ## Things that will look wrong but are deliberate
-
-- **The MCP server intermittently hangs.** Roughly one call in three, on `initialize` *and*
-  `tools/list`, no error, only a stall (measured: 1.3 s, 120 s timeout, 0.4 s). Hence the 20 s
-  timeouts, three attempts on a fresh connection, and the 24 h catalogue cache in
-  `~/.orqi/agent/tool-catalogue.json`. Do not simplify that away. It is not auth: the same token
-  succeeds on retry, and real auth failures return 401 immediately.
-- **A failed connect closes its client** (`connectOnce`). Without it the dead transport's error
-  surfaces later as an unhandled rejection and kills the process mid-credential-fallback.
-- **Credentials are tried on the real MCP connection**, not pre-probed. A pre-probe would need a
-  second round-trip against a server that stalls, and a stall would then be misread as a bad
-  credential.
+- **The orq MCP server goes through pi's own MCP support, as server `orq`.** Tools reach the model
+  as `mcp__orq__<tool>` (`orqMcp` in `src/mcp.ts`), the same names any pi user gets, declared
+  `direct`. pi handles the connection: retries on network errors and 408/429/5xx, reconnects a
+  dropped connection on the next call, `/mcp` to inspect and reconnect, the server's resources,
+  and OAuth (`/mcp login orq`; the server publishes resource metadata). The server still stalls
+  now and then, so its per-request timeout is 30 s, not pi's 60. orqi's old bridge (a cached
+  catalogue, three attempts per call, a wrap of every tool) is gone; booting without the server
+  now means no orq tools until it connects, which pi waits up to 10 s for on the first prompt.
+- **Which credential is decided by one REST call per candidate** (`pickCredential`), then written
+  to `ORQ_API_KEY`, which the server's `Authorization: Bearer ${ORQ_API_KEY}` header reads per
+  connection. A 401 selects the next candidate; a stall or 5xx moves on too, being no verdict on the
+  key, and is reported ahead of the rejections when nothing was accepted. A credential change
+  re-registers the server with a NEW config object: pi reconnects a registered server exactly when
+  its config object changes (identity, not content).
 - **`sessionToken()` tries three keys, not one.** CLI 5.x keyed `workspaceTokens` by workspace key;
   6.x keys it `<workspaceKey>#<projectId>`, because a token is now project-scoped. An exact-key
   lookup on 6.x finds nothing and silently loses the login-session credential, so the lookup tries
@@ -52,44 +55,55 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   file has already been through a layout migration, every step of it is optional: a moved file or a
   keyless profile warns and falls through to the next candidate rather than failing the boot.
   Retire it the day the CLI can hand the key over.
-- **A rejected credential does not stop the boot.** The session opens with the tools wrapped from
-  the cached catalogue, whatever its age (stale tools beat none when the server cannot be asked;
-  the normal 24 h TTL applies again on reconnect, which wraps whatever the session lacks), or with
-  none, and a warning pinned above the editor names each candidate and the server's
-  `error_description`: "not valid for this workspace" and "expired" need different fixes, and the
-  bare hint used to send both to `orq auth login`. Recovery runs on the `input` event because
-  pi fires no event when `/login` stores a key and its auth store has no listener, and `input`
-  is the one hook that runs before the agent run snapshots its tool list (tools registered
-  there are callable on that same turn) and also fires for a message typed while the model is
-  still working, which is delivered as steering and starts no run; `before_agent_start` misses
-  steering and `turn_start` runs after the snapshot, both tried and rejected. The hook compares
-  the candidate tokens first so a set the server refused never re-knocks; a stall clears that
-  memo, because it is no verdict and the notice promises a retry. Only the reconnect itself sits
-  inside the recovery's try: an error after the server answered (a stale pi handle after `/new`
-  refusing `registerTool`) is reported as what it is, with `/reload` as the fix, and the factory
-  re-registers late tools on every run for exactly that. A failed `/workspace` switch leaves the
-  old connection up (mcp.ts closes it only once a replacement is accepted), so the widget says
-  "still on the previous workspace" rather than "not connected" over tools that keep answering.
-  The stored `/login` key is candidate #0 for the tools because pi's model runtime already
-  prefers it. Only one-shot exits, having no session to log in from - but a boot with no
-  candidate at all exits in either mode, there being nothing to try.
+- **A rejected credential does not stop the boot.** The session opens without orq tools, and a
+  two-line warning is pinned above the editor (`authLines`): what happened with the sources tried
+  and the server's `error_description` ("not valid for this workspace" and "expired" need different
+  fixes), then one call to action (`LOGIN_CTA`: `/login`, or `/key`). It is pinned, not also
+  notified: the same refusal said three times read as three problems. Only good news and a stall
+  ("retrying on your next message") are notices. Recovery runs on the `input` event because pi fires
+  no event when `/login` stores a key and its auth store has no listener, and `input` is the one
+  hook that runs before the agent run snapshots its tool list (tools registered there are callable
+  on that same turn) and also fires for a message typed while the model is still working, which is
+  delivered as steering and starts no run; `before_agent_start` misses steering and `turn_start`
+  runs after the snapshot, both tried and rejected. The hook compares the candidate tokens first so
+  a set the server refused never re-knocks; a stall clears that memo, because it is no verdict and
+  the notice promises a retry. A failed `/workspace` switch leaves the old connection up (the server
+  is re-registered only once a new credential is accepted), so the widget says "still on the
+  previous workspace" rather than "not connected" over tools that keep answering. The stored
+  `/login` key is candidate #0 for the tools because pi's model runtime already prefers it, which
+  also means a refused one breaks every model call while the tools work on another candidate. So at
+  boot a refused browser sign-in is rewritten from the accepted login session
+  (`refreshStoredSignIn`: what pi's refresh would have done had the token's expiry been right), and
+  a refused pasted key pins one line saying the model cannot answer and how to replace it
+  (`LOGIN_REFUSED`). The first message never re-tries the stored token the boot already refused as
+  if it were a new sign-in. A browser sign-in's expiry is its JWT's `exp` less a minute
+  (`expiresAt`): a fixed 50-minute TTL outlived the CLI's 30-minute tokens. Only one-shot exits,
+  having no session to log in from - but a boot with no candidate at all exits in one-shot mode.
+  Whenever nothing was accepted (no candidate, or every one refused) the TUI opens signed out: the
+  opening screen swaps its pitch for a sign-in invitation (`SIGN_IN` in `src/branding.ts`), the
+  fixed header reads `not signed in · /login`, the orq MCP server is not registered (pi would only
+  say "requires authentication · run /mcp"), and a welcome (`welcome` in `src/commands.ts`) whose
+  every path ends in the same `recover`, so a workshop laptop with nothing set up gets to a working
+  session without leaving it.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled
   backend and a genuinely logged-out machine otherwise produce the same empty candidate list and
   the same "run orq auth login", which is how the `--json` break stayed invisible until a user hit
   it. [docs/credentials.md](docs/credentials.md) tabulates the whole resolution.
 - **Tool results render as a one-line summary.** The server answers with a single unbroken line of
-  JSON, so pi's built-in 10-line preview never trims anything and one call wraps a whole screen.
-  `renderResult` in `src/mcp.ts` summarises; the model still gets the full payload.
+  JSON, so pi's built-in 10-line preview never trims anything. `orqMcp` registers a tool renderer
+  for `mcp__orq__*` (call: tool + identifying args + duration; result: `23 items · 6.0 KB`, ctrl+o
+  expands). The model still gets the full payload.
 - **`onlyOrq()` proxies the ModelRuntime.** pi composes built-in providers from whatever keys are in
   the environment: 1410 models across 40 providers on the dev machine versus 133 from the
   workspace. The proxy filters every model read to `provider === "orq"`.
 - **pi's own header, changelog panel and update notice are silenced** (`quietStartup`,
   `lastChangelogVersion`, `PI_SKIP_VERSION_CHECK`). They tell users to run `pi update`, which does
   not apply to this binary.
-- **The palette is amber, not Pulse Orange.** `#DF5325` is the brand primary, but on a black
-  terminal it sits dark and red. The four-step amber ramp in `src/branding.ts` matches
-  `docs/splash.svg`, and both themes in `themes/` are built on it. Pulse Orange survives as a
-  syntax colour. Keep the ramp, the splash and `install.sh` in step.
+- **The TUI is amber, the splash is Pulse Orange.** `#DF5325` is the brand primary, but on a black
+  terminal it sits dark and red, so both themes in `themes/` are built on an amber ramp, and
+  `docs/splash.svg` uses the same amber. The startup splash (`headerLines` in `src/branding.ts`)
+  and `install.sh` print the mark in Pulse Orange, matching the orq CLI. Pulse Orange survives in
+  the themes as a syntax colour.
 - **The orq changelog is `/whatsnew`, not `/changelog`.** `/changelog` is pi's: it is in
   `BUILTIN_SLASH_COMMANDS`, its dispatch is hardcoded ahead of extensions, and pi filters out any
   extension command whose name collides with a built-in. Registering `changelog` would silently do
@@ -103,25 +117,46 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   look. The cost is real and known: a failed tool call reads much like a successful one, and
   syntax highlighting carries less information. `ORQI_THEME=dark` selects `orq-dark`, which keeps
   turquoise for success and red for errors, and `/theme` switches mid-session.
-- **Tool descriptions carry constraints the server's schema omits** (`TOOL_HINTS` in
-  `src/mcp.ts`). `query_analytics` advertises one `group_by` enum for every metric and an optional
-  `project_id`, so the model composes calls the server rejects. The matrix in the hint was
-  measured against a live workspace. Drop an entry once the server documents it; a test fails if a
-  hinted tool disappears.
-- **The header has two shapes, chosen at render time.** Mark plus ORQI needs 52 columns and 30
-  rows; anything smaller falls back to the compact form with the detail lines beside the mark.
-  `headerLines` takes the size as an argument so the gate is testable. Prose lines may still wrap
-  in a narrow window, as they always did; wrapped block art is what looks broken.
+- **Constraints the server's schema omits ride in the system prompt** (`TOOL_HINTS`,
+  `{{ORQ_TOOL_HINTS}}`). pi gives no hook to append to an MCP tool's description. The
+  `query_analytics` matrix was measured against a live workspace; drop an entry once the server
+  documents it; a test fails if a hinted tool disappears.
 - **The startup header is a session entry, not stdout.** Fullscreen runs on the terminal's alternate
   screen, where anything printed before the TUI starts is never seen. It is appended only on
   `session_start` reason `startup`/`new`, because entries are session-persisted and a resume would
   otherwise stack a second header.
-- **Three invocation tools are denylisted at wrap time, not at cache write**
-  (`keptTools()` in `src/mcp.ts`). The cache keeps the full server list, so flipping
-  `ORQI_ALL_TOOLS=1` needs no refetch. It saves ~6 KB of the 71 KB of schema in each request, not
-  the 96 KB those tools occupy on disk: `outputSchema` is never forwarded, so cache bytes are not
-  request bytes. Do not quote the 96 KB as a per-request saving again. Denylisted names must never
-  appear in a subagent's tool list; a test guards that.
+- **Three invocation tools are hidden with `toolExposure`** (`invoke_model`, `invoke_agent`,
+  `retrieve_agent_response`: `DENYLISTED_TOOLS`, applied in `orqServerConfig`). It saves ~6 KB of
+  the 71 KB of schema in each request. `ORQI_ALL_TOOLS=1` shows them (by value: `=0` still hides).
+  Denylisted names must never appear in a subagent's tool list; a test guards that.
+- **The one-way gate reads the verb, not the server.** The orq MCP server declares no tool
+  annotations, so `doorOf` in `src/gate.ts` is a static table: `list_`/`get_`/`search_`/`query_`/
+  `find_`/`retrieve_` are benign, `create_`/`update_` two-way (recorded, never stopped),
+  `delete_`/`submit_`/`invoke_` one-way. A verb not in the table is one-way: a new server tool asks
+  before it runs until someone adds it, and a test lists every server tool so that happens on
+  purpose. A classifier per call was rejected: it would sit in front of every read. The system
+  prompt no longer tells the model to ask before a delete; it tells it the dialog will. One-shot has
+  no one to ask, so a one-way call is blocked there with a reason that says to rerun interactively.
+- **The door question rides beside difficulty, and the keyword floor is only its fallback.**
+  `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would delete
+  a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
+  runs when the classifier errors, 403s, times out, or the workspace has no classifier. A response
+  without a door answer has no opinion; the router does not invent one.
+- **Teach lives in the inspector (the side panel), never the transcript.** Cards are not session
+  entries, so `/trajectory` exports only the conversation and a resume shows no lessons. When the
+  panel is hidden (under 140 columns unless `alt+i` forces it, in fullscreen or as the regular-mode
+  overlay) the card and a tool-loop warning fall back to one widget line above the editor, for the
+  same reason. The glossary is static (`src/teach.ts`): no model call and no docs fetch per card,
+  and each concept shows once per session.
+- **The exit summary is written from `session_shutdown`, not from `main.ts`.** `InteractiveMode`
+  ends in `process.exit`, so `main.ts` never regains control. On quit pi leaves the alternate
+  screen, emits `session_shutdown` with reason `quit`, then prints its resume hint, so a stdout
+  write in the handler lands between the two. It never calls `studio()`, which fetches; the thread
+  link is built from what is already known, and falls back to the bare session id.
+- **Gate verdicts and the context split are session-local.** `door`/`gate` on a step come from live
+  `tool_call` events that a resume cannot replay, so the `?` and the exit summary's changes start
+  empty on a resumed session. The context split is measured on session start, after each run and on
+  a model switch, never in a render, where an extension handle may already be stale.
 - **`--version` and `--help` are answered before anything else runs** (`src/main.ts`). `argv[2]` is
   otherwise a prompt, so without those two branches `orqi --version` boots a session, connects to
   the MCP server and bills a model call. `install.sh` calls `--version` to prove the binary it has
@@ -187,6 +222,76 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `optionalDependencies` rather than keeping its own.
 - **The version has one source**: `package.json`, read by `src/branding.ts` and inlined at compile
   time. `release.yml` fails the release when the pushed tag and that version disagree.
+- **Subagents reach the orq tools through the parent's `executeTool`.** pi connects the server in
+  the parent session; a subagent's child session gets proxies (same names, same schemas) that run
+  each call through `ctx.executeTool`, so no second MCP handshake and the parent's hooks apply.
+- **`/tools` is orqi's, not only pi's `/mcp` list.** pi's Tools view (`extensions/mcp/index.js`,
+  `showTools`) is a flat list where enter and escape both go back. `/tools` reads
+  `pi.getAllTools()` and opens a tool on enter: parameters first (`schemaLines`), then the full
+  description, `j` for the raw input schema.
+- **`/skills` mirrors `/tools` for skills.** It reads the loaded skills from `pi.getCommands()`
+  (`source: "skill"`), labels each by origin (`skillOrigin`: orqi, orq plugin, orq plugin (updated),
+  local), filters as you type (name matches rank first, as in `/tools`), and opens one on enter
+  (`readSkill`: description, other frontmatter, path, files beside it). `i` opens the instructions
+  on their own, as `j` opens a tool's raw schema; `u` puts `/skill:<name> ` in the editor.
+- **Slash commands each open their own short MCP call** (`callOrqTool`). pi lets tools call tools, not
+  commands, so `/trace` and `/agents` open a one-call connection, retried once.
+- **Session services are built per session, not once** (`makeServices` in `src/main.ts`). pi marks
+  a session's extension handles stale when `/new`, `/resume` or `/fork` replaces it; with one shared
+  services object every extension kept calling through dead handles, and the footer's first frame
+  after `/new` crashed the process on `pi.getSettings()`. State that must survive a session lives
+  in the factory closures (`orqCommands`), and the harness rebuilds from the branch. Renderers still
+  wrap their work in try/catch: an exception in a render takes the TUI down.
+- **The inspector reaches into pi's fullscreen layout root.** It was the minimap until it grew
+  sections; the code (`minimap.ts`, `minimapView`, `attachMinimap`) keeps the old name. pi has no
+  side-panel API, and an overlay covers the transcript's right edge, where prose wraps. In
+  fullscreen the TUI has a `layoutRoot` (pi's chat viewport); `attachMinimap` in `src/harness.ts`
+  wraps it in an `HStack` with the panel as a fixed 38-column entry, so the transcript reflows
+  beside it. The reach is guarded: without a `layoutRoot` (regular mode, or a pi that renamed it)
+  the panel falls back to a non-capturing overlay. Either way it shows by itself from 140 columns
+  (`MINIMAP_MIN_COLS`); `alt+i` forces it on or off. The trajectory scrolls with the mouse wheel:
+  fullscreen routes mouse events to the component under the pointer (`handleMouse`), and scrolling
+  back to the newest step follows again. The footer factory is where the TUI is handed over, which
+  is why it is attached there. The wrapper is marked with a symbol so the next session or `/reload`
+  unwraps it before wrapping again; without that, each `/reload` nested one more inspector. Ask
+  upstream for a sidebar slot before building more on this.
+- **pi's `/login` → "Sign in with an account" lists `orq.ai (browser)`** (`src/oauth.ts`). pi shows
+  a provider there only if it registers an OAuth flow; this one runs the orq CLI's own device login
+  (`orq auth login`), shows pi's device-code view with the CLI's URL and code, and stores the login
+  session's token (read back through whoami, as everywhere else). Refresh asks whoami again. The
+  credential reader takes that stored token as candidate #0, like a pasted key, and names its
+  workspace from the session (the token IS the session's). A session that was already connected
+  switches to a newly stored `/login` credential on the next message (checked against auth.json,
+  once per stored token), so the header picks up the workspace without a restart. `/mcp login orq`
+  is a different thing: OAuth for the MCP tools only, not the model router.
+- **`/key` exists beside pi's `/login`, and the hints point at it.** pi's `/login` draws the pasted
+  key in clear text (its provider search and its key prompt are pi-tui `Input`s, which have no
+  mask), and a built-in cannot be overridden. `/key` and the first-run welcome use `MaskedInput`
+  (`src/onboarding.ts`): dots and the last four characters, never the key, then the same storage and
+  recovery as `/login orq`.
+- **A fixed header sits above the transcript, inside the same layout wrap as the inspector.** The
+  wrapper is `VStack(header, HStack(pi's root, inspector))`: the header says who and where
+  (workspace, agent, project, routing, connection, thread), the footer what and how much. Regular
+  mode has no layout root, so the header becomes a widget above the editor there.
+- **The terminal title is rewritten, not set.** pi writes `π - <dir>` from a name baked into its own
+  package (`APP_TITLE`), at startup and on every session change, with no setting. `brandTitle`
+  wraps the terminal's `setTitle` once (symbol-marked) and swaps the mark to `orqi`.
+- **A turn recorded at $0 is repriced from the catalogue.** A session that booted on the fallback
+  model (no credential yet) holds a zero-price model object; after the first sign-in the commands
+  extension re-selects the same model from the reloaded catalogue, and the trajectory reprices any
+  zero-cost usage it already recorded.
+- **The inspector toggles on `alt+i`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle, and pi
+  binds no `alt+i`. Focus for ↑↓/enter is raw input intercepted with `onTerminalInput` only while
+  `/panel focus` is on, so the editor never loses the keyboard otherwise.
+- **The ATIF export is `/trajectory`, not `/export trajectory`.** `/export` is a pi built-in (HTML),
+  and pi drops colliding extension commands; the collision test now covers the harness too.
+- **Agents are models, and agent mode empties the prompt and the tool set.** A managed agent is
+  `agent/<key>` on `POST /v3/router/responses`; it carries its own instructions and runs its tools
+  server-side, so `before_agent_start` returns `systemPrompt: ""` and `setActiveTools([])` for it.
+  Switching back to a chat model restores the saved tool list at once (`model_select`), so the
+  panel counts it before the next turn. Agent mode is easy to miss in a transcript that looks the
+  same, so it keeps a widget line above the editor naming the agent and the way back; `/agent off`
+  returns to the chat model it was entered from (else `ORQI_MODEL`), which `model_select` records.
 - **`typecheck` runs `assets` first.** `src/assets.generated.ts` is generated by `build.ts` and
   gitignored, so a fresh clone has no module to check against.
 
@@ -250,7 +355,6 @@ Apple Silicon needs `macos-arm64`, Intel needs `macos-x64`. Distribution beyond 
 Developer ID signature plus notarization.
 
 ## Conventions
-
 - **Skills are vendored, and the vendoring is scripted.** `skills/orq-*` and `skills/evaluatorq`
   come from `orq-ai/assistant-plugins`; `skills/orqi-*` are ours and upstream never sees them.
   Run `bun run vendor` (optionally with a SHA) rather than copying by hand: it replaces the
@@ -266,23 +370,22 @@ Developer ID signature plus notarization.
 - **`last-check` marks a check that completed, not one that started.** A one-shot run exits the
   moment it prints and can kill the update mid-flight; marking earlier pins skills for 24 h on a
   check that never happened, which is how a one-shot-only user never updates.
-- **The baked skills are a floor, not a ceiling.** Once a day `maybeUpdateSkills` asks GitHub
-  whether upstream has moved and, if so, downloads into `~/.orqi/agent/skills-live/current`,
-  which is listed *before* the bundled dir in `additionalSkillPaths`. pi resolves duplicate skill
-  names first-wins, so a fresher `orq-*` supersedes its bundled copy while the bundled `orqi-*`
-  still load. A skill the user installed themselves still wins over both, because pi puts
-  project/user/package skills ahead of `additionalSkillPaths` — but only under
-  `ORQI_LOCAL_SKILLS`, which is what loads them at all; by default the contest is bundled versus
-  live and nothing else. Bundled-loses-to-live is the normal state, not a fault, and pi renders
-  one amber block per collision with `quietStartup` on, so 15 vendored names would mean ~30 lines
-  at every boot: `skillResources` folds exactly those collisions into one warning naming what was
-  superseded, and leaves every other collision — live versus live, or a loser outside `skills/` —
-  alone. Consequences worth knowing: the update lands on the *next* run, because pi scans skills
-  once at boot (`/reload` picks it up early); the check is fire-and-forget after the session is
-  up, so a slow or dead GitHub costs nothing; and every failure path is a silent return, because
-  the worst acceptable outcome is stale skills, never a broken boot. The header shows
-  `skills <sha8>` when live differs from the lock. `ORQI_SKILLS_UPDATE=0` pins and beats
-  `ORQI_REFRESH_SKILLS=1`.
+- **orqi follows the marketplace's `orq` plugin as one unit, and uses exactly one copy of it.** The
+  plugin (orq-ai/assistant-plugins) is skills, slash commands and a version. The binary carries a
+  vendored copy (`skills/orq-*`, `commands/`, pinned in `skills.lock.json` with the commit date and
+  plugin version); once a day `maybeUpdateSkills` installs upstream main into
+  `~/.orqi/agent/skills-live/current/{skills,commands}` only if it is NEWER than that copy, and
+  drops a live copy once the binary has caught up. `pluginResources` then hands pi one copy as
+  individual skill dirs and template files (live if newer, bundled otherwise) plus our `orqi-*`
+  skills. Nothing is offered twice, so pi reports no collision and startup stays quiet. The old
+  design listed live ahead of bundled and folded the collisions into a warning; a live copy 12
+  commits behind the binary then won, silently. Plugin commands skip names in `ORQI_COMMANDS`
+  (orqi's own `/workspace` wins dispatch anyway) and in `DROPPED_COMMANDS` (`/models`, which
+  duplicates pi's `/model` at the cost of a turn), and `normalizeCommand` quotes frontmatter values
+  YAML rejects (Claude Code tolerates `argument-hint: [a|b] [c]`; pi does not). Updates land on the
+  next run or `/reload`; every failure is silent; `ORQI_SKILLS_UPDATE=0` pins and beats
+  `ORQI_REFRESH_SKILLS=1`. The header shows `orq plugin <version> (updated)` while a live copy is in
+  use.
 - **`src/assets.generated.ts` is generated and gitignored.** `build.ts` writes it; never edit or
   commit it.
 - **Handoff notes go in `.context/`, not in this file.** Branch state, machine quirks and next steps

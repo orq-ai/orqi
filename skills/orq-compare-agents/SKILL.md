@@ -7,7 +7,7 @@ description: >
   Use when comparing agents, benchmarking, or wanting side-by-side evaluation.
   Do NOT use when comparing only orq.ai configurations with no external agents
   (use orq-run-experiment instead).
-allowed-tools: Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__search_entities, mcp__orq-workspace__create_dataset, mcp__orq-workspace__create_datapoints, mcp__orq-workspace__create_llm_eval
+allowed-tools: Bash(curl:*), Read, Write, Edit, Grep, Glob, WebFetch, Task, AskUserQuestion, mcp__orq-workspace__search_entities, mcp__orq-workspace__create_dataset, mcp__orq-workspace__create_datapoints, mcp__orq-workspace__create_llm_eval
 ---
 
 # Compare Agents
@@ -28,7 +28,7 @@ Supported comparison modes:
 - **NEVER** compare agents on different models unless isolating the model difference is the explicit goal.
 - **ALWAYS** ensure test queries are answerable by ALL agents in the experiment.
 - **ALWAYS** use the same evaluator(s) for all agents to ensure fair scoring.
-- **ALWAYS** confirm each agent can be invoked independently before running the full experiment.
+- **ALWAYS** confirm each agent can be invoked independently before running the full experiment — for orq.ai agents, verify with the **run key** via REST/SDK (see [run-key preflight](../orq-shared/resources/run-key-preflight.md)), not the MCP.
 
 **Why these constraints:** Biased datasets produce meaningless rankings. Inline datasets bypass validation. Different models confound framework comparisons. Untested agents waste experiment budget on invocation errors.
 
@@ -38,8 +38,8 @@ Supported comparison modes:
 - `orq-build-evaluator` — design the LLM-as-a-judge evaluator
 - `orq-run-experiment` — run orq.ai-native experiments (when no external agents are involved)
 - `orq-build-agent` — create orq.ai agents to include in comparisons
-- `orq-analyze-trace-failures` — diagnose agent failures from trace data
-- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `--json` output. See its "MCP tools or the CLI?" table before choosing.
+- `orq-analyze-traces` — diagnose agent failures from trace data
+- **orq-cli** — the same platform operations from a shell, for anything that must run again without an agent present (CI, cron, scripts, bulk): auth via `ORQ_API_KEY`, `-o json` output. See its "MCP tools or the CLI?" table before choosing.
 
 ## Workflow Checklist
 
@@ -59,7 +59,7 @@ Agent Comparison Progress:
 - All agents independently invocable and verified before the full experiment
 - Experiment completed and results visible in the orq.ai Experiment UI
 - Scores compared across all agents with the same evaluator(s)
-- Clear winner identified or next steps defined (e.g., deeper investigation with `orq-analyze-trace-failures`)
+- Clear winner identified or next steps defined (e.g., deeper investigation with `orq-analyze-traces`)
 
 ## When to use
 
@@ -73,7 +73,7 @@ Agent Comparison Progress:
 - Just need a dataset? → `orq-generate-synthetic-dataset`
 - Just need an evaluator? → `orq-build-evaluator`
 - Comparing orq.ai configurations only (no external agents)? → `orq-run-experiment`
-- Need to identify failure modes first? → `orq-analyze-trace-failures`
+- Need to identify failure modes first? → `orq-analyze-traces`
 
 ## Resources
 
@@ -98,7 +98,7 @@ Agent Comparison Progress:
 
 | Tool | Purpose |
 |------|---------|
-| `search_entities` | Find orq.ai agent keys (use `type: "agent"`) |
+| `search_entities` | **Browse** orq.ai agent keys (use `type: "agent"`) — verify with the run key before proceeding (see [run-key preflight](../orq-shared/resources/run-key-preflight.md)) |
 | `create_dataset` | Create a dataset |
 | `create_datapoints` | Populate dataset with test cases |
 | `create_llm_eval` | Create an LLM-as-a-judge evaluator |
@@ -122,7 +122,8 @@ Agent Comparison Progress:
    - How to invoke it (agent key, import path, HTTP endpoint)
 
 2. **For orq.ai agents**, get the agent key:
-   - Use `search_entities` MCP tool with `type: "agent"` to find available agents
+   - Use `search_entities` MCP tool with `type: "agent"` to **browse** available agents
+   - Then **verify the key with the run key** via REST or SDK (see [run-key preflight](../orq-shared/resources/run-key-preflight.md)). On 404, ask the user — the key may be scoped to another project.
 
 3. **For external agents**, confirm they can be called from Python/TypeScript:
    - Verify import paths, API endpoints, or local availability
@@ -154,7 +155,7 @@ Agent Comparison Progress:
    - Import evaluatorq, job, DataPoint, EvaluationResult
    - Define one job per agent
    - Define an evaluator scorer that invokes the orq.ai LLM-as-a-judge by ID
-   - Wire jobs + data + evaluators into the `evaluatorq()` call
+   - Wire jobs + data + evaluators into a **single** `evaluatorq()` call — all agents go in one `jobs` list, since every job runs against every data point. Never loop `evaluatorq()` once per agent: that produces N unrelated experiments instead of one comparison table.
 
 9. **Common configurations:**
 
@@ -191,7 +192,7 @@ Agent Comparison Progress:
 
 13. **If issues arise**, check [resources/gotchas.md](resources/gotchas.md) for common pitfalls.
 
-14. **Iterate:** If one agent consistently underperforms, investigate with `orq-analyze-trace-failures`, improve with `orq-optimize-prompt`, then re-run the comparison.
+14. **Iterate:** If one agent consistently underperforms, investigate with `orq-analyze-traces`, improve with `orq-improve-agent`, then re-run the comparison.
 
 ---
 
