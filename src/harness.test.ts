@@ -16,6 +16,7 @@ import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
+import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
 
 /** Visible text: truncation adds ANSI resets around its ellipsis. */
 const bare = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -566,4 +567,38 @@ test("the context split: prompt and skills index apart, active schemas, the rest
 	// Agent mode sends no prompt and no tools: nothing fixed, everything is messages.
 	const agent = contextSplit({ systemPrompt: "", tools, active: [], used: 500, window: 1, steps: [], turns: 0 });
 	expect([agent.prompt, agent.hints, agent.tools, agent.skills, agent.messages]).toEqual([0, 0, 0, 0, 500]);
+});
+
+/** The orq server's tools on 2026-10-13 (46): the list a new verb or concept must be checked against. */
+export const ORQ_TOOLS = [
+	"create_agent", "create_datapoints", "create_dataset", "create_deployment", "create_experiment", "create_llm_eval", "create_python_eval", "create_skill",
+	"delete_datapoints", "delete_dataset", "delete_entity", "delete_skill", "find_log_patterns", "get_agent", "get_analytics_overview", "get_deployment",
+	"get_experiment_run", "get_llm_eval", "get_log", "get_log_context", "get_python_eval", "get_skill", "get_span", "invoke_agent", "invoke_model",
+	"list_datapoints", "list_experiment_runs", "list_log_facet_values", "list_log_facets", "list_models", "list_skills", "list_spans", "list_trace_logs",
+	"list_traces", "query_analytics", "query_log_aggregates", "retrieve_agent_response", "search_directories", "search_docs", "search_entities",
+	"submit_feedback", "update_agent", "update_datapoint", "update_llm_eval", "update_python_eval", "update_skill",
+];
+
+test("teach: every orq tool has a concept, and a card is shown once per session", () => {
+	for (const tool of ORQ_TOOLS) expect(GLOSSARY[conceptOf(`mcp__orq__${tool}`) ?? "missing"], tool).toBeDefined();
+	expect(conceptOf("mcp__orq__get_span")).toBe("trace");
+	expect(conceptOf("mcp__orq__list_datapoints")).toBe("dataset");
+	expect(conceptOf("mcp__orq__delete_dataset")).toBe("one-way door");
+	expect(conceptOf("mcp__orq__submit_feedback")).toBe("feedback");
+	expect(conceptOf("read")).toBeUndefined();
+	const tool = (id: number, name: string): Step => ({ id, turn: 1, role: "tool", label: name, toolName: `mcp__orq__${name}`, detail: "", status: "ok", ts: 0 });
+	const run = [{ id: 1, turn: 1, role: "user", label: "user", detail: "", status: "ok", ts: 0 } as Step, tool(2, "list_traces"), tool(3, "get_span"), tool(4, "get_agent")];
+	const shown = new Set<string>();
+	const first = pickCard(run, shown)!;
+	expect([first.key, first.step.id, first.used]).toEqual(["trace", 2, ["list_traces", "get_span"]]);
+	expect(pickCard(run, shown)?.key).toBe("agent"); // trace was shown: the next concept
+	expect(pickCard(run, shown)).toBeUndefined();
+	expect(wrap("one two three four", 9)).toEqual(["one two", "three", "four"]);
+	const lines = cardLines(first, 34);
+	expect(lines[0]).toBe("trace");
+	expect(lines.every((line) => line.length <= 34)).toBe(true);
+	expect(lines.slice(-2)).toEqual(["used  list_traces · get_span", "docs  observability/traces"]);
+	expect(cardLine(first)).toStartWith("▸ teach  trace: One request through your agent or deployment, kept as a tree of spans:");
+	expect(cardLine(first)).toEndWith("used list_traces · get_span · https://docs.orq.ai/docs/observability/traces");
+	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(" orqi  workspace acme · routing orq/auto · teach · thread 01a1…6b7b");
 });

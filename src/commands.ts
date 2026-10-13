@@ -28,7 +28,7 @@ export type ReconnectFn = (candidates: Credential[]) => Promise<Reconnected>;
 export const ORQI_COMMANDS = [
 	"key", "reconnect", "whoami", "workspace", "doctor", "update",
 	"panel", "trajectory", "open", "trace", "learn", "btw", "cost", "whatsnew", "feedback", "agent", "agents", "route",
-	"tools", "skills",
+	"tools", "skills", "teach",
 ] as const;
 
 /** Rejection rows the extension writes itself, as opposed to the server's verdicts. */

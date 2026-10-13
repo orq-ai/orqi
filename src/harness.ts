@@ -17,7 +17,7 @@ import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { apiBaseUrl, runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
 import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
-import { contextLines, MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, signalLines, SPINNER, type ContextSplit } from "./minimap.ts";
+import { contextLines, sectionLines, MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, signalLines, SPINNER, type ContextSplit } from "./minimap.ts";
 import { talkable, type ModelInfo } from "./model.ts";
 import { bareName, hintsSection, schemaLines, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -26,6 +26,7 @@ import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSumma
 import { shortTool, signals, toAtif, Trajectory, type Step, type StepUsage } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
+import { cardLines, pickCard, type Concept } from "./teach.ts";
 import { DIFFICULTY_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 
@@ -232,6 +233,12 @@ export function orqHarness(deps: HarnessDeps) {
 		let statusOf: (key: string) => string | undefined = () => undefined;
 		let lastFooter = "";
 		let split: ContextSplit | undefined;
+		// ── teach state: the card lives in the panel, never the transcript ──
+		let teachOn = false;
+		let card: { concept: Concept; used: string[]; step: number } | undefined;
+		const shownConcepts = new Set<string>();
+		/** The last step id a previous run reached: steering advances `turn` more than once per run. */
+		let runFrom = 0;
 		/** Read on session start, after each run and on a model switch: never in a render, where a handle may be stale. */
 		const measure = (ctx: ExtensionContext) => {
 			try {
@@ -384,20 +391,21 @@ export function orqHarness(deps: HarnessDeps) {
 					error: (text: string) => theme.fg("error", text),
 				};
 				const found = signals(trajectory.steps, trajectory.turn);
-				const sections = [...(split ? [contextLines(split, inner)] : []), signalLines(found, inner)];
+				const teach = teachOn ? [sectionLines("teach", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")] : [];
+				const sections = [...teach, ...(split ? [contextLines(split, inner)] : []), signalLines(found, inner)];
 				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
 				const height = Math.max(3, (process.stdout.rows ?? 30) - 5 - below);
-				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
+				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, teachOn ? card?.step : undefined);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
 				const paintSection = (lines: string[]) => [
 					blank,
 					side(theme.fg("dim", lines[0]!)),
-					...lines.slice(1).map((line) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : "muted", line))),
+					...lines.slice(1).map((line, i) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : lines === teach[0] && i === 0 && card ? "accent" : "muted", line))),
 				];
 				const title = " minimap ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
-				const hint = minimapFocused ? "↑↓ move · enter peek · esc" : "alt+m hide · /panel focus";
+				const hint = minimapFocused ? "↑↓ move · enter peek · esc" : `alt+m · /panel focus · /teach ${teachOn ? "off" : "on"}`;
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					...rows.map(side),
@@ -424,6 +432,7 @@ export function orqHarness(deps: HarnessDeps) {
 				agent,
 				routing: model?.provider === "orq" && model.id === "auto" ? "orq/auto" : undefined,
 				connected: !/not connected/.test(status),
+				teach: teachOn,
 				thread: thread ? shortId(thread) : undefined,
 			};
 		};
@@ -533,6 +542,9 @@ export function orqHarness(deps: HarnessDeps) {
 			trajectory.fromMessages(branchMessages(ctx));
 			traces.length = 0;
 			measure(ctx);
+			card = undefined;
+			shownConcepts.clear();
+			runFrom = trajectory.steps.at(-1)?.id ?? 0;
 			if (ctx.mode !== "tui") return;
 			installFooter(ctx);
 			ctx.ui.setWorkingIndicator({ frames: SPINNER.map((f) => ctx.ui.theme.fg("accent", f)), intervalMs: 80 });
@@ -562,6 +574,12 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("agent_end", (_event, ctx) => {
 			ctx.ui.setWorkingMessage();
 			measure(ctx);
+			const run = trajectory.steps.filter((step) => step.id > runFrom);
+			runFrom = trajectory.steps.at(-1)?.id ?? runFrom;
+			if (teachOn && ctx.mode === "tui") {
+				const picked = pickCard(run, shownConcepts);
+				if (picked) card = { concept: picked.concept, used: picked.used, step: picked.step.id };
+			}
 			render();
 		});
 		pi.on("model_select", (_event, ctx) => {
@@ -667,6 +685,20 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		// ── commands ──────────────────────────────────────────────────────────
+		pi.registerCommand("teach", {
+			description: "/teach on|off: after each answer, a card in the side panel about a concept the run touched",
+			handler: async (args, ctx) => {
+				const arg = args.trim();
+				if (arg && arg !== "on" && arg !== "off") {
+					ctx.ui.notify("usage: /teach on|off", "warning");
+					return;
+				}
+				teachOn = arg ? arg === "on" : !teachOn;
+				ctx.ui.notify(teachOn ? "Teach mode on: a card follows each answer, in the side panel." : "Teach mode off.");
+				render();
+			},
+		});
+
 		pi.registerShortcut("alt+m", { description: "toggle the orqi minimap", handler: () => toggleMinimap() });
 
 		pi.registerCommand("panel", {
