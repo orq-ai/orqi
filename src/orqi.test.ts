@@ -1697,3 +1697,13 @@ test("every bundled plugin command loads in pi with no diagnostic", async () => 
 	expect(loaded.diagnostics).toEqual([]);
 	expect(loaded.prompts.map((p: { name: string }) => p.name).sort()).toEqual(SKILLS_LOCK.commands);
 });
+
+test("main.ts builds orqCommands once, so its connection state outlives /new, /resume and /fork", () => {
+	// makeServices runs per session; a factory built inside it starts from the
+	// boot's rejections again, and a /reconnect that worked is forgotten.
+	const source = readFileSync(join(import.meta.dir, "main.ts"), "utf8");
+	const body = source.slice(source.indexOf("const makeServices"), source.indexOf("const services = await makeServices()"));
+	expect(body.length).toBeGreaterThan(0);
+	expect(body).not.toContain("orqCommands(");
+	expect(source).toContain("const commands = orqCommands(");
+});

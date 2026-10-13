@@ -193,12 +193,45 @@ const header: HeaderInfo = {
 // The orq marketplace plugin (skills + commands), one copy: live when newer than the bundled one.
 const plugin = pluginResources(pkgDir, AGENT_DIR, ORQI_COMMANDS);
 
+// Built once, outside makeServices: the factory it returns runs per session,
+// but the connection state (rejections, tokens already tried) lives in its
+// closure and has to survive /new, /resume and /fork. Built per session, a
+// /reconnect that worked was forgotten on the next /new and the boot's
+// rejection warning came back.
+const commands = orqCommands(
+	async (next: Credential[]) => {
+		const result: Reconnected = { credential: await pickCredential(next), added: [] };
+		// The model runtime and pi's MCP both read $ORQ_API_KEY: move both, then reconnect the server.
+		process.env.ORQ_API_KEY = result.credential.token;
+		mcp.refresh();
+		// The boot had nothing that worked, so the models are the fallback:
+		// reload them now that the server takes a credential.
+		if (models.note && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
+			routing.refresh(models.catalogue);
+			result.modelsReloaded = true;
+		}
+		header.workspace = result.credential.workspace;
+		header.project = await projectForCredential(result.credential.token);
+		header.status = statusLine("orq MCP", result.note);
+		header.signedOut = false;
+		return result;
+	},
+	mcp.toolNames,
+	header,
+	AGENT_DIR,
+	{
+		rejections: candidates.length === 0 ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : bootRejections,
+		candidates,
+		welcome,
+	},
+);
+
 // Services are built per session, not once: pi marks a session's extension
 // handles stale when the session is replaced (/new, /resume, /fork), and a
 // shared services object would leave every extension calling through dead
 // handles from then on (the footer's first frame after /new crashed on it).
-// The factories keep their own state across sessions where it matters
-// (the connection state in orqCommands); the harness rebuilds from the branch.
+// State that must outlive a session sits in the factories built above
+// (orqCommands); the harness rebuilds from the branch.
 const makeServices = async () => {
 	const created = await createAgentSessionServices({
 		cwd: process.cwd(),
@@ -221,33 +254,7 @@ const makeServices = async () => {
 				// pi's own MCP client (built in for the CLI, opt-in for SDK sessions), and the orq server on it.
 				createMcpExtension(),
 				mcp.extension,
-				orqCommands(
-					async (next: Credential[]) => {
-						const result: Reconnected = { credential: await pickCredential(next), added: [] };
-						// The model runtime and pi's MCP both read $ORQ_API_KEY: move both, then reconnect the server.
-						process.env.ORQ_API_KEY = result.credential.token;
-						mcp.refresh();
-					// The boot had nothing that worked, so the models are the fallback:
-					// reload them now that the server takes a credential.
-					if (models.note && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
-						routing.refresh(models.catalogue);
-						result.modelsReloaded = true;
-					}
-						header.workspace = result.credential.workspace;
-						header.project = await projectForCredential(result.credential.token);
-						header.status = statusLine("orq MCP", result.note);
-						header.signedOut = false;
-						return result;
-					},
-					mcp.toolNames,
-					header,
-					AGENT_DIR,
-					{
-						rejections: candidates.length === 0 ? [{ source: NO_CREDENTIAL, reason: failure ?? "no orq login, profile or ORQ_API_KEY found" }] : bootRejections,
-						candidates,
-						welcome,
-					},
-				),
+				commands,
 				orqHarness({
 					agentDir: AGENT_DIR,
 					catalogue: () => models.catalogue,
