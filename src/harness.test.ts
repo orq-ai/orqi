@@ -526,7 +526,7 @@ test("signals: a loop is the same tool with the same arguments three times in th
 
 test("panel sections: a rule, an indented body, one calm line when empty", () => {
 	expect(sectionLines("teach", [], 36)).toEqual([" ─ teach ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
-	const split: ContextSplit = { prompt: 4_440, hints: 680, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: [], skills: 24, hinted: 1, turns: 2, results: 2 } };
+	const split: ContextSplit = { prompt: 4_440, hints: 680, project: 0, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: [], skills: 24, hinted: 1, turns: 2, results: 2 } };
 	expect(contextLines(split, 36)).toEqual([
 		" ─ context ".padEnd(36, "─"),
 		"  prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k",
@@ -551,7 +551,8 @@ test("minimap rows mark a call waiting on the gate and the step a teach card is 
 });
 
 test("the context split: prompt and skills index apart, active schemas, the rest is messages", () => {
-	const prompt = `You are orqi.\n${hintsSection()}\n\nThe following skills provide specialized instructions for specific tasks.\n<available_skills>\n  <skill>a</skill>\n  <skill>b</skill>\n</available_skills>`;
+	// pi's layout: orqi's prompt, then <project_context> and <skills> sections.
+	const prompt = `You are orqi.\n${hintsSection()}\n<project_context>\n${"p".repeat(800)}\n</project_context>\n<skills>\nThe following skills provide specialized instructions.\n<available_skills>\n  <skill>a</skill>\n  <skill>b</skill>\n</available_skills>\n</skills>\n<cwd>\n/x\n</cwd>`;
 	const tools = [
 		{ name: "mcp__orq__list_traces", description: "x".repeat(400), parameters: {} },
 		{ name: "mcp__orq__invoke_model", description: "y".repeat(400), parameters: {}, exposure: "hidden" },
@@ -563,11 +564,13 @@ test("the context split: prompt and skills index apart, active schemas, the rest
 	expect(split.tools).toBe(Math.ceil(402 / 4) + Math.ceil(42 / 4)); // description + "{}"
 	expect(split.hidden).toBe(Math.ceil(402 / 4));
 	expect(split.counts).toMatchObject({ orq: 1, builtin: 1, hidden: ["invoke_model"], skills: 2, hinted: 1 });
-	expect(split.prompt + split.hints + split.tools + split.skills + split.messages).toBe(10_000);
+	expect(split.project).toBe(Math.ceil(("<project_context>\n".length + 800 + "\n</project_context>".length) / 4));
+	expect(split.prompt).toBeLessThan(Math.ceil(`You are orqi.\n\n\n<cwd>\n/x\n</cwd>`.length / 4) + 2);
+	expect(split.prompt + split.hints + split.project + split.tools + split.skills + split.messages).toBe(10_000);
 	expect(split.cache).toBe(0.9);
 	// Agent mode sends no prompt and no tools: nothing fixed, everything is messages.
 	const agent = contextSplit({ systemPrompt: "", tools, active: [], used: 500, window: 1, steps: [], turns: 0 });
-	expect([agent.prompt, agent.hints, agent.tools, agent.skills, agent.messages]).toEqual([0, 0, 0, 0, 500]);
+	expect([agent.prompt, agent.hints, agent.project, agent.tools, agent.skills, agent.messages]).toEqual([0, 0, 0, 0, 0, 500]);
 });
 
 /** The orq server's tools on 2026-10-13 (46): the list a new verb or concept must be checked against. */
@@ -605,7 +608,7 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 });
 
 test("/context: a row per part with tokens, share and cache, one bar, then the levers", () => {
-	const split: ContextSplit = { prompt: 4_440, hints: 680, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: ["invoke_model", "invoke_agent", "retrieve_agent_response"], skills: 24, hinted: 1, turns: 2, results: 2 } };
+	const split: ContextSplit = { prompt: 4_440, hints: 680, project: 0, tools: 17_810, hidden: 1_540, skills: 1_930, messages: 2_410, window: 1_050_000, cache: 0.94, counts: { orq: 44, builtin: 4, hidden: ["invoke_model", "invoke_agent", "retrieve_agent_response"], skills: 24, hinted: 1, turns: 2, results: 2 } };
 	const rows = contextRows(split);
 	expect(rows[0]).toBe("what the model reads on every turn                    tokens  share cache");
 	expect(rows[1]).toBe("system prompt   orqi-system-prompt.txt                 4,440    16%     ✓");
@@ -619,6 +622,9 @@ test("/context: a row per part with tokens, share and cache, one bar, then the l
 	expect(rows[9]).toStartWith("prompt ───");
 	expect(rows).toContain("· ORQI_ALL_TOOLS=1  show the 3 hidden tools                       → +1.5k");
 	expect(rows.at(-1)).toBe("· cache hit 94%     the prefix is cached; routing keeps it (/route explain)");
+	const withProject = contextRows({ ...split, project: 3_000 }).find((row) => row.startsWith("  project files"))!;
+	expect(withProject).toEndWith("3,000    10%     ✓");
+	expect(withProject.length).toBe(rows[0]!.length);
 	// Nothing hidden, nothing measured from the cache: those levers are not offered.
 	const bare = contextRows({ ...split, cache: undefined, hidden: 0, counts: { ...split.counts, hidden: [] } });
 	expect(bare.some((row) => row.includes("ORQI_ALL_TOOLS") || row.includes("hidden:") || row.includes("cache hit"))).toBe(false);

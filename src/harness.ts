@@ -167,14 +167,19 @@ export function topModel(catalogue: ModelInfo[]): ModelInfo | undefined {
 		.sort((a, b) => (b.intelligence ?? 0) - (a.intelligence ?? 0) || (b.cost?.output ?? 0) - (a.cost?.output ?? 0))[0];
 }
 
-/** Where pi's skills index starts in the system prompt (`formatSkillsForPrompt`). */
-const SKILLS_MARK = "\n\nThe following skills provide specialized instructions";
+/** A `<name>…</name>` section of pi's system prompt, or "". */
+const section = (prompt: string, name: string) => {
+	const start = prompt.indexOf(`<${name}>`);
+	const end = prompt.indexOf(`</${name}>`, start);
+	return start >= 0 && end >= 0 ? prompt.slice(start, end + name.length + 3) : "";
+};
 
 /**
- * Where the context goes, from what pi will send: the system prompt (split at
- * the skills index), the active tools' schemas, and whatever the last request
- * counted beyond those, which is the messages. Characters over four: an
- * estimate, which is all the panel claims.
+ * Where the context goes, from what pi will send: the system prompt (with
+ * the skills index and the project's context files taken out), the active
+ * tools' schemas, and whatever the last request counted beyond those, which
+ * is the messages. Characters over four: an estimate, which is all the panel
+ * claims.
  */
 export function contextSplit(input: {
 	systemPrompt: string;
@@ -187,8 +192,9 @@ export function contextSplit(input: {
 }): ContextSplit {
 	const tok = (text: string) => Math.ceil(text.length / 4);
 	const schema = (tool: (typeof input.tools)[number]) => tok(`${tool.description ?? ""}${JSON.stringify(tool.parameters ?? {})}`);
-	const at = input.systemPrompt.indexOf(SKILLS_MARK);
-	const base = at >= 0 ? input.systemPrompt.slice(0, at) : input.systemPrompt;
+	const skills = section(input.systemPrompt, "skills");
+	const project = section(input.systemPrompt, "project_context");
+	const base = input.systemPrompt.replace(skills, "").replace(project, "");
 	const hinted = base && base.includes(hintsSection()) ? hintsSection() : "";
 	const active = new Set(input.active);
 	const live = input.tools.filter((tool) => active.has(tool.name) && tool.exposure !== "hidden");
@@ -196,21 +202,22 @@ export function contextSplit(input: {
 	const fixed = {
 		prompt: tok(base) - tok(hinted),
 		hints: tok(hinted),
+		project: tok(project),
 		tools: live.reduce((n, tool) => n + schema(tool), 0),
-		skills: at >= 0 ? tok(input.systemPrompt.slice(at)) : 0,
+		skills: tok(skills),
 	};
 	const last = [...input.steps].reverse().find((step) => step.role === "assistant" && step.usage && step.usage.input + step.usage.cacheRead > 0);
 	return {
 		...fixed,
 		hidden: hidden.reduce((n, tool) => n + schema(tool), 0),
-		messages: Math.max(0, input.used - fixed.prompt - fixed.hints - fixed.tools - fixed.skills),
+		messages: Math.max(0, input.used - fixed.prompt - fixed.hints - fixed.project - fixed.tools - fixed.skills),
 		window: input.window,
 		...(last?.usage ? { cache: last.usage.cacheRead / (last.usage.input + last.usage.cacheRead) } : {}),
 		counts: {
 			orq: live.filter((tool) => tool.name.startsWith(TOOL_PREFIX)).length,
 			builtin: live.filter((tool) => !tool.name.startsWith(TOOL_PREFIX)).length,
 			hidden: hidden.map((tool) => bareName(tool.name)),
-			skills: at >= 0 ? (input.systemPrompt.slice(at).match(/<skill>/g) ?? []).length : 0,
+			skills: (skills.match(/<skill>/g) ?? []).length,
 			hinted: hinted ? Object.keys(TOOL_HINTS).length : 0,
 			turns: input.turns,
 			results: input.steps.filter((step) => step.role === "tool" || step.role === "subagent").length,
@@ -230,7 +237,7 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 	const c = split.counts;
 	const row = (name: string, what: string, n: number, cached: boolean) => `${name.padEnd(16)}${what.padEnd(36)}${num(n).padStart(8)}${share(n).padStart(7)}${(cached ? "✓" : "✗").padStart(6)}`;
 	const parts = [
-		{ label: "prompt", n: split.prompt + split.hints, cached: true },
+		{ label: "prompt", n: split.prompt + split.hints + split.project, cached: true },
 		{ label: "tools", n: split.tools, cached: true },
 		{ label: "skills", n: split.skills, cached: true },
 		{ label: "msgs", n: split.messages, cached: false },
@@ -245,6 +252,7 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 		`${"what the model reads on every turn".padEnd(52)}${"tokens".padStart(8)}${"share".padStart(7)}${"cache".padStart(6)}`,
 		row("system prompt", "orqi-system-prompt.txt", split.prompt, true),
 		...(split.hints ? [row("  tool hints", `TOOL_HINTS, ${c.hinted} tool${c.hinted === 1 ? "" : "s"}`, split.hints, true)] : []),
+		...(split.project ? [row("  project files", "AGENTS.md, CLAUDE.md in the cwd", split.project, true)] : []),
 		row("tool schemas", `${c.orq} orq tools · ${c.builtin} built-in`, split.tools, true),
 		...(c.hidden.length ? [`  hidden: ${c.hidden.join(", ")}  saves ${num(split.hidden)}`] : []),
 		row("skills index", `${c.skills} skills, name + description`, split.skills, true),
@@ -257,6 +265,7 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 		`· /agent <key>      agent mode sends no prompt and no tools       → ~${tokens(split.messages)}`,
 		...(c.hidden.length ? [`· ORQI_ALL_TOOLS=1  show the ${c.hidden.length} hidden tools                       → +${tokens(split.hidden)}`] : []),
 		"· /compact          summarise the messages into one",
+		...(split.project ? [`· another directory  the project files ride along from the cwd          → -${tokens(split.project)}`] : []),
 		...(split.cache !== undefined ? [`· cache hit ${Math.round(split.cache * 100)}%`.padEnd(20) + "the prefix is cached; routing keeps it (/route explain)"] : []),
 	];
 }

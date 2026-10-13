@@ -72,12 +72,17 @@ export function minimapRow(step: Step, width: number, current: boolean, frame = 
 	return fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted)));
 }
 
+const fit = (text: string, width: number) => {
+	const cut = truncateToWidth(text, width, "…");
+	return cut + " ".repeat(Math.max(0, width - visibleWidth(cut)));
+};
+
 /**
  * The rows that fit `height`, pinned to the newest step unless `selected`
  * scrolls further back. Returns rows plus which step index is current.
  */
 export function minimapRows(steps: Step[], width: number, height: number, selected?: number, frame = 0, paint: RowPaint = plainRows, marked?: number): string[] {
-	if (steps.length === 0) return [truncateToWidth(paint.dim(" no steps yet"), width).padEnd(width)];
+	if (steps.length === 0) return [paint.dim(fit(" no steps yet", width))];
 	const current = selected ?? steps.length - 1;
 	const end = Math.max(Math.min(steps.length, current + 1), Math.min(steps.length, height));
 	const start = Math.max(0, Math.min(current, end - height));
@@ -88,11 +93,6 @@ export function minimapRows(steps: Step[], width: number, height: number, select
 export function minimapSummary(steps: Step[], turn: number, cost: number, warnings = 0): string {
 	return `${steps.length} steps · turn ${turn} · ${dollars(cost)}${warnings ? ` · ⚠ ${warnings}` : ""}`;
 }
-
-const fit = (text: string, width: number) => {
-	const cut = truncateToWidth(text, width, "…");
-	return cut + " ".repeat(Math.max(0, width - visibleWidth(cut)));
-};
 
 /** A panel section under the minimap: a ` ─ title ───` rule, then the body indented. */
 export function sectionLines(title: string, body: string[], width: number, empty = "nothing yet"): string[] {
@@ -105,6 +105,8 @@ export interface ContextSplit {
 	/** orqi's system prompt, the tool hints taken out. */
 	prompt: number;
 	hints: number;
+	/** The project's context files (AGENTS.md, CLAUDE.md) pi adds from the working directory. */
+	project: number;
 	/** Schemas of the active tools; `hidden` is what the hidden ones would add. */
 	tools: number;
 	hidden: number;
@@ -119,7 +121,7 @@ export interface ContextSplit {
 /** `5.1k`, one decimal up to a million: the section is narrow and 17.8k reads better than 18k. */
 const k = (n: number) => (n < 1000 ? `${n}` : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : tokens(n));
 
-export const contextUsed = (split: ContextSplit) => split.prompt + split.hints + split.tools + split.skills + split.messages;
+export const contextUsed = (split: ContextSplit) => split.prompt + split.hints + split.project + split.tools + split.skills + split.messages;
 
 /**
  *   prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k
@@ -129,7 +131,7 @@ export const contextUsed = (split: ContextSplit) => split.prompt + split.hints +
 export function contextLines(split: ContextSplit, width: number): string[] {
 	const used = contextUsed(split);
 	const bar = (n: number) => contextBar(used ? n / used : 0);
-	const prompt = split.prompt + split.hints;
+	const prompt = split.prompt + split.hints + split.project;
 	return sectionLines(
 		"context",
 		[
