@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { credentialCandidates, LOGIN_HINT, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT, loginKey, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
@@ -21,28 +21,45 @@ import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WEL
  */
 export type ReconnectFn = (candidates: Credential[]) => Promise<Reconnected>;
 
+/**
+ * Every slash command orqi registers (here and in src/harness.ts). The orq
+ * plugin's own commands skip these names, and a test keeps the list honest.
+ */
+export const ORQI_COMMANDS = [
+	"key", "reconnect", "whoami", "workspace", "doctor", "update",
+	"panel", "trajectory", "open", "trace", "learn", "btw", "cost", "whatsnew", "agent", "agents", "route",
+	"tools", "skills", "teach", "context",
+] as const;
+
 /** Rejection rows the extension writes itself, as opposed to the server's verdicts. */
 export const NO_CREDENTIAL = "no credential";
 export const WORKSPACE_SWITCH = "workspace switch";
+const STALL = "orq did not answer:";
+
+/** The way out, one line: what the pinned warning ends with. */
+export const LOGIN_CTA = "→ /login to sign in again, or /key to paste an API key";
 
 /**
  * The warning pinned above the editor while the connection is not what the
- * user asked for: what happened, per candidate, and the way out. The headline
- * says what the server actually did, so "rejected" is never claimed for keys
- * it was never sent.
+ * user asked for: two lines, what happened and the way out. The headline says
+ * what the server actually did, so "rejected" is never claimed for keys it was
+ * never sent, and the server's reason rides along ("expired" and "not valid
+ * for this workspace" need different fixes) without one line per candidate.
  */
-export function authLines(rejections: Rejection[], hint = LOGIN_HINT): string[] {
+export function authLines(rejections: Rejection[], cta = LOGIN_CTA): string[] {
 	const headline = rejections.some((r) => r.source === WORKSPACE_SWITCH)
-		? "orq is still on the previous workspace: the switch failed."
+		? `orq is still on ${rejections.find((r) => r.source === WORKSPACE_SWITCH)?.workspace ?? "the previous workspace"}: the switch failed`
 		: rejections.some((r) => r.source === NO_CREDENTIAL)
-			? "orq is not connected: no credential found."
-			: "orq is not connected: every credential was rejected.";
-	return [
-		headline,
-		...rejections.map((r) => `  ${r.source}${r.workspace ? ` (${r.workspace})` : ""}: ${r.reason}`),
-		hint,
-	];
+			? "orq is not connected: no credential found"
+			: "orq is not connected: every credential was rejected";
+	const verdicts = rejections.filter((r) => r.source !== WORKSPACE_SWITCH && r.source !== NO_CREDENTIAL);
+	const reason = verdicts[0]?.reason.replace(/\s+/g, " ").trim();
+	const why = reason ? ` (${verdicts.map((r) => r.source).join(", ")}: ${reason.length > 70 ? `${reason.slice(0, 69)}…` : reason})` : "";
+	return [`⚠ ${headline}${why}`, cta];
 }
+
+/** The pinned line when the tools connected but the stored /login key, which the model uses, was refused. */
+export const LOGIN_REFUSED = ["⚠ the key stored with /login or /key was refused, so the model cannot answer", "→ /key to replace it, or /login to sign in with the browser"];
 
 /**
  * The one candidate a workspace switch re-points at. The session token is
@@ -64,22 +81,6 @@ function report(ctx: { ui: { notify(message: string, type?: "info" | "warning" |
 	return result.ok;
 }
 
-/** Group tool names by the entity they act on: list_traces/get_span -> traces. */
-export function groupTools(names: string[]): string {
-	const groups = new Map<string, string[]>();
-	for (const name of [...names].sort()) {
-		const bare = name.replace(/^orq_/, "");
-		const subject = bare.replace(/^(create|get|list|update|delete|search|query|find|invoke|retrieve)_/, "");
-		// Everything trace-shaped (spans, logs, log facets) reads as one group.
-		const key = subject.replace(/s$/, "").replace(/^(trace|span|log).*/, "trace");
-		groups.set(key, [...(groups.get(key) ?? []), name]);
-	}
-	return [...groups]
-		.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-		.map(([key, tools]) => `${key}s: ${tools.join(", ")}`)
-		.join("\n");
-}
-
 const HEADER_ENTRY = "orqi-header";
 const WORKSPACE_STATUS = "orq-workspace";
 const AUTH_WIDGET = "orq-auth";
@@ -99,11 +100,14 @@ export interface Boot {
 	readCandidates?: typeof credentialCandidates;
 	/** No credential at all: open the welcome instead of exiting. */
 	welcome?: boolean;
+	/** The tools connected, but the stored /login key (which the model prefers) was refused. */
+	loginRefused?: boolean;
 }
 
 export function orqCommands(
 	reconnect: ReconnectFn,
-	toolNames: string[],
+	/** The orq tools pi's MCP has registered, by bare name: read live, they arrive when the server connects. */
+	toolNames: () => string[],
 	header: HeaderInfo,
 	agentDir = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"),
 	boot: Boot = {},
@@ -115,17 +119,22 @@ export function orqCommands(
 	// re-knock on the server with the same keys. Seeded with the boot's own set:
 	// unseeded, the first message after a rejected boot always re-knocked.
 	let triedTokens = tokenKey(boot.candidates ?? []);
-	// Tools wrapped after boot. pi holds the boot's customTools by value, so
-	// these are registered by hand, and again whenever the factory re-runs
-	// (/reload) because a fresh pi handle knows nothing about them.
-	const lateTools: ToolDefinition[] = [];
 	let inFlight: Promise<string | undefined> | undefined;
+	// The stored /login token the boot already refused is not a new sign-in:
+	// treating it as one re-knocked on the first message and pinned a second warning.
+	// One that only stalled at boot got no verdict, so the first message tries it.
+	let switchTried = boot.loginRefused ? boot.candidates?.find((candidate) => candidate.source === "/login key")?.token : undefined;
+	let loginRefused = boot.loginRefused ?? false;
+
+	// A refusal is already pinned above the editor; a notice would only repeat it.
+	// Good news and a stall ("retrying on your next message") are not pinned anywhere.
+	const worthNotice = (outcome: string) => rejections.length === 0 || outcome.startsWith(STALL);
 
 	const showWorkspace = (ctx: { ui: Ui }) =>
 		ctx.ui.setStatus(WORKSPACE_STATUS, header.workspace ? `orq:${header.workspace}` : undefined);
 	const showAuth = (ctx: { ui: Ui }) => {
 		if (rejections.length === 0) {
-			ctx.ui.setWidget(AUTH_WIDGET, undefined);
+			ctx.ui.setWidget(AUTH_WIDGET, loginRefused ? LOGIN_REFUSED : undefined);
 			showWorkspace(ctx);
 			return;
 		}
@@ -170,7 +179,7 @@ export function orqCommands(
 			triedTokens = key;
 			rejections = [...stillOnPrevious("no credential to switch with"), { source: NO_CREDENTIAL, reason: reread.failure ?? "nothing to try" }];
 			showAuth(ctx);
-			return `No orq credential found. ${LOGIN_HINT}`;
+			return "No orq credential found.";
 		}
 		let result: Reconnected;
 		try {
@@ -180,9 +189,7 @@ export function orqCommands(
 				triedTokens = key;
 				rejections = [...stillOnPrevious("the new credential was rejected"), ...error.rejections];
 				showAuth(ctx);
-				return wasConnected
-					? `orq rejected the credential for that workspace; still on ${previous ?? "the previous workspace"}. ${LOGIN_HINT}`
-					: `orq still rejects every credential. ${LOGIN_HINT}`;
+				return wasConnected ? `orq rejected that credential; still on ${previous ?? "the previous workspace"}.` : "orq still rejects every credential.";
 			}
 			// A stall is the server's problem, so it is no verdict on these keys:
 			// clearing the memo makes "retrying on your next message" true, even
@@ -192,24 +199,24 @@ export function orqCommands(
 			triedTokens = "";
 			rejections = [...stillOnPrevious("the server did not answer"), ...(wasConnected ? [] : rejections)];
 			showAuth(ctx);
-			return `orq did not answer: ${firstLine(error)}. Retrying on your next message, or run /reconnect.`;
+			return `${STALL} ${firstLine(error)}. Retrying on your next message, or run /reconnect.`;
 		}
 		triedTokens = key;
 		rejections = [];
-		// A boot with no cached catalogue wrapped no tools; register the ones the
-		// live connection produced so this session can call them. A stale pi
-		// handle (after /new) cannot, and says so instead of claiming a stall.
-		lateTools.push(...result.added);
-		toolNames.push(...result.added.map((tool) => tool.name));
-		let unregistered = "";
-		try {
-			for (const tool of result.added) pi.registerTool(tool);
-		} catch (error) {
-			unregistered = ` ${result.added.length} tools could not be registered in this session (${firstLine(error)}); run /reload.`;
-		}
+		// Whatever the model was failing on, the credential just accepted is the one in use now.
+		if (result.credential.source === "/login key") loginRefused = false;
+		// The tools themselves come through pi's MCP, which reconnected the server
+		// with this credential; nothing to register by hand.
 		showAuth(ctx);
+		// The session still holds the fallback model object, priced at $0: pick
+		// the same model again from the reloaded catalogue.
+		if (result.modelsReloaded) {
+			const live = ctx as { model?: { provider: string; id: string }; modelRegistry?: { find(provider: string, id: string): unknown } };
+			const fresh = live.model && live.modelRegistry?.find(live.model.provider, live.model.id);
+			if (fresh) await pi.setModel(fresh as never).catch(() => false);
+		}
 		const note = result.note ? ` ${result.note}.` : "";
-		return `Connected to orq: ${toolNames.length} tools in ${result.credential.workspace ?? "workspace"} (${result.credential.source}).${note}${unregistered}`;
+		return `Connected to orq: ${result.credential.workspace ?? "workspace"} (${result.credential.source}); its tools arrive as the server connects (/mcp shows it).${note}`;
 	};
 
 	/**
@@ -273,9 +280,6 @@ export function orqCommands(
 	};
 
 	return (pi: ExtensionAPI) => {
-		// Registering during load is allowed; a /reload re-runs this with a
-		// fresh handle that has never seen the tools a reconnect produced.
-		for (const tool of lateTools) pi.registerTool(tool);
 		// The header lives in the transcript rather than on stdout: fullscreen mode
 		// runs on the terminal's alternate screen, where anything printed before
 		// the TUI starts is never seen.
@@ -300,12 +304,9 @@ export function orqCommands(
 			// The header scrolls away; the footer is where you look to check which
 			// workspace a tool call just hit.
 			showWorkspace(ctx);
-			if (rejections.length > 0) {
-				// Pinned rather than notified: a notify scrolls away with the first
-				// answer, and the user has to see this until it is fixed.
-				showAuth(ctx);
-				ctx.ui.notify(authLines(rejections)[0]!, "warning");
-			}
+			// Pinned rather than notified: a notify scrolls away with the first
+			// answer, and the user has to see this until it is fixed. Once, not twice.
+			if (rejections.length > 0 || loginRefused) showAuth(ctx);
 			if (boot.welcome && event.reason === "startup" && ctx.hasUI) {
 				boot.welcome = false;
 				// Not awaited: session_start must return before pi draws the editor.
@@ -322,9 +323,21 @@ export function orqCommands(
 		// starts no new run. The check re-reads the candidates (one 0.2 s whoami)
 		// and only knocks on the server when the set changed since the last refusal.
 		pi.on("input", async (_event, ctx) => {
-			if (rejections.length === 0) return;
+			// Connected, but /login (or /key) stored a different credential since:
+			// switch to it, so the session runs on what the user just signed in with
+			// and the header learns its workspace. Reading auth.json costs nothing;
+			// the whoami re-read only happens when the stored token actually changed.
+			if (rejections.length === 0) {
+				const stored = loginKey(authPath);
+				// Tried once per stored token: a refused one must not knock on every message.
+				if (!stored || stored === process.env.ORQ_API_KEY || stored === switchTried) return;
+				switchTried = stored;
+				const outcome = await recover(pi, ctx, (all) => all.filter((candidate) => candidate.token === stored));
+				if (outcome && worthNotice(outcome)) ctx.ui.notify(outcome);
+				return;
+			}
 			const outcome = await recover(pi, ctx);
-			if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+			if (outcome && worthNotice(outcome)) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
 		});
 
 		pi.registerCommand("key", {
@@ -339,13 +352,6 @@ export function orqCommands(
 			handler: async (_args, ctx) => {
 				const outcome = await recover(pi, ctx, (all) => all);
 				if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
-			},
-		});
-
-		pi.registerCommand("tools", {
-			description: "list the orq workspace tools",
-			handler: async (_args, ctx) => {
-				ctx.ui.notify(`${toolNames.length} orq tools\n${groupTools(toolNames)}`);
 			},
 		});
 

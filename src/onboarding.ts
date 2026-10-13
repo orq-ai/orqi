@@ -12,10 +12,10 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname } from "node:path";
 import { matchesKey, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 
-export const WELCOME_TITLE = "orqi talks to your orq.ai workspace. How do you want to sign in?";
+export const WELCOME_TITLE = "Sign in to an orq.ai workspace to start. How?";
 export const WELCOME_OPTIONS = {
+	browser: "Sign in with the browser  your orq.ai account, no key to copy",
 	key: "Paste an API key          from my.orq.ai › Settings › API keys",
-	browser: "Sign in with the browser  runs `orq auth login`",
 	look: "Just look around          docs and /whatsnew only, no workspace",
 } as const;
 export type WelcomeChoice = keyof typeof WELCOME_OPTIONS;
