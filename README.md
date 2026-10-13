@@ -10,8 +10,10 @@ It embeds the [pi coding agent](https://github.com/earendil-works/pi) in-process
 orq MCP tools, the orq skills and the orqi system prompt already wired in.
 
 ![orqi first-run onboarding: the orqi logo, sign-in guidance and workspace options](docs/onboarding.png)
+<p align="center"><sub><strong>First run.</strong> Sign in with the browser, paste an API key, or explore without a workspace.</sub></p>
 
-![orqi answering with orq/auto routing, the inspector beside the transcript: trajectory, signals, context and a teach card](docs/screenshot.png)
+![orqi answering a workspace-health question with the inspector beside the transcript](docs/screenshot.png)
+<p align="center"><sub><strong>After sign-in.</strong> A live workspace answer with tool calls and the inspector's trajectory, signals, and context.</sub></p>
 
 ```
 orqi                                   # interactive TUI
