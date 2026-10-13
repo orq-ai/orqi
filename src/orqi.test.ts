@@ -9,7 +9,7 @@ import { headerLines, VERSION } from "./branding.ts";
 import { authLines, LOGIN_CTA, LOGIN_REFUSED, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 import { orqHarness } from "./harness.ts";
-import { authReason, CredentialsRejected, DENYLISTED_TOOLS, hintsSection, isAuthError, keptTools, orqServerConfig, pickCredential, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { authReason, CredentialsRejected, DENYLISTED_TOOLS, hintsSection, isAuthError, keptTools, orqServerConfig, pickCredential, summarize, TOOL_HINTS, TOOL_PREFIX, type Rejection } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import { DefaultResourceLoader, loadSkills } from "@earendil-works/pi-coding-agent";
@@ -193,6 +193,10 @@ test("pickCredential takes the first accepted, names every rejection, and a stal
 		{ source: "/login key", workspace: undefined, reason: "API key is not valid for this workspace." },
 		{ source: "ORQ_API_KEY", workspace: "acme", reason: "API key is not valid for this workspace." },
 	]);
+	// The refusals met on the way to a winner are reported; a stall is not one.
+	const refused: Rejection[] = [];
+	expect(await pickCredential([a, b, c], probe({ a: "stall", b: "401", c: "ok" }), refused)).toBe(c);
+	expect(refused.map((rejection) => rejection.source)).toEqual(["ORQ_API_KEY"]);
 	// Nothing accepted and a stall somewhere: the stall is reported, not "every key was rejected".
 	await expect(pickCredential([a, b], probe({ a: "401", b: "stall" }))).rejects.toThrow("timed out");
 });
@@ -818,7 +822,7 @@ test("authReason pulls the server's reason out of the MCP SDK's wrapping", () =>
 });
 
 /** A fake pi plus a fake UI, wired to orqCommands with a stubbed candidate reader. */
-function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, boot: Boot & { header?: any } = {}) {
+function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, boot: Boot & { header?: any; agentDir?: string } = {}) {
 	const handlers = new Map<string, (event: any, ctx: any) => any>();
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
 	const registered: string[] = [];
@@ -844,7 +848,7 @@ function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, 
 	} as any;
 	const header = boot.header ?? { name: "orqi", version: "v0", status: "not connected", cwd: "~" };
 	const toolNames: string[] = [];
-	const factory = orqCommands(reconnect, () => toolNames, header, "/nonexistent", boot);
+	const factory = orqCommands(reconnect, () => toolNames, header, boot.agentDir ?? "/nonexistent", boot);
 	factory(pi);
 	const input = () => handlers.get("input")!({ type: "input", text: "hi", source: "interactive" }, ctx);
 	return {
@@ -1046,6 +1050,33 @@ test("a refused stored /login key is one pinned line, not re-tried as a workspac
 	// The first message does not knock with the token the boot already refused.
 	await h.input();
 	expect(calls.length).toBe(0);
+});
+
+test("a stored /login key that only stalled at boot is tried on the first message", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-stalled-login-"));
+	const prior = process.env.ORQ_API_KEY;
+	try {
+		writeFileSync(join(dir, "auth.json"), JSON.stringify({ orq: { type: "api_key", key: "sk-orq-slow" } }));
+		const slow: Credential = { token: "sk-orq-slow", source: "/login key" };
+		const env: Credential = { token: "sk-orq-env", source: "ORQ_API_KEY", workspace: "acme" };
+		process.env.ORQ_API_KEY = env.token;
+		const calls: Credential[][] = [];
+		const h = recoveryHarness(
+			async (candidates) => {
+				calls.push(candidates);
+				return rejectAllBut("sk-orq-slow")(candidates);
+			},
+			{ agentDir: dir, candidates: [slow, env], readCandidates: () => ({ candidates: [slow, env] }), loginRefused: false, header: { name: "orqi", version: "v0", status: "", cwd: "~", workspace: "acme" } },
+		);
+		h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
+		expect(h.widgets.get("orq-auth")).toBeUndefined();
+		await h.input();
+		expect(calls.map((set) => set.map((c) => c.token))).toEqual([["sk-orq-slow"]]);
+	} finally {
+		if (prior === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = prior;
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("authLines picks its headline from what actually happened", () => {

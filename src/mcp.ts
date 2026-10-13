@@ -158,8 +158,9 @@ export async function probeCredential(token: string, fetchImpl: typeof fetch = f
 export async function pickCredential(
 	candidates: Credential[],
 	probe: (token: string) => Promise<void> = (token) => probeCredential(token),
+	/** Filled with the refusals (401/403) met on the way, stalls excluded, even when a later candidate wins. */
+	rejections: Rejection[] = [],
 ): Promise<Credential> {
-	const rejections: Rejection[] = [];
 	let stall: unknown;
 	for (const candidate of candidates) {
 		try {

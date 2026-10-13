@@ -122,7 +122,8 @@ export function orqCommands(
 	let inFlight: Promise<string | undefined> | undefined;
 	// The stored /login token the boot already refused is not a new sign-in:
 	// treating it as one re-knocked on the first message and pinned a second warning.
-	let switchTried = boot.candidates?.find((candidate) => candidate.source === "/login key")?.token;
+	// One that only stalled at boot got no verdict, so the first message tries it.
+	let switchTried = boot.loginRefused ? boot.candidates?.find((candidate) => candidate.source === "/login key")?.token : undefined;
 	let loginRefused = boot.loginRefused ?? false;
 
 	// A refusal is already pinned above the editor; a notice would only repeat it.

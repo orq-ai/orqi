@@ -126,8 +126,10 @@ if (profileGap) console.error(profileGap);
 let credential: Credential | undefined;
 let bootRejections: Rejection[] = [];
 let bootNote: string | undefined;
+// What the API actually refused on the way to the winner: a stall is no verdict.
+const refusedAtBoot: Rejection[] = [];
 try {
-	credential = candidates.length ? await pickCredential(candidates) : undefined;
+	credential = candidates.length ? await pickCredential(candidates, undefined, refusedAtBoot) : undefined;
 } catch (error) {
 	if (error instanceof CredentialsRejected) bootRejections = error.rejections;
 	else {
@@ -150,8 +152,13 @@ if (credential) process.env.ORQ_API_KEY = credential.token;
 // on something else. A stale browser sign-in is refreshed from the session in
 // place; a refused pasted key gets one pinned line saying how to replace it.
 const storedLogin = candidates.find((candidate) => candidate.source === "/login key");
+// Refused, not merely slow: a stored key that stalled at boot is retried on the
+// first message instead of being reported as broken.
 const loginRefused =
-	credential && storedLogin && credential.token !== storedLogin.token && !(credential.source === SESSION_SOURCE && refreshStoredSignIn(AUTH_PATH, credential.token));
+	credential &&
+	storedLogin &&
+	refusedAtBoot.some((rejection) => rejection.source === storedLogin.source) &&
+	!(credential.source === SESSION_SOURCE && refreshStoredSignIn(AUTH_PATH, credential.token));
 const mcp = orqMcp(Boolean(credential));
 // With nothing accepted the model runs on the best guess; a bad key only
 // degrades the model catalogue to its fallback, and /login replaces it.
