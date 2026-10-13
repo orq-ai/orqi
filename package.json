@@ -11,10 +11,10 @@
 		"start": "bun src/main.ts",
 		"typecheck": "bun run assets && tsc --noEmit",
 		"test": "bun test",
-		"assets": "bun build.ts",
-		"vendor": "bun vendor.ts",
+		"assets": "bun scripts/build.ts",
+		"vendor": "bun scripts/vendor.ts",
 		"build": "bun run assets && bun build --compile --outfile orqi src/main.ts",
-		"dist": "bun dist.ts",
+		"dist": "bun scripts/dist.ts",
 		"format": "biome format --write",
 		"format:check": "biome format",
 		"lint": "biome lint"

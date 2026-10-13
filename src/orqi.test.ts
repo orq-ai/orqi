@@ -394,7 +394,7 @@ test("every skill the system prompt names ships, under its directory's name", ()
 test("vendor.ts and src/skills.ts agree on what counts as an upstream skill", () => {
 	// The filter is duplicated because vendor.ts must run before skills.lock
 	// exists. If they drift, vendor writes a tree the runtime would reject.
-	const script = readFileSync(join(import.meta.dir, "..", "vendor.ts"), "utf8");
+	const script = readFileSync(join(import.meta.dir, "..", "scripts", "vendor.ts"), "utf8");
 	expect(script).toContain("/^(orq-[a-z0-9-]+|evaluatorq)$/");
 });
 
@@ -634,7 +634,9 @@ test("the update hint names the command that works for each install method", () 
 });
 
 const STAGE = join(import.meta.dir, "..", "npm", "stage.mjs");
-const DIST_LABELS = [...readFileSync(join(import.meta.dir, "..", "dist.ts"), "utf8").matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
+const DIST_LABELS = [...readFileSync(join(import.meta.dir, "..", "scripts", "dist.ts"), "utf8").matchAll(/label: "([^"]+)"/g)].map(
+	(m) => m[1],
+);
 
 /** One release tarball per dist.ts label, each binary printing its own label. */
 function stageTarballs(root: string, mode = 0o755): string {
@@ -2179,8 +2181,8 @@ test("checksum sidecars use shasum's line format and parse strictly", () => {
 test("bun run dist writes a sidecar per tarball, in the format shasum -c reads", () => {
 	// dist.ts cross-compiles three binaries, too slow for a test; the line it writes is
 	// checksumLine, pinned above, and this scrape proves dist.ts calls it for every label.
-	const source = readFileSync(join(import.meta.dir, "..", "dist.ts"), "utf8");
-	expect(source).toContain('from "./src/checksum.ts"');
+	const source = readFileSync(join(import.meta.dir, "..", "scripts", "dist.ts"), "utf8");
+	expect(source).toContain('from "../src/checksum.ts"');
 	expect(source).toContain("checksumLine(sha256Hex(");
 	expect(source).toContain("sidecar(archive)");
 });

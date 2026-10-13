@@ -42,7 +42,7 @@ orqi
 | `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
 | `src/footer.ts` / `src/minimap.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, trajectory rows (`minimap.ts`, the module's old name) and the inspector's signals, context and teach sections, boxed overlay panels |
 | `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows and inspect view; the changelog parser |
-| `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
+| `scripts/build.ts` / `scripts/dist.ts` / `scripts/vendor.ts` | Embed assets; cross-compile tarballs; vendor the upstream skills |
 | `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
 
 `pluginResources` in `src/skills.ts` hands pi exactly one copy of the orq marketplace plugin, its

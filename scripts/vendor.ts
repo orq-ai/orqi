@@ -14,13 +14,13 @@
  */
 
 import { $ } from "bun";
-import { normalizeCommand } from "./src/frontmatter.ts";
+import { normalizeCommand } from "../src/frontmatter.ts";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const REPO = "orq-ai/assistant-plugins";
-const ROOT = import.meta.dir;
+const ROOT = join(import.meta.dir, "..");
 const SKILLS = join(ROOT, "skills");
 
 // Duplicated from src/skills.ts on purpose: this script must run before
