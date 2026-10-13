@@ -10,11 +10,11 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { HStack, matchesKey, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
+import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { apiBaseUrl, runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
-import { dollars, footerLine, shortModel, tokens, type Paint } from "./footer.ts";
+import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
 import { MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, SPINNER } from "./minimap.ts";
 import { talkable, type ModelInfo } from "./model.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
@@ -34,6 +34,8 @@ export interface HarnessDeps {
 	callTool: (name: string, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>;
 	/** The workspace the header shows: a key, or a short id when only an API key is known. */
 	workspace: () => string | undefined;
+	/** The project the credential is scoped to, when the Projects API names one. */
+	project?: () => string | undefined;
 	/** `orq/auto`: its pool and decision feed. */
 	routing?: Routing;
 }
@@ -85,6 +87,25 @@ export function repoOf(remote: string): string {
 	}
 	const parts = path.replace(/\.git$/, "").split("/").filter(Boolean);
 	return parts.length >= 2 ? parts.slice(-2).join("/") : (parts[0] ?? "");
+}
+
+const TITLE = Symbol.for("orqi.title");
+
+/**
+ * The terminal title says orqi, not pi. pi writes `π - <dir>` itself at
+ * startup and on session changes, from a name baked into its own package, so
+ * there is no setting; the terminal's setTitle is wrapped once (marked, so a
+ * new session or /reload does not wrap it again) to swap the mark.
+ */
+export function brandTitle(tui: unknown, cwd = process.cwd()): void {
+	const terminal = (tui as { terminal?: { setTitle?(title: string): void; [TITLE]?: boolean } })?.terminal;
+	if (!terminal?.setTitle) return;
+	if (!terminal[TITLE]) {
+		const original = terminal.setTitle.bind(terminal);
+		terminal.setTitle = (title: string) => original(title.replace(/^π(?= |$)/, "orqi"));
+		terminal[TITLE] = true;
+	}
+	terminal.setTitle(`orqi - ${cwd.split("/").filter(Boolean).at(-1) ?? ""}`);
 }
 
 /** Open a URL in the browser; false when there is no opener. */
@@ -143,7 +164,8 @@ export function orqHarness(deps: HarnessDeps) {
 		let tuiRef: TUI | undefined;
 		const windowOf = (provider: string, id: string) =>
 			ctxRef?.modelRegistry.find(provider, id)?.contextWindow ?? deps.catalogue().find((model) => model.id === id)?.contextWindow;
-		const trajectory = new Trajectory(windowOf);
+		const priceOf = (id: string) => deps.catalogue().find((model) => model.id === id)?.cost;
+		const trajectory = new Trajectory(windowOf, priceOf);
 		const traces: TraceRef[] = [];
 		let frame = 0;
 		let spinTimer: ReturnType<typeof setInterval> | undefined;
@@ -151,6 +173,8 @@ export function orqHarness(deps: HarnessDeps) {
 		let workspaceAskedFor: string | undefined;
 		let savedTools: string[] | undefined;
 		let reserveTokens = 16_384;
+		let headerShown = false;
+		let statusOf: (key: string) => string | undefined = () => undefined;
 		let lastFooter = "";
 
 		// ── minimap state ─────────────────────────────────────────────────────
@@ -224,7 +248,10 @@ export function orqHarness(deps: HarnessDeps) {
 				// The footer factory is the one place an extension is handed the TUI.
 				attachMinimap(tui, theme, ctx);
 				const unsub = footerData.onBranchChange(() => tui.requestRender());
+				statusOf = (key) => footerData.getExtensionStatuses().get(key);
+				brandTitle(tui);
 				const paint: Paint = {
+					brand: (s) => theme.bold(theme.fg("accent", s)),
 					dim: (s) => theme.fg("dim", s),
 					text: (s) => theme.fg("muted", s),
 					hot: (s) => theme.fg("error", s),
@@ -250,7 +277,8 @@ export function orqHarness(deps: HarnessDeps) {
 						const physical = lastAnswer?.model;
 						return footerLine(
 								{
-									workspace: footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
+									// The workspace lives in the fixed header now; the footer keeps the orq.ai mark.
+									workspace: headerShown ? undefined : footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
 									selection: selectionName(ctxRef?.model),
 									physical: physical && physical !== ctxRef?.model?.id ? physical : undefined,
 									input: totals.input + totals.cacheRead,
@@ -298,6 +326,42 @@ export function orqHarness(deps: HarnessDeps) {
 			},
 		});
 
+		/** The fixed header's facts, read at draw time. */
+		const headerState = () => {
+			const status = statusOf(WORKSPACE_STATUS) ?? "";
+			const model = ctxRef?.model;
+			const agent = isAgentModel(model?.id)
+				? (deps.catalogue().find((m) => m.id === model!.id)?.name?.replace(/ \(agent\)$/, "") ?? model!.id.slice(6))
+				: undefined;
+			const thread = ctxRef?.sessionManager.getSessionId();
+			return {
+				workspace: deps.workspace() ?? resolvedWorkspace,
+				project: deps.project?.(),
+				agent,
+				routing: model?.provider === "orq" && model.id === "auto" ? "orq/auto" : undefined,
+				connected: !/not connected/.test(status),
+				thread: thread ? shortId(thread) : undefined,
+			};
+		};
+
+		const headerView = (theme: { fg(token: string, text: string): string; bold(text: string): string }): Component => ({
+			invalidate() {},
+			render(width: number): string[] {
+				let line = "";
+				try {
+					line = headerBar(headerState(), width, {
+						brand: (t) => theme.bold(theme.fg("accent", t)),
+						dim: (t) => theme.fg("dim", t),
+						text: (t) => theme.fg("muted", t),
+						hot: (t) => theme.fg("warning", t),
+					});
+				} catch {
+					// A render must never throw.
+				}
+				return [line, theme.fg("borderMuted", "─".repeat(Math.max(0, width)))];
+			},
+		});
+
 		/**
 		 * Fullscreen: give the minimap its own columns. pi's fullscreen layout is
 		 * a layout root on the TUI, so wrapping it in an HStack puts the panel
@@ -313,11 +377,18 @@ export function orqHarness(deps: HarnessDeps) {
 				// A previous session or /reload left its own wrapper: wrap pi's root, not that.
 				const inner = host.layoutRoot[SIDE] ?? host.layoutRoot;
 				const panelEntry = { component: minimapView(theme), basis: MINIMAP_WIDTH, shrink: 0, visible: (viewport: { width: number }) => minimapVisible(viewport.width) };
-				const wrapper = new HStack([{ component: inner, grow: 1, shrink: 1, basis: 0 }, panelEntry]) as HStack & { [SIDE]?: Component };
+				const body = new HStack([{ component: inner, grow: 1, shrink: 1, basis: 0 }, panelEntry]);
+				// The fixed header sits above both: who and where, while the footer says what and how much.
+				const wrapper = new VStack([{ component: headerView(theme as never), basis: 2, shrink: 0 }, { component: body, grow: 1, shrink: 1, basis: 0 }]) as VStack & { [SIDE]?: Component };
 				wrapper[SIDE] = inner;
+				headerShown = true;
 				sideRoot = wrapper;
 				host.setLayoutRoot(wrapper);
 				return;
+			}
+			// Regular mode has no layout root: the header rides above the editor as a widget.
+			if (ctx.mode === "tui" && !headerShown) {
+				ctx.ui.setWidget("orqi-header", (_tui, widgetTheme) => headerView(widgetTheme as never), { placement: "aboveEditor" });
 			}
 			if (overlay || ctx.mode !== "tui") return;
 			void ctx.ui.custom<void>((_tui, overlayTheme) => minimapView(overlayTheme), {

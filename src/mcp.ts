@@ -156,6 +156,8 @@ export interface Reconnected {
 	added: ToolDefinition[];
 	/** Set when the catalogue refresh fell back to the cache. */
 	note?: string;
+	/** Set by the caller when the model catalogue was reloaded with this credential. */
+	modelsReloaded?: boolean;
 }
 
 /**

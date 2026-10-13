@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
-import { contextBar, dollars, footerLine, sparkline, tokens } from "./footer.ts";
-import { costLines, repoOf, repriced, topModel } from "./harness.ts";
+import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
+import { brandTitle, costLines, repoOf, repriced, topModel } from "./harness.ts";
 import { minimapRow, minimapRows, minimapSummary, peekLines } from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines } from "./panel.ts";
@@ -152,7 +152,8 @@ test("the footer degrades by width band", () => {
 		branch: "main",
 	};
 	const wide = footerLine(state, 140);
-	expect(wide).toContain("orq:acme · orq/auto → gpt-5.6-sol · ↑88k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools");
+	expect(wide).toStartWith(" orq.ai · acme · "); // the orq.ai mark leads
+	expect(wide).toContain("orq.ai · acme · orq/auto → gpt-5.6-sol · ↑88k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools");
 	expect(wide.endsWith("main ")).toBe(true);
 	expect(wide.length).toBe(140);
 	const medium = footerLine(state, 110);
@@ -404,4 +405,34 @@ test("long panel bodies scroll instead of losing their bottom", () => {
 	expect(top.at(-1)).toStartWith("└"); // the border survives
 	const later = boxLines({ title: "peek", rows, height: 5 }, 40, 0, undefined, 25).map(bare);
 	expect(later[1]).toContain("line 26");
+});
+
+test("the orq.ai mark stays even without a workspace, and the title says orqi", () => {
+	expect(footerLine({ input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(" orq.ai · $0");
+	expect(footerLine({ workspace: "orq:not connected", input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(" orq.ai · not connected");
+	const titles: string[] = [];
+	const tui = { terminal: { setTitle: (title: string) => titles.push(title) } };
+	brandTitle(tui, "/home/me/repo");
+	brandTitle(tui, "/home/me/repo"); // a second session does not wrap twice
+	tui.terminal.setTitle("π - repo"); // pi's own later rewrite
+	tui.terminal.setTitle("π - my session - repo");
+	expect(titles).toEqual(["orqi - repo", "orqi - repo", "orqi - repo", "orqi - my session - repo"]);
+});
+
+test("a turn recorded at $0 is repriced from the catalogue", () => {
+	const trajectory = new Trajectory(undefined, (id) => (id === "openai/gpt-5.6-terra" ? { input: 2, output: 12, cacheRead: 0.2 } : undefined));
+	trajectory.message({ role: "assistant", provider: "orq", model: "openai/gpt-5.6-terra", content: [{ type: "text", text: "ok" }], usage: usage(26_000, 100, 0), stopReason: "stop", timestamp: 1 });
+	expect(trajectory.totals().cost).toBeCloseTo((26_000 * 2 + 100 * 12) / 1e6, 9);
+	// A recorded cost is never second-guessed.
+	trajectory.message({ role: "assistant", provider: "orq", model: "openai/gpt-5.6-terra", content: [{ type: "text", text: "ok" }], usage: usage(10, 10, 0.5), stopReason: "stop", timestamp: 2 });
+	expect(trajectory.steps.at(-1)?.usage?.cost).toBe(0.5);
+});
+
+test("the fixed header says who and where, dropping segments from the right as it narrows", () => {
+	const state = { workspace: "acme", project: "Arian", agent: "support-triage", routing: "orq/auto", connected: true, thread: "01a1…ed4f", plugin: "orq plugin 3.10.0 (updated)" };
+	expect(headerBar(state, 200)).toBe(" orqi  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)");
+	const narrow = headerBar(state, 70);
+	expect(narrow).toBe(" orqi  workspace acme · agent support-triage · project Arian");
+	expect(headerBar({ connected: false }, 80)).toBe(" orqi  not connected");
+	expect(visibleWidth(headerBar(state, 20))).toBeLessThanOrEqual(20);
 });

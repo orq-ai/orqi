@@ -103,8 +103,23 @@ export class Trajectory {
 	private nextId = 1;
 	private listeners = new Set<() => void>();
 
-	/** `windowOf` looks up a physical model's context window: the footer bar's denominator. */
-	constructor(private windowOf: (provider: string, id: string) => number | undefined = () => undefined) {}
+	/**
+	 * `windowOf` looks up a physical model's context window: the footer bar's
+	 * denominator. `priceOf` is the catalogue price (USD per million), used when
+	 * a message carries no cost: a session that started on the fallback model
+	 * (no credential yet) records $0 for turns that were not free.
+	 */
+	constructor(
+		private windowOf: (provider: string, id: string) => number | undefined = () => undefined,
+		private priceOf: (id: string) => { input: number; output: number; cacheRead: number } | undefined = () => undefined,
+	) {}
+
+	private costOf(model: string | undefined, usage: { input: number; output: number; cacheRead: number; cost?: { total: number } }): number {
+		const recorded = usage.cost?.total ?? 0;
+		if (recorded > 0 || !model) return recorded;
+		const price = this.priceOf(model);
+		return price ? (usage.input * price.input + usage.output * price.output + usage.cacheRead * price.cacheRead) / 1_000_000 : 0;
+	}
 
 	onChange(listener: () => void): () => void {
 		this.listeners.add(listener);
@@ -169,7 +184,7 @@ export class Trajectory {
 			const blocks = Array.isArray(message.content) ? message.content : [];
 			const text = textOf(blocks);
 			const usage = message.usage
-				? { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cacheRead, cost: message.usage.cost?.total ?? 0 }
+				? { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cacheRead, cost: this.costOf(message.model, message.usage) }
 				: undefined;
 			const failed = message.stopReason === "error";
 			// The text part (or the error) is one step; each tool call becomes a

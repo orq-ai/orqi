@@ -208,6 +208,7 @@ const makeServices = async () => {
 					// reload them now that the server takes a credential.
 					if (models.note && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
 						routing.refresh(models.catalogue);
+						result.modelsReloaded = true;
 					}
 						header.workspace = result.credential.workspace;
 						header.project = await projectForCredential(result.credential.token);

@@ -236,6 +236,13 @@ export function orqCommands(
 			unregistered = ` ${result.added.length} tools could not be registered in this session (${firstLine(error)}); run /reload.`;
 		}
 		showAuth(ctx);
+		// The session still holds the fallback model object, priced at $0: pick
+		// the same model again from the reloaded catalogue.
+		if (result.modelsReloaded) {
+			const live = ctx as { model?: { provider: string; id: string }; modelRegistry?: { find(provider: string, id: string): unknown } };
+			const fresh = live.model && live.modelRegistry?.find(live.model.provider, live.model.id);
+			if (fresh) await pi.setModel(fresh as never).catch(() => false);
+		}
 		const note = result.note ? ` ${result.note}.` : "";
 		return `Connected to orq: ${toolNames.length} tools in ${result.credential.workspace ?? "workspace"} (${result.credential.source}).${note}${unregistered}`;
 	};

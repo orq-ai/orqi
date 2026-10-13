@@ -199,6 +199,17 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   and a built-in cannot be overridden. `/key` and the first-run welcome use `MaskedInput`
   (`src/onboarding.ts`): dots and the last four characters, never the key, then the same storage and
   recovery as `/login orq`.
+- **A fixed header sits above the transcript, inside the same layout wrap as the minimap.** The
+  wrapper is `VStack(header, HStack(pi's root, minimap))`: the header says who and where (workspace,
+  agent, project, routing, connection, thread), the footer what and how much. Regular mode has no
+  layout root, so the header becomes a widget above the editor there.
+- **The terminal title is rewritten, not set.** pi writes `π - <dir>` from a name baked into its own
+  package (`APP_TITLE`), at startup and on every session change, with no setting. `brandTitle`
+  wraps the terminal's `setTitle` once (symbol-marked) and swaps the mark to `orqi`.
+- **A turn recorded at $0 is repriced from the catalogue.** A session that booted on the fallback
+  model (no credential yet) holds a zero-price model object; after the first sign-in the commands
+  extension re-selects the same model from the reloaded catalogue, and the trajectory reprices any
+  zero-cost usage it already recorded.
 - **The minimap toggles on `alt+m`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle. Focus
   for ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/panel focus` is on, so
   the editor never loses the keyboard otherwise.

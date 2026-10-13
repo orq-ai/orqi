@@ -30,6 +30,8 @@ export interface FooterState {
 }
 
 export interface Paint {
+	/** The orq.ai mark. */
+	brand?(text: string): string;
 	dim(text: string): string;
 	text(text: string): string;
 	/** The brightest step: the bar past 80%. */
@@ -87,7 +89,9 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 	const medium = width >= 100;
 	const sep = paint.dim(" · ");
 	const parts: string[] = [];
-	if (state.workspace) parts.push(paint.text(state.workspace));
+	// The orq.ai mark leads, with the workspace beside it: "orq:acme" reads as "orq.ai · acme".
+	const workspace = state.workspace?.replace(/^orq:/, "");
+	parts.push(`${(paint.brand ?? paint.text)("orq.ai")}${workspace ? paint.dim(" · ") + paint.text(workspace) : ""}`);
 	if (state.selection) {
 		const physical = state.physical && state.physical !== state.selection ? paint.dim(` → ${shortModel(state.physical)}`) : "";
 		parts.push(`${paint.text(shortModel(state.selection))}${physical}`);
@@ -111,4 +115,43 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 	const gap = width - visibleWidth(left) - visibleWidth(right);
 	if (gap >= 2) return `${left}${" ".repeat(gap)}${right}`;
 	return truncateToWidth(left, width);
+}
+
+/** What the fixed header shows: who and where, as opposed to the footer's what and how much. */
+export interface HeaderBarState {
+	workspace?: string;
+	project?: string;
+	/** Display name of the managed agent in agent mode. */
+	agent?: string;
+	/** `orq/auto` when routing is on. */
+	routing?: string;
+	connected: boolean;
+	/** Short thread (session) id. */
+	thread?: string;
+	/** `orq plugin 3.10.0 (updated)` when a newer plugin is in use. */
+	plugin?: string;
+}
+
+/**
+ * The fixed header line:
+ *
+ *   orqi  workspace acme · project Arian · agent support-triage · routing orq/auto · thread 01a1…ed4f
+ *
+ * Segments drop from the right as the terminal narrows; the workspace and
+ * the agent stay longest, being the two that change what every call does.
+ */
+export function headerBar(state: HeaderBarState, width: number, paint: Paint = plain): string {
+	const sep = paint.dim(" · ");
+	const label = (name: string, value: string) => `${paint.dim(name)} ${paint.text(value)}`;
+	const segments: string[] = [];
+	if (!state.connected) segments.push(paint.hot("not connected"));
+	else if (state.workspace) segments.push(label("workspace", state.workspace));
+	if (state.agent) segments.push(label("agent", state.agent));
+	if (state.project) segments.push(label("project", state.project));
+	if (state.routing) segments.push(label("routing", state.routing));
+	if (state.thread) segments.push(label("thread", state.thread));
+	if (state.plugin) segments.push(paint.dim(state.plugin));
+	const mark = ` ${(paint.brand ?? paint.text)("orqi")}  `;
+	while (segments.length > 1 && visibleWidth(mark + segments.join(sep)) > width) segments.pop();
+	return truncateToWidth(mark + segments.join(sep), width);
 }
