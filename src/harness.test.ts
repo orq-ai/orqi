@@ -619,9 +619,9 @@ test("/context: a row per part with tokens, share and cache, one bar, then the l
 	const bar = rows[8]!;
 	expect(bar).toMatch(/^▇+▁+$/);
 	expect(bar.length).toBe(60);
-	expect(rows[9]).toStartWith("prompt ───");
-	expect(rows).toContain("· ORQI_ALL_TOOLS=1  show the 3 hidden tools                       → +1.5k");
-	expect(rows.at(-1)).toBe("· cache hit 94%     the prefix is cached; routing keeps it (/route explain)");
+	expect(rows[9]).toBe("▇ cached  prompt 5.1k · tools 18k · skills 1.9k   ▁ msgs 2.4k");
+	expect(rows).toContain(`· ${"ORQI_ALL_TOOLS=1".padEnd(19)}${"show the 3 hidden tools".padEnd(48)}→ +1.5k`);
+	expect(rows.at(-1)).toBe(`· ${"cache hit 94%".padEnd(19)}the prefix is cached; routing keeps it (/route explain)`);
 	const withProject = contextRows({ ...split, project: 3_000 }).find((row) => row.startsWith("  project files"))!;
 	expect(withProject).toEndWith("3,000    10%     ✓");
 	expect(withProject.length).toBe(rows[0]!.length);

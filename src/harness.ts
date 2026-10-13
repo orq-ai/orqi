@@ -247,7 +247,8 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 	// Rounding leaves the bar a cell short or long: the largest part absorbs it.
 	if (used) cells[cells.indexOf(Math.max(...cells))]! += barWidth - cells.reduce((a, b) => a + b, 0);
 	const bar = parts.map((part, i) => (part.cached ? "▇" : "▁").repeat(cells[i]!)).join("");
-	const labels = parts.map((part, i) => (cells[i]! > part.label.length + 1 ? `${part.label} ${"─".repeat(cells[i]! - part.label.length - 1)}` : "─".repeat(cells[i]!))).join("");
+	const legend = (cached: boolean) => parts.filter((part) => part.cached === cached && part.n).map((part) => `${part.label} ${tokens(part.n)}`).join(" · ");
+	const lever = (name: string, what: string, effect = "") => `· ${name.padEnd(19)}${what.padEnd(48)}${effect}`.trimEnd();
 	return [
 		`${"what the model reads on every turn".padEnd(52)}${"tokens".padStart(8)}${"share".padStart(7)}${"cache".padStart(6)}`,
 		row("system prompt", "orqi-system-prompt.txt", split.prompt, true),
@@ -259,14 +260,14 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 		row("messages", `${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.results} tool result${c.results === 1 ? "" : "s"}`, split.messages, false),
 		"",
 		bar,
-		labels,
+		`▇ cached  ${legend(true)}${split.messages ? `   ▁ ${legend(false)}` : ""}`,
 		"",
 		"what would change it",
-		`· /agent <key>      agent mode sends no prompt and no tools       → ~${tokens(split.messages)}`,
-		...(c.hidden.length ? [`· ORQI_ALL_TOOLS=1  show the ${c.hidden.length} hidden tools                       → +${tokens(split.hidden)}`] : []),
-		"· /compact          summarise the messages into one",
-		...(split.project ? [`· another directory  the project files ride along from the cwd          → -${tokens(split.project)}`] : []),
-		...(split.cache !== undefined ? [`· cache hit ${Math.round(split.cache * 100)}%`.padEnd(20) + "the prefix is cached; routing keeps it (/route explain)"] : []),
+		lever("/agent <key>", "agent mode sends no prompt and no tools", `→ ~${tokens(split.messages)}`),
+		...(c.hidden.length ? [lever("ORQI_ALL_TOOLS=1", `show the ${c.hidden.length} hidden tools`, `→ +${tokens(split.hidden)}`)] : []),
+		lever("/compact", "summarise the messages into one"),
+		...(split.project ? [lever("another directory", "the project files ride along from the cwd", `→ -${tokens(split.project)}`)] : []),
+		...(split.cache !== undefined ? [lever(`cache hit ${Math.round(split.cache * 100)}%`, "the prefix is cached; routing keeps it (/route explain)")] : []),
 	];
 }
 
