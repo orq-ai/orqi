@@ -1,19 +1,97 @@
 name: Release
 
+# Releases are created only from main. The workflow writes the version commit
+# and its tag itself, so a stale feature branch cannot publish a release.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
 
-# One release per tag at a time, and never cancel one that is mid-publish.
+# Serialize resolution, the version commit, and publication. Do not cancel a
+# run: a later merge must be released after the earlier one, not instead of it.
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-main
   cancel-in-progress: false
 
 permissions: {}
 
 jobs:
-  release:
+  prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release: ${{ steps.resolve.outputs.release }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      # A retry after a failed publish resumes the tag already at main's tip.
+      # Otherwise resolve only commits since the last release tag reachable from
+      # main. docs/test/ci/chore commits produce no release; fix/perf/revert,
+      # feat, and breaking conventional commits respectively bump patch, minor,
+      # and major.
+      - name: Resolve and tag the next release from main
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git config user.name "Orq GitHub Actions"
+          git config user.email "admin@orq.ai"
+          head="$(git rev-parse HEAD)"
+          existing="$(git tag --points-at "$head" --list 'v[0-9]*' | head -1 || true)"
+          if [ -n "$existing" ]; then
+            echo "resuming $existing at main's tip"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$existing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          previous="$(git describe --tags --match 'v[0-9]*' --abbrev=0 HEAD 2>/dev/null || true)"
+          if [ -z "$previous" ]; then
+            echo "error: main has no stable release tag to use as a version base" >&2
+            exit 1
+          fi
+          version="$(git log -z --format='%s%n%b' "$previous..HEAD" | bun scripts/release-version.ts --base "${previous#v}")"
+          if [ -z "$version" ]; then
+            echo "no releasable conventional commits since $previous"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "error: $tag already exists" >&2
+            exit 1
+          fi
+
+          # package.json is the one version source compiled into the binary.
+          bun -e 'const p = await Bun.file("package.json").json(); p.version = process.argv[1]; await Bun.write("package.json", JSON.stringify(p, null, "\t") + "\n")' "$version"
+          git add package.json
+          git commit -m "chore(release): $version"
+          git tag -a "$tag" -m "Release $tag"
+          # Atomic push prevents a version commit without its matching tag. A
+          # concurrent merge rejects this push; that merge starts the next
+          # serialized run, which resolves the combined range afresh.
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$tag"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     permissions:
       contents: write
       id-token: write
@@ -26,8 +104,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.prepare.outputs.tag }}
           # git-cliff walks back to the previous tag for the release notes.
           fetch-depth: 0
+          fetch-tags: true
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -42,8 +122,8 @@ jobs:
       - name: Check the tag matches package.json
         run: |
           version=$(bun -e 'console.log(require("./package.json").version)')
-          [ "$GITHUB_REF_NAME" = "v$version" ] || {
-            echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+          [ "$TAG" = "v$version" ] || {
+            echo "tag $TAG does not match package.json version $version" >&2
             exit 1
           }
 
@@ -57,22 +137,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Unset means "not published": the steps below test != 'true'.
-          if ! json=$(gh release view "$GITHUB_REF_NAME" --json isDraft,assets 2>/dev/null); then
+          if ! json=$(gh release view "$TAG" --json isDraft,assets 2>/dev/null); then
             exit 0
           fi
           if [ "$(jq -r .isDraft <<<"$json")" = true ]; then
-            gh release delete "$GITHUB_REF_NAME" --yes
+            gh release delete "$TAG" --yes
             exit 0
           fi
           for asset in orqi-macos-arm64.tar.gz orqi-macos-x64.tar.gz orqi-linux-x64.tar.gz; do
             for name in "$asset" "$asset.sha256"; do
               jq -e --arg n "$name" '.assets[] | select(.name == $n and .size > 0)' <<<"$json" >/dev/null || {
-                echo "::error::release $GITHUB_REF_NAME is published but $name is missing; delete the release to rebuild it" >&2
+                echo "::error::release $TAG is published but $name is missing; delete the release to rebuild it" >&2
                 exit 1
               }
             done
           done
-          echo "release $GITHUB_REF_NAME is already published with every asset; nothing to upload"
+          echo "release $TAG is already published with every asset; nothing to upload"
           echo "published=true" >> "$GITHUB_OUTPUT"
 
       - run: bun test
@@ -124,15 +204,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           flags="--draft --verify-tag --notes-file RELEASE_NOTES.md"
-          case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
+          case "$TAG" in *-*) flags="$flags --prerelease" ;; esac
           # shellcheck disable=SC2086
-          gh release create "$GITHUB_REF_NAME" $flags dist/*.tar.gz dist/*.tar.gz.sha256
+          gh release create "$TAG" $flags dist/*.tar.gz dist/*.tar.gz.sha256
 
       - name: Publish the release
         if: steps.existing.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+        run: gh release edit "$TAG" --draft=false
 
   # npm is built from the published assets, never from this run's build:
   # whatever reaches npm is byte-for-byte what install.sh downloads, and a
@@ -140,9 +220,11 @@ jobs:
   # here: stage.mjs only takes x.y.z and nothing sets an npm dist-tag other
   # than latest.
   stage-npm:
-    needs: release
-    if: ${{ !contains(github.ref_name, '-') }}
+    needs: [prepare, release]
+    if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     permissions:
       contents: read
     steps:
@@ -157,12 +239,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p release
-          gh release download "$GITHUB_REF_NAME" --pattern 'orqi-*.tar.gz' --pattern 'orqi-*.tar.gz.sha256' --dir release
+          gh release download "$TAG" --pattern 'orqi-*.tar.gz' --pattern 'orqi-*.tar.gz.sha256' --dir release
           (cd release && sha256sum -c ./*.sha256)
 
       - name: Stage and pack the npm packages
         run: |
-          node npm/stage.mjs "${GITHUB_REF_NAME#v}" release /tmp/npm
+          node npm/stage.mjs "${TAG#v}" release /tmp/npm
           mkdir -p packs
           for pkg in /tmp/npm/*/; do
             npm pack "$pkg" --pack-destination packs
@@ -175,7 +257,10 @@ jobs:
           if-no-files-found: error
 
   test-npm:
-    needs: stage-npm
+    needs: [prepare, stage-npm]
+    if: needs.prepare.outputs.release == 'true'
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -193,7 +278,7 @@ jobs:
       # installed next to it from the local file instead.
       - name: Install the packed files and check the version
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           platform=$(node -p 'process.platform + "-" + process.arch')
           npm install -g "./packs/orq-ai-orqi-$platform-$version.tgz" "./packs/orq-ai-orqi-$version.tgz"
           [ "$(orqi --version)" = "$version" ]
@@ -213,8 +298,11 @@ jobs:
   # nothing upstream rebuilds, and versions already on npm with identical
   # files are skipped.
   publish-npm:
-    needs: test-npm
+    needs: [prepare, test-npm]
+    if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     permissions:
       id-token: write
     steps:
@@ -238,7 +326,7 @@ jobs:
       # not the .tgz, since npm versions can compress the same files differently.
       - name: Publish packages that are not on npm yet
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           for pack in ./packs/orq-ai-orqi-*-"$version".tgz ./packs/orq-ai-orqi-"$version".tgz; do
             pkg=${pack#./packs/orq-ai-}
             pkg=${pkg%-"$version".tgz}
@@ -263,7 +351,10 @@ jobs:
   # platform. The registry caches metadata for up to five minutes, so the
   # retries cover six.
   verify-npm:
-    needs: publish-npm
+    needs: [prepare, publish-npm]
+    if: needs.prepare.outputs.release == 'true'
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -273,7 +364,7 @@ jobs:
     steps:
       - name: npm i -g @orq-ai/orqi and check the version
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           for _ in $(seq 12); do
             if npm install -g "@orq-ai/orqi@$version" && [ "$(orqi --version)" = "$version" ]; then
               exit 0
