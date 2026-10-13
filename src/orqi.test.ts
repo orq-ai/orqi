@@ -91,11 +91,35 @@ function installerEnv(root: string, tarball: string): Record<string, string | un
 	mkdirSync(fakeBin, { recursive: true });
 	const curl = join(fakeBin, "curl");
 	writeFileSync(curl, `#!/bin/sh
+# Fake curl: serves $ORQI_TEST_TARBALL for the tarball URL and
+# $ORQI_TEST_TARBALL.sha256 for the sidecar URL (404 when absent); honours
+# -o and -w '%{http_code}' the way install.sh calls it.
+out=''; url=''; status=0
 while [ "$#" -gt 0 ]; do
-	if [ "$1" = "-o" ]; then cp "$ORQI_TEST_TARBALL" "$2"; exit; fi
+	case "$1" in
+		-o) out=$2; shift ;;
+		-w) status=1; shift ;;
+		--max-time) shift ;;
+		-*) ;;
+		*) url=$1 ;;
+	esac
 	shift
 done
-exit 1
+case "$url" in
+	*.sha256)
+		if [ -f "$ORQI_TEST_TARBALL.sha256" ]; then
+			cp "$ORQI_TEST_TARBALL.sha256" "$out"
+			[ "$status" = 1 ] && printf 200
+			exit 0
+		fi
+		[ "$status" = 1 ] && printf 404
+		exit 22
+		;;
+	*)
+		[ -f "$ORQI_TEST_TARBALL" ] || exit 22
+		cp "$ORQI_TEST_TARBALL" "$out"
+		;;
+esac
 `);
 	chmodSync(curl, 0o755);
 	return {
@@ -1621,6 +1645,7 @@ test("install.sh verifies before replacing its target and preserves the old bina
 	const original = readFileSync(target, "utf8");
 	try {
 		const good = releaseFixture(join(root, "good"), "999.0.0");
+		writeSidecar(good);
 		const installed = Bun.spawnSync(["sh", script], { env: installerEnv(root, good) });
 		expect(installed.success, installed.stderr.toString()).toBe(true);
 		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("999.0.0");
@@ -1630,6 +1655,7 @@ test("install.sh verifies before replacing its target and preserves the old bina
 		const badRoot = join(root, "bad");
 		mkdirSync(badRoot);
 		const wrong = releaseFixture(badRoot, "998.0.0");
+		writeSidecar(wrong);
 		const rejected = Bun.spawnSync(["sh", script], { env: installerEnv(root, wrong) });
 		expect(rejected.success).toBe(false);
 		expect(readFileSync(target, "utf8")).toBe(original);
@@ -1645,6 +1671,56 @@ test("install.sh verifies before replacing its target and preserves the old bina
 		const unextractable = Bun.spawnSync(["sh", script], { env: installerEnv(root, corrupt) });
 		expect(unextractable.success).toBe(false);
 		expect(readFileSync(target, "utf8")).toBe(original);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("install.sh refuses a bad or missing checksum on latest, and installs a pinned release unverified with a warning", () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-installer-checksum-"));
+	const installDir = join(root, "install");
+	const target = join(installDir, "orqi");
+	const script = join(import.meta.dir, "..", "install.sh");
+	mkdirSync(installDir);
+	writeVersionBinary(target, VERSION);
+	const original = readFileSync(target, "utf8");
+	const attempt = (env: Record<string, string | undefined>) => {
+		writeFileSync(target, original);
+		chmodSync(target, 0o755);
+		return Bun.spawnSync(["sh", script], { env });
+	};
+	try {
+		const tarball = releaseFixture(join(root, "rel"), "999.0.0");
+		const env = installerEnv(root, tarball);
+		// Wrong digest: refused, old binary intact, the message names the asset.
+		writeSidecar(tarball, `${"0".repeat(64)}  orqi-macos-arm64.tar.gz\n`);
+		let result = attempt(env);
+		expect(result.success).toBe(false);
+		expect(result.stderr.toString()).toContain("checksum mismatch");
+		expect(readFileSync(target, "utf8")).toBe(original);
+		// A captive portal's HTML with a 200: not a digest.
+		writeSidecar(tarball, "<!DOCTYPE html><html>sign in</html>\n");
+		result = attempt(env);
+		expect(result.success).toBe(false);
+		expect(result.stderr.toString()).toContain("not a sha256 digest");
+		expect(readFileSync(target, "utf8")).toBe(original);
+		// No sidecar on latest: refused, with the pin hint.
+		rmSync(`${tarball}.sha256`);
+		result = attempt({ ...env, ORQI_VERSION: "" });
+		expect(result.success).toBe(false);
+		expect(result.stderr.toString()).toContain("no checksum published");
+		expect(readFileSync(target, "utf8")).toBe(original);
+		// No sidecar on a pinned version: installs, warns once.
+		result = attempt(env);
+		expect(result.success, result.stderr.toString()).toBe(true);
+		expect(result.stderr.toString()).toContain("installing UNVERIFIED: v999.0.0");
+		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("999.0.0");
+		// A good sidecar: installs and says it verified. The fixture's sidecar names
+		// release.tar.gz; the installer compares only the digest, so that is fine.
+		writeSidecar(tarball);
+		result = attempt(env);
+		expect(result.success, result.stderr.toString()).toBe(true);
+		expect(result.stdout.toString()).toContain("checksum verified (sha256)");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
