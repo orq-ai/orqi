@@ -12,7 +12,7 @@ orqi
 │   ├── mcp__orq__* tools        pi's native MCP, server `orq`   src/mcp.ts
 │   ├── subagent tool            recursive in-process sessions   src/subagent.ts
 │   ├── skills                   bundled skills/                 (additionalSkillPaths)
-│   ├── system prompt            orqi-system-prompt.txt
+│   ├── system prompt            src/system-prompt.txt
 │   ├── slash commands           auth, workspace, update        src/commands.ts
 │   │                            the harness views                src/harness.ts
 │   └── startup header           session entry, not stdout        src/commands.ts

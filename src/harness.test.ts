@@ -937,7 +937,7 @@ test("/context: a row per part with tokens, share and cache, one bar, then the l
 	};
 	const rows = contextRows(split);
 	expect(rows[0]).toBe("what the model reads on every turn                    tokens  share cache");
-	expect(rows[1]).toBe("system prompt   orqi-system-prompt.txt                 4,440    16%     ✓");
+	expect(rows[1]).toBe("system prompt   src/system-prompt.txt                  4,440    16%     ✓");
 	expect(rows[2]).toBe("  tool hints    TOOL_HINTS, 1 tool                       680     2%     ✓");
 	expect(rows[3]).toBe("tool schemas    44 orq tools · 4 built-in             17,810    65%     ✓");
 	expect(rows[4]).toBe("  hidden: invoke_model, invoke_agent, retrieve_agent_response  saves 1,540");

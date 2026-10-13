@@ -300,7 +300,7 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 				]
 			: []),
 		`${"what the model reads on every turn".padEnd(52)}${"tokens".padStart(8)}${"share".padStart(7)}${"cache".padStart(6)}`,
-		row("system prompt", "orqi-system-prompt.txt", split.prompt, true),
+		row("system prompt", "src/system-prompt.txt", split.prompt, true),
 		...(split.hints ? [row("  tool hints", `TOOL_HINTS, ${c.hinted} tool${c.hinted === 1 ? "" : "s"}`, split.hints, true)] : []),
 		...(split.project ? [row("  project files", "AGENTS.md, CLAUDE.md in the cwd", split.project, true)] : []),
 		row("tool schemas", `${c.orq} orq tools · ${c.builtin} built-in`, split.tools, true),

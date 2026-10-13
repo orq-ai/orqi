@@ -253,7 +253,7 @@ test("the unsaid constraints reach the prompt, named as the model sees the tool"
 	expect(section).toContain("`mcp__orq__query_analytics` has constraints its schema does not express");
 	expect(section).toContain("filters.project_id");
 	expect(section).toContain('ONLY with `metric: "agents"`');
-	const prompt = readFileSync(join(import.meta.dir, "..", "orqi-system-prompt.txt"), "utf8");
+	const prompt = readFileSync(join(import.meta.dir, "system-prompt.txt"), "utf8");
 	expect(prompt.split("{{ORQ_TOOL_HINTS}}").length).toBe(2);
 });
 
@@ -383,7 +383,7 @@ test("every skill the system prompt names ships, under its directory's name", ()
 		.map((e) => e.name);
 	const named = (dir: string) => readFileSync(join(root, dir, "SKILL.md"), "utf8").match(/^name:\s*(\S+)/m)?.[1];
 	expect(dirs.filter((dir) => named(dir) !== dir)).toEqual([]);
-	const prompt = readFileSync(join(import.meta.dir, "..", "orqi-system-prompt.txt"), "utf8");
+	const prompt = readFileSync(join(import.meta.dir, "system-prompt.txt"), "utf8");
 	const skills = prompt.slice(prompt.indexOf("## Skills"), prompt.indexOf("## Approval Gates"));
 	const mentioned = new Set([...skills.matchAll(/`((?:orqi?-)[a-z0-9-]+|evaluatorq)`/g)].map((m) => m[1]!));
 	expect([...mentioned].filter((name) => !dirs.includes(name))).toEqual([]);
