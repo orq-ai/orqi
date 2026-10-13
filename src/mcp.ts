@@ -149,8 +149,9 @@ export async function probeCredential(token: string, fetchImpl: typeof fetch = f
 
 /**
  * The first candidate the API accepts. A 401 selects the next one; a stall or
- * a 5xx is the server's problem and no verdict on the key, so it moves on too
- * and, when nothing was accepted, is reported ahead of the rejections. One
+ * a 5xx is the server's problem and no verdict on the key, so it moves on too;
+ * when nothing was accepted, a stall is thrown instead of the rejections, and
+ * the boot keeps the first candidate as its best guess. One
  * REST call per candidate, sub-second, where the old path needed a whole MCP
  * handshake against a server that stalls.
  */
