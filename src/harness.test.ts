@@ -10,6 +10,7 @@ import { brandTitle, costLines, repoOf, repriced, topModel } from "./harness.ts"
 import { minimapRow, minimapRows, minimapSummary, peekLines } from "./minimap.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines } from "./panel.ts";
+import { schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
@@ -435,4 +436,29 @@ test("the fixed header says who and where, dropping segments from the right as i
 	expect(narrow).toBe(" orqi  workspace acme · agent support-triage · project Arian");
 	expect(headerBar({ connected: false }, 80)).toBe(" orqi  not connected");
 	expect(visibleWidth(headerBar(state, 20))).toBeLessThanOrEqual(20);
+});
+
+test("a tool's parameters read as name, type, required, default and description", () => {
+	const lines = schemaLines({
+		type: "object",
+		required: ["trace_id"],
+		properties: {
+			trace_id: { type: "string", description: "Unique identifier of the trace" },
+			limit: { type: "integer", default: 25 },
+			mode: { enum: ["compact", "full"], description: "compact = metadata only" },
+			cursor: { anyOf: [{ type: "string" }, { type: "null" }] },
+			filters: { type: "object", properties: { project_id: { type: "string" } } },
+		},
+	});
+	expect(lines).toEqual([
+		"trace_id  string  (required)",
+		"          Unique identifier of the trace",
+		"limit     integer  (default 25)",
+		'mode      "compact" | "full"',
+		"          compact = metadata only",
+		"cursor    string | null",
+		"filters   object",
+		"  project_id  string",
+	]);
+	expect(schemaLines({ type: "object" })).toEqual(["(no parameters)"]);
 });

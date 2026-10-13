@@ -178,6 +178,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **Subagents reach the orq tools through the parent's `executeTool`.** pi connects the server in
   the parent session; a subagent's child session gets proxies (same names, same schemas) that run
   each call through `ctx.executeTool`, so no second MCP handshake and the parent's hooks apply.
+- **`/tools` is orqi's, not just pi's `/mcp` list.** pi's Tools view (`extensions/mcp/index.js`,
+  `showTools`) is a flat list where enter and escape both go back. `/tools` reads
+  `pi.getAllTools()` and opens a tool on enter: parameters first (`schemaLines`), then the full
+  description, `j` for the raw input schema.
 - **Slash commands make their own short MCP call** (`callOrqTool`). pi lets tools call tools, not
   commands, so `/trace`, `/agents` and `/feedback` open a one-call connection, retried once.
 - **Session services are built per session, not once** (`makeServices` in `src/main.ts`). pi marks

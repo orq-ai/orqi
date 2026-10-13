@@ -9,7 +9,7 @@
 
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { apiBaseUrl, runOrq } from "./auth.ts";
@@ -17,6 +17,7 @@ import { CHANGELOG_URL, VERSION } from "./branding.ts";
 import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
 import { MINIMAP_MIN_COLS, MINIMAP_WIDTH, minimapRows, minimapSummary, peekLines, SPINNER } from "./minimap.ts";
 import { talkable, type ModelInfo } from "./model.ts";
+import { bareName, schemaLines, TOOL_PREFIX } from "./mcp.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { agentUrl, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
 import { shortTool, toAtif, Trajectory, type StepUsage } from "./trajectory.ts";
@@ -736,6 +737,54 @@ export function orqHarness(deps: HarnessDeps) {
 					live?.update({ title, rows: [`failed: ${error instanceof Error ? error.message : error}`], hint: "esc close" });
 				}
 				await shown;
+			},
+		});
+
+		// pi's /mcp lists the tools but enter only goes back; this one opens each.
+		pi.registerCommand("tools", {
+			description: "browse the orq tools: enter shows a tool's definition, j its raw schema",
+			handler: async (_args, ctx) => {
+				let tools: ToolInfo[] = [];
+				try {
+					tools = pi.getAllTools().filter((tool) => tool.name.startsWith(TOOL_PREFIX) && tool.exposure !== "hidden");
+				} catch {
+					// A handle from a replaced session: show nothing rather than throw.
+				}
+				if (tools.length === 0) {
+					ctx.ui.notify("No orq tools yet: the MCP server is still connecting, or not connected. /mcp shows its state.", "warning");
+					return;
+				}
+				tools.sort((a, b) => bareName(a.name).localeCompare(bareName(b.name)));
+				const width = Math.min(28, Math.max(...tools.map((tool) => bareName(tool.name).length)));
+				const firstLine = (text: string | undefined) => String(text ?? "").split("\n")[0]!.trim();
+				const detail = (tool: ToolInfo): PanelSpec => {
+					const hints = (tool as { annotations?: Record<string, unknown> }).annotations ?? {};
+					const flags = [hints.readOnlyHint ? "read-only" : "", hints.destructiveHint ? "destructive" : "", hints.idempotentHint ? "idempotent" : ""].filter(Boolean).join(" · ");
+					return {
+						title: tool.name,
+						badge: [tool.exposure, flags].filter(Boolean).join(" · "),
+						// Parameters first: they are what a definition is opened for; descriptions run long.
+						rows: ["parameters", ...schemaLines(tool.parameters).map((line) => `  ${line}`), "", "description", ...String(tool.description ?? "").trim().split("\n").map((line) => `  ${line}`)],
+						hint: "j raw schema · esc back",
+						keys: {
+							j: () => {
+								void panel(ctx, { title: `${tool.name} · input schema`, rows: JSON.stringify(tool.parameters, null, 2).split("\n"), hint: "esc back" });
+							},
+						},
+					};
+				};
+				await panel(ctx, {
+					title: "orq tools",
+					badge: `${tools.length} · mcp__orq__*`,
+					rows: tools.map((tool) => `${bareName(tool.name).padEnd(width)}  ${firstLine(tool.description)}`),
+					selectable: true,
+					hint: "enter definition · esc close",
+					keys: {
+						enter: (i) => {
+							void panel(ctx, detail(tools[i]!));
+						},
+					},
+				});
 			},
 		});
 

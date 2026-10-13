@@ -375,14 +375,6 @@ export function orqCommands(
 			},
 		});
 
-		pi.registerCommand("tools", {
-			description: "list the orq workspace tools",
-			handler: async (_args, ctx) => {
-				const names = toolNames();
-				ctx.ui.notify(names.length ? `${names.length} orq tools (mcp__orq__*)\n${groupTools(names)}` : "No orq tools yet: the MCP server is still connecting, or not connected. /mcp shows its state.");
-			},
-		});
-
 		pi.registerCommand("whoami", {
 			description: "show the orq user and active workspace",
 			handler: async (_args, ctx) => {

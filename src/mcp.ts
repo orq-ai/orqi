@@ -282,3 +282,37 @@ export async function callOrqTool(name: string, args: Record<string, unknown>, t
 	}
 	throw lastError;
 }
+
+/** A JSON Schema type, short: `string`, `string[]`, `a | b`, `object`. */
+function typeOf(schema: any): string {
+	if (!schema || typeof schema !== "object") return "any";
+	if (Array.isArray(schema.enum)) return schema.enum.map((v: unknown) => JSON.stringify(v)).join(" | ");
+	if (schema.const !== undefined) return JSON.stringify(schema.const);
+	const variants = schema.anyOf ?? schema.oneOf;
+	if (Array.isArray(variants)) return variants.map(typeOf).join(" | ");
+	if (schema.type === "array") return `${typeOf(schema.items)}[]`;
+	if (Array.isArray(schema.type)) return schema.type.join(" | ");
+	return schema.type ?? (schema.properties ? "object" : "any");
+}
+
+/**
+ * A tool's parameters as readable lines: name, type, required, default,
+ * description; nested objects indented. What the /tools detail view shows;
+ * `j` there shows the raw schema instead.
+ */
+export function schemaLines(schema: any, indent = ""): string[] {
+	const properties = schema?.properties ?? {};
+	const required = new Set<string>(schema?.required ?? []);
+	const names = Object.keys(properties);
+	if (names.length === 0) return indent ? [] : ["(no parameters)"];
+	const width = Math.min(24, Math.max(...names.map((name) => name.length)));
+	return names.flatMap((name) => {
+		const prop = properties[name] ?? {};
+		const flags = [required.has(name) ? "required" : "", prop.default !== undefined ? `default ${JSON.stringify(prop.default)}` : ""].filter(Boolean).join(", ");
+		const description = String(prop.description ?? "").replace(/\s+/g, " ").trim();
+		const head = `${indent}${name.padEnd(width)}  ${typeOf(prop)}${flags ? `  (${flags})` : ""}`;
+		const lines = [head, ...(description ? [`${indent}${" ".repeat(width + 2)}${description}`] : [])];
+		const nested = prop.type === "object" ? prop : prop.type === "array" && prop.items?.type === "object" ? prop.items : undefined;
+		return nested ? [...lines, ...schemaLines(nested, `${indent}  `)] : lines;
+	});
+}
