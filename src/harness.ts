@@ -330,6 +330,8 @@ export function orqHarness(deps: HarnessDeps) {
 		let savedTools: string[] | undefined;
 		/** The chat model agent mode was entered from: where /agent off goes back to. */
 		let returnTo: { provider: string; id: string } | undefined;
+		/** The thinking level on the last chat model: an agent model has none, so pi drops it to off, and leaving must restore it. */
+		let chatLevel: ReturnType<ExtensionAPI["getThinkingLevel"]> | undefined;
 		const agentKey = (id: string | undefined) => (isAgentModel(id) ? id!.slice(6) : undefined);
 		/** Agent mode says so above the editor, with the way back, for as long as it lasts. */
 		const syncAgent = (ctx: ExtensionContext) => {
@@ -678,6 +680,7 @@ export function orqHarness(deps: HarnessDeps) {
 			traces.length = 0;
 			measure(ctx);
 			syncAgent(ctx);
+			if (!isAgentModel(ctx.model?.id)) chatLevel = pi.getThinkingLevel();
 			card = undefined;
 			shownConcepts.clear();
 			startedAt = Date.now();
@@ -755,12 +758,18 @@ export function orqHarness(deps: HarnessDeps) {
 			syncWidgets(ctx, teachLine);
 			render();
 		});
+		pi.on("thinking_level_select", (event, ctx) => {
+			if (!isAgentModel(ctx.model?.id)) chatLevel = event.level;
+		});
 		pi.on("model_select", (event, ctx) => {
 			if (isAgentModel(event.model.id) && event.previousModel && !isAgentModel(event.previousModel.id)) returnTo = { provider: event.previousModel.provider, id: event.previousModel.id };
-			// Leaving agent mode gives the tools back now, not on the next turn, so the panel counts them.
-			if (!isAgentModel(event.model.id) && savedTools) {
-				pi.setActiveTools(savedTools);
+			// Leaving agent mode gives the tools back now, not on the next turn, so the panel counts them,
+			// and the thinking level the agent model forced off: without it the chat model stops reasoning
+			// and the editor border takes thinkingOff's colour.
+			if (!isAgentModel(event.model.id) && event.previousModel && isAgentModel(event.previousModel.id)) {
+				if (savedTools) pi.setActiveTools(savedTools);
 				savedTools = undefined;
+				if (chatLevel && pi.getThinkingLevel() !== chatLevel) pi.setThinkingLevel(chatLevel);
 			}
 			syncAgent(ctx);
 			measure(ctx);
