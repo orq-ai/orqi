@@ -8,6 +8,7 @@ import { apiBaseUrl, credentialCandidates, credentialsFile, loginKey, LOGIN_HINT
 import { headerLines, VERSION } from "./branding.ts";
 import { authLines, groupTools, NO_CREDENTIAL, orqCommands, pickForWorkspace, WORKSPACE_SWITCH, type Boot } from "./commands.ts";
 import { AGENT_TYPES } from "./subagent.ts";
+import { checksumLine, parseChecksum, sha256Hex, sidecar } from "./checksum.ts";
 import { authReason, connectOrqTools, CredentialsRejected, DENYLISTED_TOOLS, describe, isAuthError, keptTools, openFirstAccepted, summarize, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { onlyOrq, PROVIDER_ID } from "./model.ts";
 import type { ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
@@ -1738,3 +1739,37 @@ test("releaseUrl builds the same two forms install.sh does, pinned or latest", (
 	);
 });
 
+test("checksum sidecars use shasum's line format and parse strictly", () => {
+	const digest = sha256Hex(new TextEncoder().encode("hello\n"));
+	expect(digest).toBe("5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03");
+	expect(sidecar("orqi-linux-x64.tar.gz")).toBe("orqi-linux-x64.tar.gz.sha256");
+	const line = checksumLine(digest, "orqi-linux-x64.tar.gz");
+	expect(line).toBe(`${digest}  orqi-linux-x64.tar.gz\n`);
+	// `shasum -c` reads the line back: the two-space separator is what it expects.
+	const dir = mkdtempSync(join(tmpdir(), "orqi-sidecar-"));
+	try {
+		writeFileSync(join(dir, "orqi-linux-x64.tar.gz"), "hello\n");
+		writeFileSync(join(dir, "orqi-linux-x64.tar.gz.sha256"), line);
+		// Linux runners have sha256sum, macOS has shasum: both must read the line.
+		const checker = Bun.which("sha256sum") ? ["sha256sum", "-c"] : ["shasum", "-a", "256", "-c"];
+		const check = Bun.spawnSync([...checker, "orqi-linux-x64.tar.gz.sha256"], { cwd: dir });
+		expect(check.success, check.stderr.toString()).toBe(true);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+	expect(parseChecksum(line)).toBe(digest);
+	expect(parseChecksum(`${digest.toUpperCase()}  x`)).toBe(digest);
+	// Not a digest: an HTML error page, an empty body, a truncated hash.
+	expect(parseChecksum("<!DOCTYPE html><html>portal</html>")).toBeUndefined();
+	expect(parseChecksum("")).toBeUndefined();
+	expect(parseChecksum(digest.slice(0, 63))).toBeUndefined();
+});
+
+test("bun run dist writes a sidecar per tarball, in the format shasum -c reads", () => {
+	// dist.ts cross-compiles three binaries, too slow for a test; the line it writes is
+	// checksumLine, pinned above, and this scrape proves dist.ts calls it for every label.
+	const source = readFileSync(join(import.meta.dir, "..", "dist.ts"), "utf8");
+	expect(source).toContain('from "./src/checksum.ts"');
+	expect(source).toContain("checksumLine(sha256Hex(");
+	expect(source).toContain("sidecar(archive)");
+});
