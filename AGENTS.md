@@ -14,6 +14,7 @@ bun install
 bun run start            # TUI          (bun run start "prompt" for one-shot)
 bun run typecheck        # runs `assets` first, see below
 bun test                 # the parts with real branching
+bun run format           # Biome, scoped in biome.jsonc; CI runs format:check
 bun run build            # → ./orqi, single binary with assets embedded
 bun run dist             # → dist/orqi-{macos-arm64,macos-x64,linux-x64}.tar.gz
 ```
