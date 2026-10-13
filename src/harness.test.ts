@@ -16,6 +16,7 @@ import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
+import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate } from "./gate.ts";
 import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
 
 /** Visible text: truncation adds ANSI resets around its ellipsis. */
@@ -621,4 +622,49 @@ test("/context: a row per part with tokens, share and cache, one bar, then the l
 	// Nothing hidden, nothing measured from the cache: those levers are not offered.
 	const bare = contextRows({ ...split, cache: undefined, hidden: 0, counts: { ...split.counts, hidden: [] } });
 	expect(bare.some((row) => row.includes("ORQI_ALL_TOOLS") || row.includes("hidden:") || row.includes("cache hit"))).toBe(false);
+});
+
+test("the gate: a verb table, unknown never benign, every server tool has a known verb", () => {
+	for (const tool of ORQ_TOOLS) expect(knownVerb(tool), `${tool} has a verb the gate knows`).toBe(true);
+	expect(doorOf("list_traces")).toBe("benign");
+	expect(doorOf("retrieve_agent_response")).toBe("benign");
+	expect(doorOf("update_agent")).toBe("two_way");
+	expect(doorOf("delete_dataset")).toBe("one_way");
+	expect(doorOf("submit_feedback")).toBe("one_way");
+	expect(doorOf("archive_everything")).toBe("one_way"); // a verb nobody listed asks first
+	expect(maskSecrets({ name: "x", api_key: "sk-1", nested: { Authorization: "Bearer y", list: [{ token: "t" }] } })).toEqual({ name: "x", api_key: "•••", nested: { Authorization: "•••", list: [{ token: "•••" }] } });
+});
+
+test("the gate asks before a one-way call, remembers 'this turn' until the answer lands, and blocks without a UI", async () => {
+	const trajectory = new Trajectory();
+	const gate = orqGate(trajectory);
+	const call = (id: string, tool: string, input: Record<string, unknown> = {}) => {
+		trajectory.toolStart(id, `mcp__orq__${tool}`, input);
+		return { toolCallId: id, toolName: `mcp__orq__${tool}`, input };
+	};
+	const asked: string[] = [];
+	const ui = (answer: string | undefined) => ({ hasUI: true, ui: { select: async (title: string) => (asked.push(title), answer) } as any });
+	// Reads and two-way calls run without a question; the verdict is recorded.
+	expect(await gate.onToolCall(call("r", "list_traces"), ui(undefined))).toBeUndefined();
+	expect(await gate.onToolCall(call("u", "update_agent"), ui(undefined))).toBeUndefined();
+	expect(asked).toHaveLength(0);
+	expect(trajectory.steps.map((step) => step.door)).toEqual(["benign", "two_way"]);
+	// Deny (or escape) blocks with a reason the model can act on.
+	const denied = await gate.onToolCall(call("d1", "delete_dataset", { dataset_id: "01M4", api_key: "sk" }), ui(undefined));
+	expect(denied).toEqual({ block: true, reason: "The user refused this one-way call (delete_dataset). Ask before trying again." });
+	expect(asked[0]).toBe('delete_dataset · one-way: cannot be undone\n{"api_key":"•••","dataset_id":"01M4"}');
+	expect(trajectory.steps.at(-1)?.gate).toBe("denied");
+	// Allow once asks again next time; allow for this turn does not, until the turn ends.
+	expect(await gate.onToolCall(call("d2", "delete_dataset"), ui(ALLOW_ONCE))).toBeUndefined();
+	expect(await gate.onToolCall(call("d3", "delete_dataset"), ui(ALLOW_TURN))).toBeUndefined();
+	expect(await gate.onToolCall(call("d4", "delete_skill"), ui(undefined))).toBeUndefined();
+	expect(asked).toHaveLength(3);
+	expect(trajectory.steps.at(-1)?.gate).toBe("allowed");
+	gate.endTurn();
+	expect((await gate.onToolCall(call("d5", "delete_skill"), ui(undefined)))?.block).toBe(true);
+	// One-shot: nobody to ask, so the call is blocked and the model says how to confirm.
+	const oneShot = await gate.onToolCall(call("d6", "delete_dataset"), { hasUI: false, ui: {} as any });
+	expect(oneShot?.reason).toContain("rerun orqi interactively");
+	// Not an orq tool: not the gate's business.
+	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: {} }, ui(undefined))).toBeUndefined();
 });

@@ -27,6 +27,7 @@ import { shortTool, signals, toAtif, Trajectory, type Step, type StepUsage } fro
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
 import { cardLines, pickCard, type Concept } from "./teach.ts";
+import { orqGate } from "./gate.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 
@@ -617,7 +618,12 @@ export function orqHarness(deps: HarnessDeps) {
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
 		});
+		// The one-way gate. Registered here so its verdicts reach the trajectory;
+		// pi's own MCP handler only waits for the server, so a block here still wins.
+		const gate = orqGate(trajectory);
+		pi.on("tool_call", (event, ctx) => gate.onToolCall(event, ctx));
 		pi.on("agent_end", (_event, ctx) => {
+			gate.endTurn();
 			ctx.ui.setWorkingMessage();
 			measure(ctx);
 			const run = trajectory.steps.filter((step) => step.id > runFrom);
