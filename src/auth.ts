@@ -350,7 +350,9 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 	const candidates: Credential[] = [];
 	const { session, apiKeyLogin, failure } = readSession();
 	const login = loginKey(authPath);
-	if (login) candidates.push({ token: login, source: "/login key", workspace: workspaceOfKey(login, session) });
+	// A browser sign-in stores the CLI session's own token: its workspace is the session's active one.
+	const loginWorkspace = login && login === sessionToken(session) ? session?.activeWorkspaceKey : login ? workspaceOfKey(login, session) : undefined;
+	if (login) candidates.push({ token: login, source: "/login key", workspace: loginWorkspace });
 	// A profile outranks an exported key, because it does for the CLI: it warns
 	// and uses the profile (applyProfileAPIKey), and orqi disagreeing would put
 	// the two on different credentials for the same command.

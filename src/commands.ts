@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { credentialCandidates, LOGIN_HINT, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT, loginKey, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
@@ -145,6 +145,7 @@ export function orqCommands(
 	// unseeded, the first message after a rejected boot always re-knocked.
 	let triedTokens = tokenKey(boot.candidates ?? []);
 	let inFlight: Promise<string | undefined> | undefined;
+	let switchTried: string | undefined;
 
 	const showWorkspace = (ctx: { ui: Ui }) =>
 		ctx.ui.setStatus(WORKSPACE_STATUS, header.workspace ? `orq:${header.workspace}` : undefined);
@@ -342,7 +343,19 @@ export function orqCommands(
 		// starts no new run. The check re-reads the candidates (one 0.2 s whoami)
 		// and only knocks on the server when the set changed since the last refusal.
 		pi.on("input", async (_event, ctx) => {
-			if (rejections.length === 0) return;
+			// Connected, but /login (or /key) stored a different credential since:
+			// switch to it, so the session runs on what the user just signed in with
+			// and the header learns its workspace. Reading auth.json costs nothing;
+			// the whoami re-read only happens when the stored token actually changed.
+			if (rejections.length === 0) {
+				const stored = loginKey(authPath);
+				// Tried once per stored token: a refused one must not knock on every message.
+				if (!stored || stored === process.env.ORQ_API_KEY || stored === switchTried) return;
+				switchTried = stored;
+				const outcome = await recover(pi, ctx, (all) => all.filter((candidate) => candidate.token === stored));
+				if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+				return;
+			}
 			const outcome = await recover(pi, ctx);
 			if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
 		});

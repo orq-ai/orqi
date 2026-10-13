@@ -199,7 +199,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   provider there only if it registers an OAuth flow; this one runs the orq CLI's own device login
   (`orq auth login`), shows pi's device-code view with the CLI's URL and code, and stores the login
   session's token (read back through whoami, as everywhere else). Refresh asks whoami again. The
-  credential reader takes that stored token as candidate #0, like a pasted key. `/mcp login orq` is
+  credential reader takes that stored token as candidate #0, like a pasted key, and names its
+  workspace from the session (the token IS the session's). A session that was already connected
+  switches to a newly stored `/login` credential on the next message (checked against auth.json,
+  once per stored token), so the header picks up the workspace without a restart. `/mcp login orq` is
   a different thing: OAuth for the MCP tools only, not the model router.
 - **`/key` exists beside pi's `/login`, and the hints point at it.** pi's `/login` draws the pasted
   key in clear text (its provider search and its key prompt are pi-tui `Input`s, which have no mask),

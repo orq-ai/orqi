@@ -176,3 +176,41 @@ test("the credential reader takes a browser sign-in as readily as a pasted key",
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("a connected session switches to what /login just stored, once, and learns its workspace", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-switch-"));
+	const prior = process.env.ORQ_API_KEY;
+	try {
+		process.env.ORQ_API_KEY = "sk-orq-env";
+		const handlers = new Map<string, (event: any, ctx: any) => unknown>();
+		const pi = { registerEntryRenderer: () => {}, registerCommand: () => {}, registerTool: () => {}, appendEntry: () => {}, setModel: async () => true, on: (name: string, fn: any) => handlers.set(name, fn) } as any;
+		const notices: string[] = [];
+		const ctx = { hasUI: true, ui: { notify: (m: string) => notices.push(m), setStatus: () => {}, setWidget: () => {} } };
+		const tried: string[][] = [];
+		const header = { name: "orqi", version: "v0", status: "", cwd: "~" } as any;
+		orqCommands(
+			async (next) => {
+				tried.push(next.map((c) => c.token));
+				header.workspace = next[0]!.workspace;
+				return { credential: next[0]!, added: [] };
+			},
+			() => [],
+			header,
+			dir,
+			{ readCandidates: (() => ({ candidates: [{ token: "sess-token", source: "/login key", workspace: "orq-research" }, { token: "sk-orq-env", source: "ORQ_API_KEY" }] })) as any },
+		)(pi);
+		const input = () => handlers.get("input")!({ type: "input", text: "hi", source: "interactive" }, ctx);
+		await input();
+		expect(tried).toEqual([]); // nothing stored yet
+		writeFileSync(join(dir, "auth.json"), JSON.stringify({ orq: { type: "oauth", access: "sess-token", refresh: "r", expires: 1 } }));
+		await input();
+		expect(tried).toEqual([["sess-token"]]);
+		expect(header.workspace).toBe("orq-research");
+		await input();
+		expect(tried.length).toBe(1); // not again for the same stored token
+	} finally {
+		if (prior === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = prior;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
