@@ -35,7 +35,9 @@ orqi
 | `src/frontmatter.ts` | `normalizeCommand`: quotes plugin command frontmatter that strict YAML would reject |
 | `src/update.ts` | `orqi update`: daily release check, header note, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
-| `src/harness.ts` | The teaching harness extension: footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, `/cost /trace /open /trajectory /whatsnew /agents /agent /panel /teach /context /tools /skills /route /learn /btw` |
+| `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, and the commands that own state: `/route /teach /panel` |
+| `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
+| `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
 | `src/router.ts` | `orq/auto` and the `orq-decisions` classifier provider: pool, policy, Decisions API adapter, route log |
