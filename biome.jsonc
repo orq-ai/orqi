@@ -7,9 +7,9 @@
 	},
 	"files": {
 		// Only code orqi owns. skills/ is replaced wholesale by `bun run vendor` and checked
-		// against skills.lock.json; src/assets.generated.ts is written by build.ts; fixtures
+		// against skills.lock.json; src/assets.generated.ts is written by scripts/build.ts; fixtures
 		// are recorded server payloads. Markdown, themes and the lockfiles are left alone.
-		"includes": ["src/**/*.ts", "*.ts", "npm/**/*.js", "npm/**/*.mjs", "!src/assets.generated.ts", "!src/fixtures"]
+		"includes": ["src/**/*.ts", "scripts/**/*.ts", "npm/**/*.js", "npm/**/*.mjs", "!src/assets.generated.ts", "!src/fixtures"]
 	},
 	"formatter": {
 		"enabled": true,

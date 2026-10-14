@@ -1,13 +1,13 @@
 /**
- * The minimap: one row per trajectory step down the right edge, so the shape
- * of a session (who spoke, which tools ran, where a subagent went, what the
- * router picked) is visible at a glance while the transcript scrolls.
+ * The inspector's rows, pure: one row per trajectory step, so the shape of a
+ * session (who spoke, which tools ran, where a subagent went, what the router
+ * picked) is visible at a glance while the transcript scrolls, then the
+ * signals, context and teach sections below it.
  *
- * A non-capturing overlay: the editor keeps the keyboard until `/panel`
- * focuses the panel for ↑↓ and enter. pi has no side panel that shrinks the
- * transcript, so the overlay sits over its right edge; it only opens by
- * itself on terminals 140 columns or wider, where the transcript's prose
- * rarely reaches that far.
+ * Where they are drawn is `attachMinimap` in harness.ts: a fixed side column
+ * beside the transcript in fullscreen, a non-capturing overlay on the right
+ * edge in regular mode. Either way it shows by itself from 140 columns
+ * (`MINIMAP_MIN_COLS`), and the editor keeps the keyboard until `/panel focus`.
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";

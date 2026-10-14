@@ -26,7 +26,7 @@ import {
 import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { orqOAuth, refreshStoredSignIn } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
-import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./commands.ts";
+import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import {
 	callOrqTool,
 	CredentialsRejected,
@@ -91,7 +91,7 @@ function repoName(): string {
  */
 async function assetDir(): Promise<string> {
 	const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "..");
-	if (existsSync(join(pkgDir, "orqi-system-prompt.txt"))) return pkgDir;
+	if (existsSync(join(pkgDir, "src", "system-prompt.txt"))) return pkgDir;
 
 	const { ASSETS, HASH } = await import("./assets.generated.ts");
 	const unpacked = join(AGENT_DIR, "assets", HASH);
@@ -268,7 +268,7 @@ const makeServices = async () => {
 		modelRuntime,
 		resourceLoaderOptions: {
 			// The tools themselves are declared by pi's MCP; the prompt carries what their schemas leave out.
-			systemPrompt: readFileSync(join(pkgDir, "orqi-system-prompt.txt"), "utf8").replace("{{ORQ_TOOL_HINTS}}", hintsSection()),
+			systemPrompt: readFileSync(join(pkgDir, "src", "system-prompt.txt"), "utf8").replace("{{ORQ_TOOL_HINTS}}", hintsSection()),
 			// Ship a predictable skill set: the bundled orq + orqi skills only.
 			// Ambient discovery finds every skill installed on the machine (100+ here),
 			// which both bloats the prompt and makes orqi behave differently per user.
