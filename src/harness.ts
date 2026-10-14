@@ -5,6 +5,7 @@ import { apiBaseUrl, runOrq } from "./auth.ts";
 import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
 import {
 	contextLines,
+	memoryLines,
 	sectionLines,
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
@@ -201,6 +202,17 @@ export function orqHarness(deps: HarnessDeps) {
 		const traces: TraceRef[] = [];
 		let frame = 0;
 		let spinTimer: ReturnType<typeof setInterval> | undefined;
+		// Resident memory, sampled off the render path: the last twelve readings and the peak.
+		const memory: number[] = [];
+		let memoryPeak = 0;
+		let memoryTimer: ReturnType<typeof setInterval> | undefined;
+		const sampleMemory = () => {
+			const rss = process.memoryUsage.rss();
+			memory.push(rss);
+			if (memory.length > 12) memory.shift();
+			memoryPeak = Math.max(memoryPeak, rss);
+			render();
+		};
 		let resolvedWorkspace: string | undefined;
 		let workspaceAskedFor: string | undefined;
 		let savedTools: string[] | undefined;
@@ -434,8 +446,13 @@ export function orqHarness(deps: HarnessDeps) {
 				const teach = teachOn
 					? [sectionLines("teach", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")]
 					: [];
-				// Under the trajectory: what needs attention, then where the context goes, then the lesson.
-				const sections = [signalLines(found, inner), ...(split ? [contextLines(split, inner)] : []), ...teach];
+				// Under the trajectory: what needs attention, where the context goes, what orqi holds in memory, then the lesson.
+				const sections = [
+					signalLines(found, inner),
+					...(split ? [contextLines(split, inner)] : []),
+					memoryLines(memory, memoryPeak, inner),
+					...teach,
+				];
 				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
 				const height = Math.max(3, (process.stdout.rows ?? 30) - 6 - below);
 				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, teachOn ? card?.step : undefined);
@@ -607,6 +624,11 @@ export function orqHarness(deps: HarnessDeps) {
 		// ── events ────────────────────────────────────────────────────────────
 		pi.on("session_start", (_event, ctx) => {
 			ctxRef = ctx;
+			if (ctx.mode === "tui" && !memoryTimer) {
+				sampleMemory();
+				memoryTimer = setInterval(sampleMemory, 5000);
+				memoryTimer.unref?.();
+			}
 			// Every session is a thread: /new and /fork mint a new id, /resume keeps
 			// the file's own. The provider headers read this per request.
 			process.env.ORQI_THREAD_ID = ctx.sessionManager.getSessionId();
@@ -640,6 +662,8 @@ export function orqHarness(deps: HarnessDeps) {
 			}
 			if (spinTimer) clearInterval(spinTimer);
 			spinTimer = undefined;
+			if (memoryTimer) clearInterval(memoryTimer);
+			memoryTimer = undefined;
 			releaseKeys?.();
 			releaseKeys = undefined;
 			stopDecisions?.();
