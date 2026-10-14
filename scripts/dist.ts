@@ -16,9 +16,9 @@
 import { $ } from "bun";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checksumLine, sha256Hex, sidecar } from "./src/checksum.ts";
+import { checksumLine, sha256Hex, sidecar } from "../src/checksum.ts";
 
-const ROOT = import.meta.dir;
+const ROOT = join(import.meta.dir, "..");
 const OUT = join(ROOT, "dist");
 const TARGETS = [
 	{ target: "bun-darwin-arm64", label: "macos-arm64" },
@@ -26,7 +26,7 @@ const TARGETS = [
 	{ target: "bun-linux-x64", label: "linux-x64" },
 ];
 
-await $`bun ${join(ROOT, "build.ts")}`.quiet();
+await $`bun ${join(ROOT, "scripts", "build.ts")}`.quiet();
 mkdirSync(OUT, { recursive: true });
 
 for (const { target, label } of TARGETS) {

@@ -11,7 +11,7 @@ export function releaseBump(messages: readonly string[]): ReleaseBump | undefine
 	for (const message of messages) {
 		const subject = message.split("\n", 1)[0] ?? "";
 		let bump: ReleaseBump | undefined;
-		if (/^[a-z]+(?:\([^)]+\))?!:/.test(subject) || /^BREAKING[ -]CHANGE:/mi.test(message)) bump = "major";
+		if (/^[a-z]+(?:\([^)]+\))?!:/.test(subject) || /^BREAKING[ -]CHANGE:/im.test(message)) bump = "major";
 		else if (/^feat(?:\([^)]+\))?:/.test(subject)) bump = "minor";
 		else if (/^(?:fix|perf|revert)(?:\([^)]+\))?:/.test(subject)) bump = "patch";
 		if (bump && (!selected || rank[bump] > rank[selected])) selected = bump;

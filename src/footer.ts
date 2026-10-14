@@ -12,7 +12,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContextSample } from "./trajectory.ts";
 
 export interface FooterState {
-	/** `orq:acme`, or `orq:not connected`: the status commands.ts already maintains. */
+	/** `orq:acme`, or `orq:not connected`: the status connection.ts already maintains. */
 	workspace?: string;
 	/** What the user selected (`orq/auto`, `openai/gpt-5.6-terra`, `agent/support-triage`). */
 	selection?: string;
