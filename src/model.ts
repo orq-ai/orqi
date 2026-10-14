@@ -8,6 +8,7 @@
  * file - pi expands `$ORQ_API_KEY` at request time.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -148,19 +149,33 @@ async function fetchModels(token: string): Promise<ModelInfo[]> {
 	return [...models, ...agents].sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function catalogue(token: string, cachePath: string): Promise<{ models: ModelInfo[]; note?: string }> {
-	const cached = existsSync(cachePath) ? (JSON.parse(readFileSync(cachePath, "utf8")) as ModelInfo[]) : undefined;
-	if (cached?.length && !process.env.ORQI_REFRESH_MODELS && Date.now() - statSync(cachePath).mtimeMs < CATALOGUE_TTL_MS) {
-		return { models: cached };
+/** Which credential a cached catalogue belongs to: what one key sees, another may not. */
+const ownerOf = (token: string) => createHash("sha256").update(token).digest("hex").slice(0, 16);
+
+/**
+ * The workspace's models and agents, cached for a day per credential: a cache
+ * another credential wrote (a key with no agent access, say) is refetched, not
+ * served, and is only the fallback when the API cannot be reached at all.
+ */
+export async function catalogue(token: string, cachePath: string): Promise<{ models: ModelInfo[]; note?: string }> {
+	let cached: { owner?: string; models?: ModelInfo[] } | undefined;
+	try {
+		cached = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, "utf8")) : undefined;
+	} catch {
+		// A torn write: refetch.
+	}
+	const fresh = existsSync(cachePath) && Date.now() - statSync(cachePath).mtimeMs < CATALOGUE_TTL_MS;
+	if (cached?.models?.length && cached.owner === ownerOf(token) && fresh && !process.env.ORQI_REFRESH_MODELS) {
+		return { models: cached.models };
 	}
 	try {
 		const models = await fetchModels(token);
 		if (!models.some((model) => !model.kind)) throw new Error("no enabled chat models with tool calling in this workspace");
-		writeFileSync(cachePath, JSON.stringify(models));
+		writeFileSync(cachePath, JSON.stringify({ owner: ownerOf(token), models }));
 		return { models };
 	} catch (error) {
 		const note = `model catalogue unavailable (${error instanceof Error ? error.message : error})`;
-		return { models: cached?.length ? cached : FALLBACK, note };
+		return { models: cached?.models?.length ? cached.models : FALLBACK, note };
 	}
 }
 
@@ -267,7 +282,7 @@ function writeModelsJson(agentDir: string, models: ModelInfo[]): void {
 	);
 }
 
-const CACHE_FILE = "model-catalogue.v2.json"; // v2: prices, agents and classifiers; a v1 cache priced everything at $0
+const CACHE_FILE = "model-catalogue.v3.json"; // v3: keyed to the credential that fetched it; v2 served one key's view to every key
 
 export async function createOrqModelRuntime(agentDir: string, token: string): Promise<OrqModels> {
 	mkdirSync(agentDir, { recursive: true });
