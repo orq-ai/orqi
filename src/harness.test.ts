@@ -6,7 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
-import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
+import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
 import { brandTitle, exitSummary, repoOf } from "./harness.ts";
 import { contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
@@ -380,6 +380,17 @@ test("agents become models with their model's window; drafts are kept but not ta
 	expect(sorted[0]).toBe(live);
 	expect(agentRow(live)).toBe("support-triage       gpt-5.6-terra   live    5 tools · 2 KB · mem    $41.200");
 	expect(agentRow(draft)).toBe("· kb-test            gpt-5.6-luna    draft");
+	// The detail view enter opens from the filtered list: what the catalogue already knows, no call.
+	expect(agentDetail({ ...live, agent: { ...live.agent!, updated: "2026-10-12T09:30:00Z", description: "Routes tickets." } })).toEqual([
+		"  status   live",
+		"  model    openai/gpt-5.6-terra",
+		"  carries  5 tools · 2 KB · mem",
+		"  spend    $41.200",
+		"  updated  2026-10-12",
+		"",
+		"  Routes tickets.",
+	]);
+	expect(agentDetail(draft)).toEqual(["  status   draft: publish it in Studio to talk to it", "  model    openai/gpt-5.6-luna"]);
 	expect(isAgentModel("agent/x")).toBe(true);
 	expect(isAgentModel("openai/gpt-5.6-terra")).toBe(false);
 });
