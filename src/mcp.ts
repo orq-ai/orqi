@@ -22,7 +22,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { apiBaseUrl, mcpUrl, type Credential } from "./auth.ts";
+import { mcpUrl, type Credential } from "./auth.ts";
 import { VERSION } from "./branding.ts";
 import { argSummary } from "./trajectory.ts";
 
@@ -140,13 +140,28 @@ export function firstLine(error: unknown): string {
 		.split("\n")[0]!;
 }
 
-/** Ask the API whether a token is accepted. Throws "401 …" for a rejection, anything else for a stall. */
+/**
+ * Ask the MCP server whether it takes a token: one `initialize`, what pi's MCP
+ * sends first with the same header. Not a REST endpoint: a browser sign-in's
+ * token is scoped to MCP (`mcp:tools`, audience `/v2/mcp`), so `/v2/projects`
+ * answered it 403 "requires the project read permission" and orqi refused a
+ * token the server accepts. Throws "401 …"/"403 …" for a refusal, anything else
+ * for a stall.
+ */
 export async function probeCredential(token: string, fetchImpl: typeof fetch = fetch): Promise<void> {
-	const res = await fetchImpl(`${apiBaseUrl()}/v2/projects?limit=1`, {
-		headers: { Authorization: `Bearer ${token}` },
+	const res = await fetchImpl(mcpUrl(), {
+		method: "POST",
+		headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+		body: JSON.stringify({
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "orqi-credential-check", version: VERSION } },
+		}),
 		signal: AbortSignal.timeout(8_000),
 	});
 	if (res.status === 401 || res.status === 403) throw new Error(`${res.status} ${await res.text()}`);
+	await res.body?.cancel();
 	if (!res.ok && res.status >= 500) throw new Error(`server ${res.status}`);
 }
 

@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_TYPES } from "./subagent.ts";
+import { mcpUrl } from "./auth.ts";
 import {
 	authReason,
 	CredentialsRejected,
@@ -13,6 +14,7 @@ import {
 	keptTools,
 	orqServerConfig,
 	pickCredential,
+	probeCredential,
 	summarize,
 	TOOL_HINTS,
 	TOOL_PREFIX,
@@ -112,6 +114,31 @@ test("the orq server is registered with pi as a direct server, denylist hidden, 
 	// pi reconnects a registered server when its config object changes: that is how a new credential lands.
 	expect(orqServerConfig()).not.toBe(orqServerConfig());
 	expect(TOOL_PREFIX).toBe("mcp__orq__");
+});
+
+test("probeCredential asks the MCP server itself, the one thing the credential is picked for", async () => {
+	// A browser sign-in's token is scoped to MCP (mcp:tools, audience /v2/mcp): a REST
+	// endpoint such as /v2/projects answers it 403 "requires the project read permission",
+	// which read as a rejection of a token the MCP server accepts.
+	const calls: { url: string; method?: string; body?: string; auth?: string }[] = [];
+	const answer = (status: number, body = "") =>
+		(async (url: string, init?: RequestInit) => {
+			calls.push({
+				url,
+				method: init?.method,
+				body: String(init?.body ?? ""),
+				auth: (init?.headers as Record<string, string>)?.Authorization,
+			});
+			return new Response(body, { status });
+		}) as unknown as typeof fetch;
+	await probeCredential("tok", answer(200, "{}"));
+	expect(calls[0]!.url).toBe(mcpUrl());
+	expect(calls[0]!.method).toBe("POST");
+	expect(JSON.parse(calls[0]!.body!).method).toBe("initialize");
+	expect(calls[0]!.auth).toBe("Bearer tok");
+	await expect(probeCredential("tok", answer(401, '{"error":"invalid_token"}'))).rejects.toThrow(/^401 /);
+	await expect(probeCredential("tok", answer(403, "forbidden"))).rejects.toThrow(/^403 /);
+	await expect(probeCredential("tok", answer(503))).rejects.toThrow("server 503");
 });
 
 test("pickCredential takes the first accepted, names every rejection, and a stall is not a verdict", async () => {
