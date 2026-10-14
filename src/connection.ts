@@ -18,6 +18,7 @@ import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { refreshStoredSignIn, signInExpired } from "./oauth.ts";
 import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
+import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
 
 /**
@@ -138,6 +139,8 @@ export function orqCommands(
 	header: HeaderInfo,
 	agentDir = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent"),
 	boot: Boot = {},
+	/** Injected by main.ts: renews a verified browser/session credential. */
+	renewSession?: (force?: boolean) => Promise<SessionRenewal>,
 ) {
 	const authPath = join(agentDir, "auth.json");
 	const readCandidates = boot.readCandidates ?? credentialCandidates;
@@ -152,6 +155,7 @@ export function orqCommands(
 	// One that only stalled at boot got no verdict, so the first message tries it.
 	let switchTried = boot.loginRefused ? boot.candidates?.find((candidate) => candidate.source === "/login key")?.token : undefined;
 	let loginRefused = boot.loginRefused ?? false;
+	let lastRenewalFailure: string | undefined;
 
 	// A refusal is already pinned above the editor; a notice would only repeat it.
 	// Good news and a stall ("retrying on your next message") are not pinned anywhere.
@@ -371,16 +375,36 @@ export function orqCommands(
 		// starts no new run. The check re-reads the candidates (one 0.2 s whoami)
 		// and only knocks on the server when the set changed since the last refusal.
 		pi.on("input", async (_event, ctx) => {
+			// Renewed, not just re-read: the whoami inside also refreshes a CLI login
+			// session that is inside its last five minutes, so the turn that follows
+			// never sends a token the router is about to refuse.
+			if (renewSession && rejections.length === 0) {
+				const renewal: SessionRenewal = await renewSession().catch(
+					(error): SessionRenewal => ({
+						stale: true,
+						reason: error instanceof Error ? error.message : String(error),
+					}),
+				);
+				if (renewal.reason && renewal.reason !== lastRenewalFailure) {
+					lastRenewalFailure = renewal.reason;
+					ctx.ui.notify(
+						`orq could not renew the browser session: ${renewal.reason}\n→ /login or \`orq auth login\`, then retry`,
+						"warning",
+					);
+				} else if (renewal.refreshed) {
+					lastRenewalFailure = undefined;
+				}
+			}
 			// Connected, but /login (or /key) stored a different credential since:
 			// switch to it, so the session runs on what the user just signed in with
 			// and the header learns its workspace. Reading auth.json costs nothing;
 			// the whoami re-read only happens when the stored token actually changed.
 			if (rejections.length === 0) {
 				let stored = loginKey(authPath);
-				// A browser sign-in is a copy of the login session's 30-minute token, and
-				// pi refreshes it only at the model call, after this hook: an expired copy
-				// is no new credential. Refresh it from the session first, as pi would.
-				if (stored && signInExpired(authPath)) {
+				// Tests and third-party embedders may use the connection extension
+				// without main.ts's coordinator. Preserve the old recovery path there;
+				// the real CLI always supplies renewSession above.
+				if (!renewSession && stored && signInExpired(authPath)) {
 					const session = readCandidates(authPath).candidates.find((c) => c.source === SESSION_SOURCE)?.token;
 					if (!session || !refreshStoredSignIn(authPath, session)) return;
 					stored = session;

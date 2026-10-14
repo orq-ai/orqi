@@ -114,6 +114,16 @@ export function refreshStoredSignIn(authPath: string, sessionToken: string): boo
 	}
 }
 
+/** The token of pi's browser sign-in, never a pasted API key. */
+export function storedOAuthToken(authPath: string): string | undefined {
+	try {
+		const stored = JSON.parse(readFileSync(authPath, "utf8"))?.orq;
+		return stored?.type === "oauth" && typeof stored.access === "string" ? stored.access : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** A browser sign-in pi stored whose token is past the expiry pi would refresh it at. */
 export function signInExpired(authPath: string, now = Date.now()): boolean {
 	try {

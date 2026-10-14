@@ -24,7 +24,7 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
-import { orqOAuth, refreshStoredSignIn } from "./oauth.ts";
+import { orqOAuth, refreshStoredSignIn, storedOAuthToken } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import {
@@ -32,12 +32,14 @@ import {
 	CredentialsRejected,
 	firstLine,
 	hintsSection,
+	isAuthError,
 	orqMcp,
 	pickCredential,
 	type Reconnected,
 	type Rejection,
 } from "./mcp.ts";
 import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, talkable } from "./model.ts";
+import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
@@ -169,6 +171,25 @@ const loginRefused =
 	refusedAtBoot.some((rejection) => rejection.source === storedLogin.source) &&
 	!(credential.source === SESSION_SOURCE && refreshStoredSignIn(AUTH_PATH, credential.token));
 const mcp = orqMcp(Boolean(credential));
+// The active source, not whether its token happens to be a JWT, decides if it
+// is safe to replace with the CLI login-session token. API and profile keys
+// may also be JWT-shaped and must never be silently replaced.
+let activeCredential = credential;
+const sessionRenewal = createSessionRenewal({
+	currentToken: () => process.env.ORQ_API_KEY,
+	isRenewable: () =>
+		activeCredential?.source === SESSION_SOURCE || (activeCredential?.source === "/login key" && Boolean(storedOAuthToken(AUTH_PATH))),
+	readFreshSession: async () => credentialCandidates(AUTH_PATH).candidates.find((candidate) => candidate.source === SESSION_SOURCE)?.token,
+});
+async function renewSession(force = false) {
+	const renewal = await sessionRenewal.ensureSession(force);
+	if (!renewal.refreshed) return renewal;
+	process.env.ORQ_API_KEY = renewal.refreshed;
+	refreshStoredSignIn(AUTH_PATH, renewal.refreshed);
+	if (activeCredential) activeCredential = { ...activeCredential, token: renewal.refreshed };
+	mcp.refresh();
+	return renewal;
+}
 // With nothing accepted the model runs on the best guess; a bad key only
 // degrades the model catalogue to its fallback, and /login replaces it.
 // Every router call names the repo it came from, so a team's Threads tab can be
@@ -229,6 +250,7 @@ const commands = orqCommands(
 		const previous = process.env.ORQ_API_KEY;
 		// The model runtime and pi's MCP both read $ORQ_API_KEY: move both, then reconnect the server.
 		process.env.ORQ_API_KEY = result.credential.token;
+		activeCredential = result.credential;
 		mcp.refresh();
 		// Reload the models when the boot had nothing that worked (they are the
 		// fallback) or the credential changed: what one key sees, its workspace's
@@ -257,6 +279,9 @@ const commands = orqCommands(
 		welcome,
 		loginRefused: Boolean(loginRefused),
 	},
+	// Session-token renewal: one whoami per expiry window, shared by the input
+	// hook and the slash commands' direct MCP calls.
+	renewSession,
 );
 
 // Services are built per session, not once: pi marks a session's extension
@@ -292,8 +317,26 @@ const makeServices = async () => {
 					agentDir: AGENT_DIR,
 					catalogue: () => models.catalogue,
 					toolCount: () => mcp.toolNames().length,
-					// Slash commands cannot run tools in pi, so they make one direct call.
-					callTool: (name, args) => callOrqTool(name, args),
+					// Slash commands cannot run tools in pi, so they make one direct
+					// call - after waiting for any session renewal in flight, so the
+					// short-lived connection never carries a token about to expire.
+					callTool: async (name, args) => {
+						await renewSession();
+						try {
+							return await callOrqTool(name, args);
+						} catch (error) {
+							// A direct MCP call can be the first request after an unexpectedly
+							// revoked session. Renew once and retry; API keys never renew.
+							if (!isAuthError(error)) throw error;
+							const renewal = await renewSession(true);
+							if (!renewal.refreshed) {
+								if (renewal.reason)
+									throw new Error(`orq could not renew the browser session: ${renewal.reason}\n→ /login or \`orq auth login\`, then retry`);
+								throw error;
+							}
+							return callOrqTool(name, args);
+						}
+					},
 					workspace: () => header.workspace,
 					routing,
 				}),

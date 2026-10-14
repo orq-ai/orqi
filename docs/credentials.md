@@ -135,11 +135,15 @@ server, which makes pi reconnect it with the new credential.
 A stall clears the memo, so the next message retries even a set that was refused earlier; a
 rejection records the set, so the same keys are not sent again until something changes.
 
-A browser sign-in stores a copy of the login session's 30-minute token, and pi refreshes that copy
-only at the model call, which runs after the `input` event. So when the stored copy has expired, the
-`input` event first refreshes it from the login session (one `whoami`), then switches to the fresh
-token. Without that step, a session left idle past the token's life knocked with the expired copy
-and pinned `the switch failed` while the model, refreshed a moment later, kept working.
+A browser sign-in stores a copy of the login session's 30-minute token. Five minutes before that
+copy expires, orqi refreshes the CLI session through `whoami`, then atomically updates the router
+credential, pi's OAuth copy, and the MCP connection before the next turn. Direct MCP calls made by
+slash commands use the same single-flight renewal. If renewal fails, orqi keeps the current
+credential and shows one recovery hint: run `/login` or `orq auth login`.
+
+This applies only to a browser sign-in or the CLI login-session credential. Pasted API keys,
+exported `ORQ_API_KEY` values, and profile keys are never automatically replaced, even when they
+are JWT-shaped; rotate those explicitly with `/key`, the environment, or the profile.
 
 ## 5. Which workspace is shown
 
