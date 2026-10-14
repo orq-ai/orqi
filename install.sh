@@ -143,6 +143,13 @@ if [ -n "${ORQI_VERSION:-}" ]; then
 	fi
 	version=${ORQI_VERSION#v}
 	url="https://github.com/$REPO/releases/download/v$version/$asset"
+	# Warn, never refuse: running install.sh with a pin is an explicit install,
+	# but an ORQI_VERSION left exported by a project's .env is easy to miss.
+	current=$("$INSTALL_DIR/orqi" --version 2>/dev/null || true)
+	if echo "$current" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' &&
+		awk -v a="$version" -v b="$current" 'BEGIN { split(a, x, "."); split(b, y, "."); for (i = 1; i <= 3; i++) if (x[i] != y[i]) exit !(x[i] < y[i]); exit 1 }'; then
+		err "warning: ORQI_VERSION=$ORQI_VERSION downgrades the installed orqi $current; unset ORQI_VERSION for the latest release"
+	fi
 else
 	url="https://github.com/$REPO/releases/latest/download/$asset"
 fi
