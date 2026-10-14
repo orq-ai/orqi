@@ -35,6 +35,8 @@ export interface ModelInfo {
 	intelligence?: number;
 	/** Agents only: status, the model it runs on, and what it carries. */
 	agent?: {
+		/** Studio's id for the agent (`_id`): its page is routed by this, not by the key. */
+		id?: string;
 		status: string;
 		model?: string;
 		tools: number;
@@ -109,6 +111,7 @@ export function agentInfo(agent: any, chat: ModelInfo[]): ModelInfo | undefined 
 		maxTokens: base?.maxTokens,
 		cost: base?.cost,
 		agent: {
+			id: typeof agent._id === "string" ? agent._id : undefined,
 			status,
 			model: modelId,
 			tools: agent.settings?.tools?.length ?? 0,

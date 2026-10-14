@@ -21,8 +21,13 @@ export function traceUrl(host: string, workspace: string, traceId: string, spanI
 	return `${host}/${workspace}/traces/(trace:${traceId}${spanId ? `//span:${spanId}` : ""})`;
 }
 
-export function agentUrl(host: string, workspace: string, key: string): string {
-	return `${host}/${workspace}/agents/${encodeURIComponent(key)}`;
+/**
+ * An agent's Studio page. Studio routes agents by id (`_id`), not by key: a
+ * key in the path opens nothing. Without an id (a catalogue cached before the
+ * id was kept), the workspace's agent list.
+ */
+export function agentUrl(host: string, workspace: string, id: string | undefined): string {
+	return id ? `${host}/${workspace}/agents/${encodeURIComponent(id)}` : `${host}/${workspace}/agents`;
 }
 
 /** `30b08a66f5e9…0185`: long ids shortened for one-line notices. */
