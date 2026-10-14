@@ -12,6 +12,7 @@ import { brandTitle, exitSummary, repoOf } from "./harness.ts";
 import { contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
+	memoryLines,
 	minimapRow,
 	minimapRows,
 	minimapSummary,
@@ -753,14 +754,27 @@ test("panel sections: a rule, an indented body, one calm line when empty", () =>
 		signalLines({ errors: 0, tools: 6, oneWay: 0, pending: 0 }, 36)
 			.slice(1)
 			.map((line) => line.trimEnd()),
-	).toEqual(["  no warnings · 0 one-way calls"]);
+	).toEqual(["  no warnings · 0 irreversible calls"]);
 	expect(
 		signalLines({ loop: { tool: "get_span", count: 4 }, errors: 1, tools: 6, oneWay: 0, pending: 0 }, 40)
 			.slice(1)
 			.map((line) => line.trimEnd()),
-	).toEqual(["  ⚠ tool loop  get_span ×4 same args", "  errors 1/6 · one-way calls 0"]);
-	expect(signalLines({ errors: 0, tools: 2, oneWay: 0, pending: 1 }, 36)[1]!.trimEnd()).toBe("  one-way calls 0 · pending 1");
+	).toEqual(["  ⚠ tool loop  get_span ×4 same args", "  errors 1/6 · irreversible calls 0"]);
+	expect(signalLines({ errors: 0, tools: 2, oneWay: 0, pending: 1 }, 36)[1]!.trimEnd()).toBe("  irreversible calls 0 · pending 1");
 	expect(minimapSummary([], 2, 0.014, 1)).toBe("0 steps · turn 2 · $0.014 · ⚠ 1");
+});
+
+test("the memory section: resident memory now, the last minute scaled to the peak, and the peak", () => {
+	const MB = 1_048_576;
+	const rule = ` ─ memory ${"─".repeat(26)}`;
+	expect(memoryLines([], 0, 36)).toEqual([rule, "  measuring…".padEnd(36)]);
+	const rising = [100, 120, 140, 160, 180, 200, 212, 205, 190, 184, 184, 184, 184].map((mb) => mb * MB);
+	const [head, line] = memoryLines(rising, 212 * MB, 36);
+	expect(head).toBe(rule);
+	// Twelve bars: the oldest sample has scrolled out; the peak is a full block.
+	expect(line!.trimEnd()).toBe("  184 MB  ▅▆▇▇████▇▇▇▇  peak 212 MB");
+	expect(visibleWidth(line!)).toBe(36);
+	expect(memoryLines([1.2 * 1024 * MB], 1.2 * 1024 * MB, 36)[1]!.trimEnd()).toBe("  1.2 GB  █             peak 1.2 GB");
 });
 
 test("minimap rows mark a call waiting on the gate and the step a teach card is about", () => {

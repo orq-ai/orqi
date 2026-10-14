@@ -173,18 +173,41 @@ export function contextLines(split: ContextSplit, width: number): string[] {
 export function signalLines(signals: Signals, width: number): string[] {
 	const body: string[] = [];
 	if (signals.loop) body.push(`⚠ tool loop  ${signals.loop.tool} ×${signals.loop.count} same args`);
-	if (!signals.loop && !signals.errors && !signals.pending) body.push(`no warnings · ${signals.oneWay} one-way calls`);
+	if (!signals.loop && !signals.errors && !signals.pending) body.push(`no warnings · ${signals.oneWay} irreversible calls`);
 	else
 		body.push(
 			[
 				signals.errors ? `errors ${signals.errors}/${signals.tools}` : "",
-				`one-way calls ${signals.oneWay}`,
+				`irreversible calls ${signals.oneWay}`,
 				signals.pending ? `pending ${signals.pending}` : "",
 			]
 				.filter(Boolean)
 				.join(" · "),
 		);
 	return sectionLines("signals", body, width);
+}
+
+const SPARK = "▁▂▃▄▅▆▇█";
+
+/** `184 MB`, `1.2 GB`. */
+const megabytes = (bytes: number) => {
+	const mb = bytes / 1_048_576;
+	return mb < 1024 ? `${Math.round(mb)} MB` : `${(mb / 1024).toFixed(1)} GB`;
+};
+
+/**
+ *   184 MB  ▅▆▇▇████▇▇▇▇  peak 212 MB
+ * orqi's resident memory now, the last twelve samples scaled to the peak (a
+ * leak reads as a climb), and the peak since the session started.
+ */
+export function memoryLines(samples: number[], peak: number, width: number): string[] {
+	const now = samples.at(-1);
+	if (now === undefined) return sectionLines("memory", [], width, "measuring…");
+	const bars = samples
+		.slice(-12)
+		.map((rss) => SPARK[Math.min(SPARK.length - 1, Math.floor((rss / Math.max(1, peak)) * SPARK.length))])
+		.join("");
+	return sectionLines("memory", [`${megabytes(now).padEnd(7)} ${bars.padEnd(12)}  peak ${megabytes(peak)}`], width);
 }
 
 /** The peek view for one step: its header line and full content, wrapped by the caller. */
