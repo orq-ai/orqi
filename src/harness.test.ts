@@ -8,7 +8,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
-import { brandTitle, exitSummary, repoOf } from "./harness.ts";
+import { brandTitle, exitSummary, orqHarness, repoOf } from "./harness.ts";
 import { contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
@@ -395,6 +395,44 @@ test("agents become models with their model's window; drafts are kept but not ta
 	expect(agentDetail(draft)).toEqual(["  status   draft: publish it in Studio to talk to it", "  model    openai/gpt-5.6-luna"]);
 	expect(isAgentModel("agent/x")).toBe(true);
 	expect(isAgentModel("openai/gpt-5.6-terra")).toBe(false);
+});
+
+test("/refresh reloads the catalogue and re-selects the active model", async () => {
+	let catalogue: ModelInfo[] = [{ id: "openai/old" }];
+	let refreshed = 0;
+	let selected: unknown;
+	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
+	const pi = {
+		on: () => {},
+		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
+		registerEntryRenderer: () => {},
+		registerShortcut: () => {},
+		setModel: async (model: unknown) => {
+			selected = model;
+		},
+	};
+	orqHarness({
+		agentDir: "/tmp/orqi-refresh-test",
+		catalogue: () => catalogue,
+		refreshCatalogue: async () => {
+			refreshed++;
+			catalogue = [{ id: "openai/new" }];
+			return { ok: true };
+		},
+		toolCount: () => 0,
+		callTool: async () => ({ text: "", isError: false }),
+		workspace: () => undefined,
+	})(pi as any);
+	const notices: string[] = [];
+	const fresh = { provider: "orq", id: "openai/new" };
+	await commands.get("refresh")!("", {
+		model: fresh,
+		modelRegistry: { find: (provider: string, id: string) => (provider === "orq" && id === "openai/new" ? fresh : undefined) },
+		ui: { notify: (message: string) => notices.push(message) },
+	});
+	expect(refreshed).toBe(1);
+	expect(selected).toBe(fresh);
+	expect(notices).toContain("Refreshed 1 enabled models and 0 managed agents.");
 });
 
 test("the inspect view reads get_agent's JSON", () => {

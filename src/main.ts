@@ -295,6 +295,7 @@ const makeServices = async () => {
 					// Slash commands cannot run tools in pi, so they make one direct call.
 					callTool: (name, args) => callOrqTool(name, args),
 					workspace: () => header.workspace,
+					refreshCatalogue,
 					routing,
 				}),
 			],
@@ -339,6 +340,15 @@ function statusLine(connection: string, note = bootNote): string {
 	]
 		.filter(Boolean)
 		.join(" · ");
+}
+
+/** Reload the workspace catalogue in place; every session service reads it by reference. */
+async function refreshCatalogue(): Promise<{ ok: boolean; note?: string }> {
+	const ok = await refreshOrqModels(AGENT_DIR, process.env.ORQ_API_KEY ?? "", models).catch(() => false);
+	if (!ok) return { ok: false, note: models.note };
+	routing.refresh(models.catalogue);
+	header.status = statusLine(header.signedOut ? "not signed in" : "orq MCP");
+	return { ok: true };
 }
 
 const skills = services.resourceLoader.getSkills().skills.length;

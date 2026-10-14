@@ -36,6 +36,8 @@ export interface HarnessDeps {
 	callTool: (name: string, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>;
 	/** The workspace the header shows: a key, or a short id when only an API key is known. */
 	workspace: () => string | undefined;
+	/** Fetch enabled models and managed agents, then reload pi's model registry. */
+	refreshCatalogue?: () => Promise<{ ok: boolean; note?: string }>;
 	/** The project the credential is scoped to, when the Projects API names one. */
 	project?: () => string | undefined;
 	/** `orq/auto`: its pool and decision feed. */
