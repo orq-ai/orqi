@@ -188,7 +188,7 @@ export function cardLines(card: { concept: Concept; used: string[] }, width: num
 		card.concept.title,
 		...wrap(card.concept.body, width),
 		...(used.length <= width ? [used] : wrap(used, width)),
-		...(card.concept.docs ? [`docs  ${hyperlink(card.concept.docs, `${DOCS}${card.concept.docs}`)}`] : []),
+		...(card.concept.docs ? [`docs  ${hyperlink("open", `${DOCS}${card.concept.docs}`)}`] : []),
 	];
 }
 

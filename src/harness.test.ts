@@ -982,12 +982,16 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(lines.every((line) => visibleWidth(line) <= 34)).toBe(true);
 	expect(lines.slice(-2)).toEqual([
 		"used  list_traces · get_span",
-		`docs  ${hyperlink("observability/traces", "https://docs.orq.ai/docs/observability/traces")}`,
+		`docs  ${hyperlink("open", "https://docs.orq.ai/docs/observability/traces")}`,
 	]);
 	expect(cardLine(first)).toStartWith("▸ teach  trace: One request through your agent or deployment, kept as a tree of spans:");
 	expect(cardLine(first)).toContain(
 		hyperlink("https://docs.orq.ai/docs/observability/traces", "https://docs.orq.ai/docs/observability/traces"),
 	);
+	// The longest current docs path must still fit the compact inspector.
+	const skillLines = cardLines({ concept: GLOSSARY.skill!, used: ["list_skills"] }, 32);
+	expect(skillLines.at(-1)).toBe(`docs  ${hyperlink("open", "https://docs.orq.ai/docs/integrations/code-assistants/skills")}`);
+	expect(skillLines.every((line) => visibleWidth(line) <= 32)).toBe(true);
 	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(
 		` orqi v${VERSION}  workspace acme · routing orq/auto · teach · thread 01a1…6b7b`,
 	);
