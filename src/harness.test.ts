@@ -1,6 +1,7 @@
 /** Checks for the teaching harness: trajectory, footer, minimap, export, links, agents. */
 
 import { expect, test } from "bun:test";
+import { VERSION } from "./branding.ts";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -659,11 +660,11 @@ test("the fixed header says who and where, dropping segments from the right as i
 		plugin: "orq plugin 3.10.0 (updated)",
 	};
 	expect(headerBar(state, 200)).toBe(
-		" orqi  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)",
+		` orqi v${VERSION}  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)`,
 	);
 	const narrow = headerBar(state, 70);
-	expect(narrow).toBe(" orqi  workspace acme · agent support-triage · project Arian");
-	expect(headerBar({ connected: false }, 80)).toBe(" orqi  not signed in · /login");
+	expect(narrow).toBe(` orqi v${VERSION}  workspace acme · agent support-triage · project Arian`);
+	expect(headerBar({ connected: false }, 80)).toBe(` orqi v${VERSION}  not signed in · /login`);
 	expect(visibleWidth(headerBar(state, 20))).toBeLessThanOrEqual(20);
 });
 
@@ -980,7 +981,7 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(cardLine(first)).toStartWith("▸ teach  trace: One request through your agent or deployment, kept as a tree of spans:");
 	expect(cardLine(first)).toEndWith("used list_traces · get_span · https://docs.orq.ai/docs/observability/traces");
 	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(
-		" orqi  workspace acme · routing orq/auto · teach · thread 01a1…6b7b",
+		` orqi v${VERSION}  workspace acme · routing orq/auto · teach · thread 01a1…6b7b`,
 	);
 });
 
