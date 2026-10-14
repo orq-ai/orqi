@@ -516,9 +516,52 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 		},
 	});
 
-	pi.registerCommand("agents", {
-		description: "the workspace's managed agents: talk, inspect, traces, open in Studio",
+	const refreshCatalogue = async (ctx: ExtensionContext, announce = false): Promise<boolean> => {
+		if (!deps.refreshCatalogue) {
+			if (announce) ctx.ui.notify("Live catalogue refresh is unavailable in this session.", "warning");
+			return false;
+		}
+		const active = ctx.model && { provider: ctx.model.provider, id: ctx.model.id };
+		const result = await deps
+			.refreshCatalogue()
+			.catch((error) => ({ ok: false, note: error instanceof Error ? error.message : String(error) }));
+		if (!result.ok) {
+			ctx.ui.notify(`Could not refresh the model catalogue${result.note ? `: ${result.note}` : "."}`, "warning");
+			return false;
+		}
+		// ModelRuntime.refresh replaces model objects. Re-select the same id so pi
+		// does not keep stale context-window or pricing metadata.
+		const replacement = active && ctx.modelRegistry.find(active.provider, active.id);
+		if (replacement) await pi.setModel(replacement).catch(() => false);
+		else if (active) {
+			const fallback = deps.catalogue().find((model) => !model.kind);
+			const model = fallback && ctx.modelRegistry.find("orq", fallback.id);
+			if (model) {
+				await pi.setModel(model).catch(() => false);
+				ctx.ui.notify(`The active model ${active.id} is no longer enabled; switched to ${fallback!.id}.`, "warning");
+			}
+		}
+		if (announce) {
+			const models = deps.catalogue().filter((model) => !model.kind).length;
+			const agents = deps.catalogue().filter((model) => model.kind === "agent").length;
+			ctx.ui.notify(`Refreshed ${models} enabled models and ${agents} managed agents.`);
+		}
+		return true;
+	};
+
+	pi.registerCommand("refresh", {
+		description: "refresh enabled Model Garden models and managed agents",
 		handler: async (_args, ctx) => {
+			ctx.ui.notify("Refreshing enabled models and managed agents…");
+			await refreshCatalogue(ctx, true);
+		},
+	});
+
+	pi.registerCommand("agents", {
+		description: "the workspace's managed agents: talk, inspect, traces, open in Studio; refreshes first",
+		handler: async (_args, ctx) => {
+			// Agent create/update events are not pushed to a running terminal.
+			await refreshCatalogue(ctx);
 			const agents = sortAgents(deps.catalogue().filter((model) => model.kind === "agent"));
 			if (agents.length === 0) {
 				ctx.ui.notify("No agents visible with this credential (or the catalogue predates agents: ORQI_REFRESH_MODELS=1).", "warning");

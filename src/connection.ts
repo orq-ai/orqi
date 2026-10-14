@@ -49,6 +49,7 @@ export const ORQI_COMMANDS = [
 	"whatsnew",
 	"agent",
 	"agents",
+	"refresh",
 	"route",
 	"tools",
 	"skills",
