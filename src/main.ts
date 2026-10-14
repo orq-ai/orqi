@@ -226,12 +226,16 @@ const plugin = pluginResources(pkgDir, AGENT_DIR, ORQI_COMMANDS);
 const commands = orqCommands(
 	async (next: Credential[]) => {
 		const result: Reconnected = { credential: await pickCredential(next), added: [] };
+		const previous = process.env.ORQ_API_KEY;
 		// The model runtime and pi's MCP both read $ORQ_API_KEY: move both, then reconnect the server.
 		process.env.ORQ_API_KEY = result.credential.token;
 		mcp.refresh();
-		// The boot had nothing that worked, so the models are the fallback:
-		// reload them now that the server takes a credential.
-		if (models.note && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
+		// Reload the models when the boot had nothing that worked (they are the
+		// fallback) or the credential changed: what one key sees, its workspace's
+		// models and its agents, another may not, and /login or /workspace kept
+		// the old key's list until a restart.
+		const changed = previous !== result.credential.token;
+		if ((models.note || changed) && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
 			routing.refresh(models.catalogue);
 			result.modelsReloaded = true;
 		}

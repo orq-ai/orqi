@@ -1,13 +1,13 @@
 /** Cross-cutting checks: themes, the header, model filtering, and the names orqi registers with pi. Run with `bun test`. */
 
-import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { headerLines } from "./branding.ts";
 import { ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import { orqHarness } from "./harness.ts";
-import { onlyOrq, PROVIDER_ID } from "./model.ts";
+import { catalogue, onlyOrq, PROVIDER_ID } from "./model.ts";
 
 const noReconnect = async () => ({ credential: { token: "", source: "" }, count: 0, added: [] });
 
@@ -192,4 +192,38 @@ test("our commands never collide with a pi built-in", () => {
 	expect(registered).toContain("whatsnew");
 	expect(registered).toContain("trajectory");
 	expect(registered.filter((name) => builtins.has(name))).toEqual([]);
+});
+
+test("the model catalogue cache belongs to the credential that fetched it", async () => {
+	// A cache written by one credential (12 models, no agent access) was served to the
+	// next for 24 h: a /login that could see 149 agents still got "no agents visible".
+	const dir = mkdtempSync(join(tmpdir(), "orqi-catalogue-"));
+	const path = join(dir, "model-catalogue.json");
+	const chat = (id: string) => ({ enabled: true, model_type: "chat", has_functions: true, refId: id, metadata: {} });
+	const answers: Record<string, Record<string, unknown>> = {
+		"sk-orq-thin": { "/v2/models": [chat("a/thin")] },
+		"sk-orq-full": { "/v2/models": [chat("a/full")], "/v2/agents": { data: [{ key: "helper", status: "live" }] } },
+	};
+	let calls = 0;
+	const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string, init?: RequestInit) => {
+		calls++;
+		const token = String((init?.headers as Record<string, string> | undefined)?.Authorization).slice(7);
+		const body = answers[token]![new URL(url).pathname];
+		return body === undefined ? new Response("forbidden", { status: 403 }) : Response.json(body);
+	}) as unknown as typeof fetch);
+	try {
+		const thin = await catalogue("sk-orq-thin", path);
+		expect(thin.models.map((m) => m.id)).toEqual(["a/thin"]);
+		// Same credential within the TTL: served from disk, no request.
+		calls = 0;
+		expect((await catalogue("sk-orq-thin", path)).models.map((m) => m.id)).toEqual(["a/thin"]);
+		expect(calls).toBe(0);
+		// Another credential: fetched afresh, agents included.
+		const full = await catalogue("sk-orq-full", path);
+		expect(full.models.map((m) => m.id)).toEqual(["a/full", "agent/helper"]);
+		expect(calls).toBeGreaterThan(0);
+	} finally {
+		fetchSpy.mockRestore();
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
