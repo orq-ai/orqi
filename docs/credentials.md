@@ -8,8 +8,10 @@ token refresh and the session file; orqi shells out to it and reads what it is t
 
 ## 1. Which credential
 
-Up to five candidates, best first. Each is checked with one REST call (`GET /v2/projects`, 8 s
-timeout), where a 401 or 403 selects the next one; the winner goes into `ORQ_API_KEY`, which pi's
+Up to five candidates, best first. Each is checked with one MCP `initialize` against the orq server
+(8 s timeout), the request pi's MCP sends first with the same header, where a 401 or 403 selects
+the next one. Not a REST endpoint: a browser sign-in's token is scoped to MCP (`mcp:tools`,
+audience `/v2/mcp`), and `GET /v2/projects` answered it 403 for want of project read permission; the winner goes into `ORQ_API_KEY`, which pi's
 MCP sends to the orq server. A stall or a 5xx moves on too: it is the server's problem, not the
 key's, and a good login session at candidate 4 must not be lost to a hang on candidate 2. When
 nothing is accepted and something stalled, orqi boots on the first candidate as its best guess and
