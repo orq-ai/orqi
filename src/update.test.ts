@@ -1,6 +1,6 @@
 /** Checks for shipping orqi: `orqi update`, install.sh, release checksums and the npm packages. Run with `bun test`. */
 
-import { expect, spyOn, test } from "bun:test";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import {
 	chmodSync,
 	existsSync,
@@ -42,6 +42,12 @@ import {
 	updateCommand,
 	writeCache,
 } from "./update.ts";
+
+// These tests spawn node, sh and freshly written binaries. Alone they take
+// under a second, but on macOS the first exec of a new file can stall while it
+// is scanned: one ran 15.8 s inside a full suite, past bun's 5 s default, and
+// failed intermittently while passing every rerun.
+setDefaultTimeout(30_000);
 
 const noReconnect = async () => ({ credential: { token: "", source: "" }, count: 0, added: [] });
 
