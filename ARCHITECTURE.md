@@ -13,9 +13,9 @@ orqi
 │   ├── subagent tool            recursive in-process sessions   src/subagent.ts
 │   ├── skills                   bundled skills/                 (additionalSkillPaths)
 │   ├── system prompt            src/system-prompt.txt
-│   ├── slash commands           auth, workspace, update        src/commands.ts
+│   ├── slash commands           auth, workspace, update        src/connection.ts
 │   │                            the harness views                src/harness.ts
-│   └── startup header           session entry, not stdout        src/commands.ts
+│   └── startup header           session entry, not stdout        src/connection.ts
 ├── model            orq AI Router as a pi provider              src/model.ts
 ├── credentials       orq profile, ORQ_API_KEY or the login session  src/auth.ts
 └── self-update       `orqi update`, daily check, header note     src/update.ts
@@ -28,21 +28,23 @@ orqi
 | `src/mcp.ts` | The `orq` server registered with pi's MCP, credential choice, result rendering, hints |
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
-| `src/commands.ts` | The pi extension: startup header entry, the not-connected warning and reconnect, the first-run welcome, plus `/key /whoami /workspace /reconnect /doctor /update` |
+| `src/connection.ts` | The connection half of the pi extension (a command goes here only if it is about the connection; the rest are `harness.ts`'s): startup header entry, the not-connected warning and reconnect, the first-run welcome, plus `/key /whoami /workspace /reconnect /doctor /update` |
 | `src/oauth.ts` | "Sign in with an account → orq.ai (browser)" in pi's `/login`, running `orq auth login` |
 | `src/onboarding.ts` | `MaskedInput` for `/key`, the welcome's options, the `/learn` prompts |
 | `src/skills.ts` | `pluginResources` (one copy of the orq plugin, `DROPPED_COMMANDS`), the daily plugin update, `/skills` details |
 | `src/frontmatter.ts` | `normalizeCommand`: quotes plugin command frontmatter that strict YAML would reject |
 | `src/update.ts` | `orqi update`: daily release check, header note, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
-| `src/harness.ts` | The teaching harness extension: footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, `/cost /trace /open /trajectory /whatsnew /agents /agent /panel /teach /context /tools /skills /route /learn /btw` |
+| `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, and the commands that own state: `/route /teach /panel` |
+| `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
+| `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
 | `src/router.ts` | `orq/auto` and the `orq-decisions` classifier provider: pool, policy, Decisions API adapter, route log |
 | `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
-| `src/footer.ts` / `src/minimap.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, trajectory rows (`minimap.ts`, the module's old name) and the inspector's signals, context and teach sections, boxed overlay panels |
+| `src/footer.ts` / `src/inspector-rows.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, the inspector's trajectory rows and its signals, context and teach sections, boxed overlay panels |
 | `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows and inspect view; the changelog parser |
-| `build.ts` / `dist.ts` | Embed assets; cross-compile tarballs |
+| `scripts/build.ts` / `scripts/dist.ts` / `scripts/vendor.ts` | Embed assets; cross-compile tarballs; vendor the upstream skills |
 | `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
 
 `pluginResources` in `src/skills.ts` hands pi exactly one copy of the orq marketplace plugin, its
