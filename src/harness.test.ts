@@ -6,7 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
-import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
+import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
 import { brandTitle, exitSummary, repoOf } from "./harness.ts";
 import { contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
@@ -353,6 +353,7 @@ test("agents become models with their model's window; drafts are kept but not ta
 	];
 	const live = agentInfo(
 		{
+			_id: "01KTEHSESRY6K1ZE9C7E2H2ZJ5",
 			key: "support-triage",
 			display_name: "Support triage",
 			status: "live",
@@ -372,6 +373,7 @@ test("agents become models with their model's window; drafts are kept but not ta
 		contextWindow: 272_000,
 	});
 	expect(talkable(live)).toBe(true);
+	expect(live.agent?.id).toBe("01KTEHSESRY6K1ZE9C7E2H2ZJ5");
 	const draft = agentInfo({ key: "kb-test", status: "draft", model: "openai/gpt-5.6-luna" }, chat)!;
 	expect(talkable(draft)).toBe(false);
 	expect(agentInfo({ status: "live" }, chat)).toBeUndefined();
@@ -380,6 +382,17 @@ test("agents become models with their model's window; drafts are kept but not ta
 	expect(sorted[0]).toBe(live);
 	expect(agentRow(live)).toBe("support-triage       gpt-5.6-terra   live    5 tools · 2 KB · mem    $41.200");
 	expect(agentRow(draft)).toBe("· kb-test            gpt-5.6-luna    draft");
+	// The detail view enter opens from the filtered list: what the catalogue already knows, no call.
+	expect(agentDetail({ ...live, agent: { ...live.agent!, updated: "2026-10-12T09:30:00Z", description: "Routes tickets." } })).toEqual([
+		"  status   live",
+		"  model    openai/gpt-5.6-terra",
+		"  carries  5 tools · 2 KB · mem",
+		"  spend    $41.200",
+		"  updated  2026-10-12",
+		"",
+		"  Routes tickets.",
+	]);
+	expect(agentDetail(draft)).toEqual(["  status   draft: publish it in Studio to talk to it", "  model    openai/gpt-5.6-luna"]);
 	expect(isAgentModel("agent/x")).toBe(true);
 	expect(isAgentModel("openai/gpt-5.6-terra")).toBe(false);
 });
@@ -408,7 +421,11 @@ test("Studio links: thread, trace and agent, on the my. host", () => {
 	expect(threadUrl("https://my.orq.ai", "acme", "7c1e-9a")).toBe("https://my.orq.ai/acme/traces/threads?id=7c1e-9a");
 	expect(traceUrl("https://my.orq.ai", "acme", "01J9K2", "5d0f")).toBe("https://my.orq.ai/acme/traces/(trace:01J9K2//span:5d0f)");
 	expect(traceUrl("https://my.orq.ai", "acme", "01J9K2")).toBe("https://my.orq.ai/acme/traces/(trace:01J9K2)");
-	expect(agentUrl("https://my.orq.ai", "acme", "support-triage")).toBe("https://my.orq.ai/acme/agents/support-triage");
+	// Studio routes an agent by its id (`_id`), not its key; an unknown id opens the list.
+	expect(agentUrl("https://my.orq.ai", "acme", "01KTEHSESRY6K1ZE9C7E2H2ZJ5")).toBe(
+		"https://my.orq.ai/acme/agents/01KTEHSESRY6K1ZE9C7E2H2ZJ5",
+	);
+	expect(agentUrl("https://my.orq.ai", "acme", undefined)).toBe("https://my.orq.ai/acme/agents");
 	expect(shortId("30b08a66f5e9ef2eda687eb5d43b0185")).toBe("30b0…0185");
 });
 

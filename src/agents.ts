@@ -21,18 +21,20 @@ export function sortAgents(agents: ModelInfo[]): ModelInfo[] {
 }
 
 /** One `/agents` row: key, model, status, what it carries, spend. Fixed columns. */
+/** `5 tools · 2 KB · mem`, or `team of 3 · …`: what an agent brings to a conversation. */
+const carriesOf = (info: NonNullable<ModelInfo["agent"]>) =>
+	[
+		info.team ? `team of ${info.team}` : `${info.tools} tools`,
+		info.knowledgeBases ? `${info.knowledgeBases} KB` : "",
+		info.memory ? "mem" : "",
+	]
+		.filter(Boolean)
+		.join(" · ");
+
 export function agentRow(agent: ModelInfo): string {
 	const info = agent.agent;
 	const key = agent.id.replace(/^agent\//, "");
-	const carries = info
-		? [
-				info.team ? `team of ${info.team}` : `${info.tools} tools`,
-				info.knowledgeBases ? `${info.knowledgeBases} KB` : "",
-				info.memory ? "mem" : "",
-			]
-				.filter(Boolean)
-				.join(" · ")
-		: "";
+	const carries = info ? carriesOf(info) : "";
 	const draft = info && !["live", "published"].includes(info.status);
 	return [
 		`${draft ? "· " : ""}${key}`.padEnd(20).slice(0, 20),
@@ -45,6 +47,24 @@ export function agentRow(agent: ModelInfo): string {
 	]
 		.join(" ")
 		.trimEnd();
+}
+
+/**
+ * What enter opens from the `/agents` list: the catalogue's own fields, no
+ * call, so it opens at once; `i` asks the server for the full definition.
+ */
+export function agentDetail(agent: ModelInfo): string[] {
+	const info = agent.agent;
+	if (!info) return [];
+	const draft = !["live", "published"].includes(info.status);
+	return [
+		`  status   ${draft ? `${info.status}: publish it in Studio to talk to it` : info.status}`,
+		`  model    ${info.model ?? "?"}`,
+		...(draft ? [] : [`  carries  ${carriesOf(info)}`]),
+		...(!draft && info.totalCost ? [`  spend    ${dollars(info.totalCost)}`] : []),
+		...(info.updated ? [`  updated  ${String(info.updated).slice(0, 10)}`] : []),
+		...(info.description ? ["", `  ${info.description}`] : []),
+	];
 }
 
 /** The `i` view, from `get_agent`'s JSON: model, tools, knowledge, memory, evaluators, instructions. */

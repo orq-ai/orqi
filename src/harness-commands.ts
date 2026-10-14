@@ -12,7 +12,7 @@ import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
+import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { runOrq } from "./auth.ts";
 import { CHANGELOG_URL, VERSION } from "./branding.ts";
 import { dollars, shortModel, tokens } from "./footer.ts";
@@ -82,7 +82,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 						? isAgentModel(ctx.model?.id) && {
 								label: `agent ${ctx.model!.id.slice(6)}`,
 								id: ctx.model!.id,
-								url: workspace && agentUrl(host, workspace, ctx.model!.id.slice(6)),
+								url: workspace && agentUrl(host, workspace, deps.catalogue().find((model) => model.id === ctx.model!.id)?.agent?.id),
 							}
 						: { label: `thread ${shortId(threadId)}`, id: threadId, url: workspace && threadUrl(host, workspace, threadId) };
 			if (!target) {
@@ -525,51 +525,70 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				return;
 			}
 			const { host, workspace } = await studio();
-			const disabled = new Set(agents.flatMap((agent, i) => (talkable(agent) ? [] : [i])));
 			const keyOf = (i: number) => agents[i]!.id.slice(6);
+			// Typing filters the list, so the letter actions live one level down, as in /skills.
 			await panel(ctx, (close) => ({
 				title: `agents in ${deps.workspace() ?? "this workspace"}`,
 				badge: `${agents.length}`,
 				rows: agents.map(agentRow),
 				selectable: true,
-				disabled,
+				filterable: true,
 				height: 14,
-				hint: "enter talk · i inspect · t traces · o open in Studio · esc close",
+				hint: "type to filter · ↑↓ move · enter details · esc close",
 				keys: {
-					enter: async (i) => {
-						close();
-						await talkTo(keyOf(i), ctx);
-					},
-					i: async (i) => {
-						const result = await deps.callTool("get_agent", { key: keyOf(i) }).catch((error) => ({ text: String(error), isError: true }));
-						void panel(ctx, {
-							title: `${keyOf(i)} · ${agents[i]!.agent?.status ?? ""}`,
-							rows: inspectLines(result.text),
-							hint: "esc close",
-						});
-					},
-					t: async (i) => {
-						const result = await deps
-							.callTool("list_traces", { entity_key: keyOf(i), limit: 10 })
-							.catch((error) => ({ text: String(error), isError: true }));
-						let rows: string[];
-						try {
-							rows = (JSON.parse(result.text)?.items ?? []).map(
-								(t: any) =>
-									`${t.trace_id ?? t.context?.trace_id}  ${String(t.start_time ?? "").slice(0, 19)}  ${t.duration ?? "?"} ms  ${t.total_cost ? dollars(t.total_cost) : ""}`,
-							);
-						} catch {
-							rows = [result.text.slice(0, 300)];
-						}
-						void panel(ctx, {
-							title: `traces · ${keyOf(i)}`,
-							rows: rows.length ? rows : ["no traces"],
-							hint: "/trace <id> for one · esc close",
-						});
-					},
-					o: (i) => {
-						if (workspace) openUrl(agentUrl(host, workspace, keyOf(i)));
-						else ctx.ui.notify("Workspace key unknown for this API key: set ORQI_WORKSPACE=<key>.", "warning");
+					enter: (i) => {
+						const live = talkable(agents[i]!);
+						void panel(ctx, (closeDetail) => ({
+							title: `agent ${keyOf(i)}`,
+							badge: agents[i]!.agent?.status,
+							rows: agentDetail(agents[i]!),
+							hint: `${live ? "enter talk · " : ""}i inspect · t traces · o open in Studio · esc back`,
+							// Every action is about the agent opened, `i` from the list, not the detail row index.
+							keys: {
+								...(live
+									? {
+											enter: async () => {
+												closeDetail();
+												close();
+												await talkTo(keyOf(i), ctx);
+											},
+										}
+									: {}),
+								i: async () => {
+									const result = await deps
+										.callTool("get_agent", { key: keyOf(i) })
+										.catch((error) => ({ text: String(error), isError: true }));
+									void panel(ctx, {
+										title: `${keyOf(i)} · ${agents[i]!.agent?.status ?? ""}`,
+										rows: inspectLines(result.text),
+										hint: "esc close",
+									});
+								},
+								t: async () => {
+									const result = await deps
+										.callTool("list_traces", { entity_key: keyOf(i), limit: 10 })
+										.catch((error) => ({ text: String(error), isError: true }));
+									let rows: string[];
+									try {
+										rows = (JSON.parse(result.text)?.items ?? []).map(
+											(t: any) =>
+												`${t.trace_id ?? t.context?.trace_id}  ${String(t.start_time ?? "").slice(0, 19)}  ${t.duration ?? "?"} ms  ${t.total_cost ? dollars(t.total_cost) : ""}`,
+										);
+									} catch {
+										rows = [result.text.slice(0, 300)];
+									}
+									void panel(ctx, {
+										title: `traces · ${keyOf(i)}`,
+										rows: rows.length ? rows : ["no traces"],
+										hint: "/trace <id> for one · esc close",
+									});
+								},
+								o: () => {
+									if (workspace) openUrl(agentUrl(host, workspace, agents[i]!.agent?.id));
+									else ctx.ui.notify("Workspace key unknown for this API key: set ORQI_WORKSPACE=<key>.", "warning");
+								},
+							},
+						}));
 					},
 				},
 			}));
