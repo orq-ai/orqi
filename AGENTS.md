@@ -84,7 +84,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   Whenever nothing was accepted (no candidate, or every one refused) the TUI opens signed out: the
   opening screen swaps its pitch for a sign-in invitation (`SIGN_IN` in `src/branding.ts`), the
   fixed header reads `not signed in · /login`, the orq MCP server is not registered (pi would only
-  say "requires authentication · run /mcp"), and a welcome (`welcome` in `src/commands.ts`) whose
+  say "requires authentication · run /mcp"), and a welcome (`welcome` in `src/connection.ts`) whose
   every path ends in the same `recover`, so a workshop laptop with nothing set up gets to a working
   session without leaving it.
 - **A failed `whoami` prints the CLI's stderr before the login hint.** A dropped flag, a stalled

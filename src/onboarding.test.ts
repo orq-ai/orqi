@@ -9,7 +9,7 @@ import { loginKey } from "./auth.ts";
 import { normalizeCommand } from "./frontmatter.ts";
 import { expiresAt, orqOAuth, parseDeviceLogin, refreshStoredSignIn } from "./oauth.ts";
 import { headerLines } from "./branding.ts";
-import { NO_CREDENTIAL, orqCommands } from "./commands.ts";
+import { NO_CREDENTIAL, orqCommands } from "./connection.ts";
 import {
 	learnRows,
 	LEARN_PROMPTS,

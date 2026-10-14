@@ -26,7 +26,7 @@ import {
 import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { orqOAuth, refreshStoredSignIn } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
-import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./commands.ts";
+import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import {
 	callOrqTool,
 	CredentialsRejected,

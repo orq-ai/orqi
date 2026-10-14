@@ -1,8 +1,12 @@
 /**
- * The orqi pi extension: the startup header, plus the workspace slash commands.
+ * The connection half of orqi's pi extension: who you are on orq, which
+ * workspace you are pointed at, and getting back on when a credential fails.
+ * The startup header entry, the not-connected warning and its recovery, the
+ * first-run welcome, and the commands that ask the orq CLI (`/key /reconnect
+ * /whoami /workspace /doctor /update`).
  *
- * pi already covers sessions, models, themes and settings; what it cannot know
- * about is who you are on orq and which workspace you are pointed at.
+ * Everything the harness shows (footer, inspector, panels and their commands)
+ * is `harness.ts`. A new command goes here only if it is about the connection.
  */
 
 import { homedir } from "node:os";
@@ -23,7 +27,8 @@ import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WEL
 export type ReconnectFn = (candidates: Credential[]) => Promise<Reconnected>;
 
 /**
- * Every slash command orqi registers (here and in src/harness.ts). The orq
+ * Every slash command orqi registers (here, in src/harness.ts and in
+ * src/harness-commands.ts). The orq
  * plugin's own commands skip these names, and a test keeps the list honest.
  */
 export const ORQI_COMMANDS = [
