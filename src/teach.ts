@@ -5,6 +5,7 @@
  * `/trajectory` exports only the conversation.
  */
 
+import { hyperlink } from "@earendil-works/pi-tui";
 import { bareName } from "./mcp.ts";
 import type { Step } from "./trajectory.ts";
 
@@ -187,12 +188,12 @@ export function cardLines(card: { concept: Concept; used: string[] }, width: num
 		card.concept.title,
 		...wrap(card.concept.body, width),
 		...(used.length <= width ? [used] : wrap(used, width)),
-		...(card.concept.docs ? [`docs  ${card.concept.docs}`] : []),
+		...(card.concept.docs ? [`docs  ${hyperlink(card.concept.docs, `${DOCS}${card.concept.docs}`)}`] : []),
 	];
 }
 
 /** The one dim line regular mode shows above the editor instead. */
 export function cardLine(card: { concept: Concept; used: string[] }): string {
 	const sentence = card.concept.body.split(/(?<=\.)\s/)[0]!;
-	return `▸ teach  ${card.concept.title}: ${sentence}  used ${card.used.join(" · ")}${card.concept.docs ? ` · ${DOCS}${card.concept.docs}` : ""}`;
+	return `▸ teach  ${card.concept.title}: ${sentence}  used ${card.used.join(" · ")}${card.concept.docs ? ` · ${hyperlink(`${DOCS}${card.concept.docs}`, `${DOCS}${card.concept.docs}`)}` : ""}`;
 }

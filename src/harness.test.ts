@@ -5,7 +5,7 @@ import { VERSION } from "./branding.ts";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
@@ -199,6 +199,7 @@ test("the footer degrades by width band", () => {
 		workspace: "orq:acme",
 		selection: "orq/auto",
 		physical: "openai/gpt-5.6-sol",
+		thinking: "high",
 		input: 88_100,
 		output: 6_200,
 		cost: 0.113,
@@ -209,7 +210,9 @@ test("the footer degrades by width band", () => {
 	};
 	const wide = footerLine(state, 140);
 	expect(wide).toStartWith(" orq.ai · acme · "); // the orq.ai mark leads
-	expect(wide).toContain("orq.ai · acme · orq/auto → gpt-5.6-sol · ↑88k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools");
+	expect(wide).toContain(
+		"orq.ai · acme · orq/auto → gpt-5.6-sol · think high · ↑88k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools",
+	);
 	expect(wide.endsWith("main ")).toBe(true);
 	expect(wide.length).toBe(140);
 	const medium = footerLine(state, 110);
@@ -224,7 +227,7 @@ test("the footer degrades by width band", () => {
 	expect(visibleWidth(footerLine(state, 40))).toBeLessThanOrEqual(40);
 	// Selection equal to the physical model shows once.
 	expect(footerLine({ ...state, selection: "openai/gpt-5.6-terra", physical: "openai/gpt-5.6-terra" }, 140)).toContain(
-		"· gpt-5.6-terra · ",
+		"· gpt-5.6-terra · think high · ",
 	);
 });
 
@@ -976,10 +979,15 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(wrap("one two three four", 9)).toEqual(["one two", "three", "four"]);
 	const lines = cardLines(first, 34);
 	expect(lines[0]).toBe("trace");
-	expect(lines.every((line) => line.length <= 34)).toBe(true);
-	expect(lines.slice(-2)).toEqual(["used  list_traces · get_span", "docs  observability/traces"]);
+	expect(lines.every((line) => visibleWidth(line) <= 34)).toBe(true);
+	expect(lines.slice(-2)).toEqual([
+		"used  list_traces · get_span",
+		`docs  ${hyperlink("observability/traces", "https://docs.orq.ai/docs/observability/traces")}`,
+	]);
 	expect(cardLine(first)).toStartWith("▸ teach  trace: One request through your agent or deployment, kept as a tree of spans:");
-	expect(cardLine(first)).toEndWith("used list_traces · get_span · https://docs.orq.ai/docs/observability/traces");
+	expect(cardLine(first)).toContain(
+		hyperlink("https://docs.orq.ai/docs/observability/traces", "https://docs.orq.ai/docs/observability/traces"),
+	);
 	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(
 		` orqi v${VERSION}  workspace acme · routing orq/auto · teach · thread 01a1…6b7b`,
 	);

@@ -387,6 +387,9 @@ export function orqHarness(deps: HarnessDeps) {
 							workspace: headerShown ? undefined : footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
 							selection: selectionName(ctxRef?.model),
 							physical: physical && physical !== ctxRef?.model?.id ? physical : undefined,
+							// Managed agents choose their own reasoning configuration; pi's
+							// local level is not sent to them.
+							thinking: isAgentModel(ctxRef?.model?.id) ? undefined : chatLevel,
 							input: totals.input + totals.cacheRead,
 							output: totals.output,
 							cost: totals.cost,
