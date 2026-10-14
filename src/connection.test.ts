@@ -218,7 +218,11 @@ test("sessionFileOf takes the session path from whoami, whatever the CLI names i
 });
 
 /** A fake pi plus a fake UI, wired to orqCommands with a stubbed candidate reader. */
-function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, boot: Boot & { header?: any; agentDir?: string } = {}) {
+function recoveryHarness(
+	reconnect: (candidates: Credential[]) => Promise<any>,
+	boot: Boot & { header?: any; agentDir?: string } = {},
+	renewSession?: (force?: boolean) => Promise<any>,
+) {
 	const handlers = new Map<string, (event: any, ctx: any) => any>();
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
 	const registered: string[] = [];
@@ -244,7 +248,7 @@ function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, 
 	} as any;
 	const header = boot.header ?? { name: "orqi", version: "v0", status: "not connected", cwd: "~" };
 	const toolNames: string[] = [];
-	const factory = orqCommands(reconnect, () => toolNames, header, boot.agentDir ?? "/nonexistent", boot);
+	const factory = orqCommands(reconnect, () => toolNames, header, boot.agentDir ?? "/nonexistent", boot, renewSession);
 	factory(pi);
 	const input = () => handlers.get("input")!({ type: "input", text: "hi", source: "interactive" }, ctx);
 	return {
@@ -265,6 +269,20 @@ function recoveryHarness(reconnect: (candidates: Credential[]) => Promise<any>, 
 		},
 	};
 }
+
+test("an unrecoverable browser session warns once before the turn", async () => {
+	let renewals = 0;
+	const h = recoveryHarness(noReconnect, {}, async () => {
+		renewals++;
+		return { stale: true, reason: "the login session could not be renewed; run `orq auth login`" };
+	});
+	await h.input();
+	await h.input();
+	expect(renewals).toBe(2);
+	expect(h.notices).toEqual([
+		"orq could not renew the browser session: the login session could not be renewed; run `orq auth login`\n→ /login or `orq auth login`, then retry",
+	]);
+});
 
 const bad: Credential = { token: "sk-orq-bad", source: "ORQ_API_KEY" };
 const good: Credential = { token: "sk-orq-good", source: "/login key" };
