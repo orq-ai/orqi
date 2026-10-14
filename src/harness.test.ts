@@ -353,6 +353,7 @@ test("agents become models with their model's window; drafts are kept but not ta
 	];
 	const live = agentInfo(
 		{
+			_id: "01KTEHSESRY6K1ZE9C7E2H2ZJ5",
 			key: "support-triage",
 			display_name: "Support triage",
 			status: "live",
@@ -372,6 +373,7 @@ test("agents become models with their model's window; drafts are kept but not ta
 		contextWindow: 272_000,
 	});
 	expect(talkable(live)).toBe(true);
+	expect(live.agent?.id).toBe("01KTEHSESRY6K1ZE9C7E2H2ZJ5");
 	const draft = agentInfo({ key: "kb-test", status: "draft", model: "openai/gpt-5.6-luna" }, chat)!;
 	expect(talkable(draft)).toBe(false);
 	expect(agentInfo({ status: "live" }, chat)).toBeUndefined();
@@ -419,7 +421,11 @@ test("Studio links: thread, trace and agent, on the my. host", () => {
 	expect(threadUrl("https://my.orq.ai", "acme", "7c1e-9a")).toBe("https://my.orq.ai/acme/traces/threads?id=7c1e-9a");
 	expect(traceUrl("https://my.orq.ai", "acme", "01J9K2", "5d0f")).toBe("https://my.orq.ai/acme/traces/(trace:01J9K2//span:5d0f)");
 	expect(traceUrl("https://my.orq.ai", "acme", "01J9K2")).toBe("https://my.orq.ai/acme/traces/(trace:01J9K2)");
-	expect(agentUrl("https://my.orq.ai", "acme", "support-triage")).toBe("https://my.orq.ai/acme/agents/support-triage");
+	// Studio routes an agent by its id (`_id`), not its key; an unknown id opens the list.
+	expect(agentUrl("https://my.orq.ai", "acme", "01KTEHSESRY6K1ZE9C7E2H2ZJ5")).toBe(
+		"https://my.orq.ai/acme/agents/01KTEHSESRY6K1ZE9C7E2H2ZJ5",
+	);
+	expect(agentUrl("https://my.orq.ai", "acme", undefined)).toBe("https://my.orq.ai/acme/agents");
 	expect(shortId("30b08a66f5e9ef2eda687eb5d43b0185")).toBe("30b0…0185");
 });
 

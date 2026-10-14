@@ -82,7 +82,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 						? isAgentModel(ctx.model?.id) && {
 								label: `agent ${ctx.model!.id.slice(6)}`,
 								id: ctx.model!.id,
-								url: workspace && agentUrl(host, workspace, ctx.model!.id.slice(6)),
+								url: workspace && agentUrl(host, workspace, deps.catalogue().find((model) => model.id === ctx.model!.id)?.agent?.id),
 							}
 						: { label: `thread ${shortId(threadId)}`, id: threadId, url: workspace && threadUrl(host, workspace, threadId) };
 			if (!target) {
@@ -584,7 +584,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 									});
 								},
 								o: () => {
-									if (workspace) openUrl(agentUrl(host, workspace, keyOf(i)));
+									if (workspace) openUrl(agentUrl(host, workspace, agents[i]!.agent?.id));
 									else ctx.ui.notify("Workspace key unknown for this API key: set ORQI_WORKSPACE=<key>.", "warning");
 								},
 							},
