@@ -27,7 +27,8 @@ import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WEL
 export type ReconnectFn = (candidates: Credential[]) => Promise<Reconnected>;
 
 /**
- * Every slash command orqi registers (here and in src/harness.ts). The orq
+ * Every slash command orqi registers (here, in src/harness.ts and in
+ * src/harness-commands.ts). The orq
  * plugin's own commands skip these names, and a test keeps the list honest.
  */
 export const ORQI_COMMANDS = [
