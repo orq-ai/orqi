@@ -4,7 +4,8 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { routeLine, selectionName } from "./harness.ts";
+import { routeLine } from "./harness.ts";
+import { selectionName } from "./harness-views.ts";
 import type { ModelInfo } from "./model.ts";
 import {
 	ClassifyForbidden,

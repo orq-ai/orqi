@@ -3,7 +3,7 @@
  * anyway and asks how to sign in, and `/learn` hands out one guided prompt per
  * platform area.
  *
- * The welcome reuses the recovery machinery in `src/commands.ts`: a pasted key
+ * The welcome reuses the recovery machinery in `src/connection.ts`: a pasted key
  * lands where pi's `/login orq` would store it (candidate #0), and the
  * reconnect that follows is the same one the `input` hook runs.
  */
