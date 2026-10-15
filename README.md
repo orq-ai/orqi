@@ -18,6 +18,7 @@ orq MCP tools, the orq skills and the orqi system prompt already wired in.
 ```
 orqi                                   # interactive TUI
 orqi "why did my agent fail today?"    # one-shot, prints and exits
+orqi --session <id>                    # resume a session (the id printed when one ends)
 ```
 
 ## Install

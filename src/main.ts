@@ -7,6 +7,7 @@
  *
  *   orqi                 interactive TUI
  *   orqi "<prompt>"      one-shot, prints the answer and exits
+  orqi --session <id>  resume a session (id, id prefix or .jsonl path)
  *   orqi --version       print the version and exit
  */
 
@@ -46,9 +47,25 @@ import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { runUpdate } from "./update.ts";
+import { resolveSession, resumeHint } from "./resume.ts";
+
+/** The SessionManager for `--session <arg>`, or a clear exit when it names nothing here. */
+async function openSession(arg: string): Promise<SessionManager> {
+	const resolved = await resolveSession(arg, process.cwd());
+	if ("path" in resolved) return SessionManager.open(resolved.path);
+	console.error(
+		"elsewhere" in resolved
+			? `session ${arg} belongs to ${resolved.elsewhere}: cd there and run orqi --session ${arg}`
+			: `no orqi session matches ${arg}; /resume inside orqi lists them`,
+	);
+	process.exit(1);
+}
 import { brandBuiltinCommands, redirectPiBugCommand } from "./bug.ts";
 
-const oneShot = process.argv[2];
+// `orqi --session <id>` resumes a session (the command pi's quit hint names);
+// anything else in argv[2] is a one-shot prompt.
+const sessionArg = process.argv[2] === "--session" ? (process.argv[3] ?? "") : undefined;
+const oneShot = sessionArg === undefined ? process.argv[2] : undefined;
 const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent");
 
 // Answered before anything else runs: argv[2] is otherwise a prompt, so `orqi
@@ -72,6 +89,10 @@ if (oneShot === "--help" || oneShot === "-h") {
 
 Sign in with \`orq auth login\` or export ORQ_API_KEY.`);
 	process.exit(0);
+}
+if (sessionArg === "") {
+	console.error("orqi --session needs a session id: the one printed when a session ends, or /resume inside orqi");
+	process.exit(2);
 }
 if (oneShot === "update") {
 	process.exit(await runUpdate(process.argv.slice(3), AGENT_DIR));
@@ -468,8 +489,17 @@ try {
 		const runtime = await createAgentSessionRuntime(createRuntime, {
 			cwd: process.cwd(),
 			agentDir: AGENT_DIR,
-			sessionManager: SessionManager.create(process.cwd()),
+			sessionManager: sessionArg ? await openSession(sessionArg) : SessionManager.create(process.cwd()),
 		});
+		// pi prints its resume hint with its own name after the TUI stops, from a
+		// constant baked into its package; rewrite it on the way out, as brandTitle
+		// does for the terminal title.
+		const write = process.stdout.write.bind(process.stdout);
+		process.stdout.write = ((chunk: unknown, ...rest: unknown[]) =>
+			(write as (...args: unknown[]) => boolean)(
+				typeof chunk === "string" ? resumeHint(chunk) : chunk,
+				...rest,
+			)) as typeof process.stdout.write;
 		await new InteractiveMode(runtime, {}).run();
 		await runtime.dispose();
 	}
