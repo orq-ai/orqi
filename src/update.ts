@@ -358,9 +358,10 @@ export async function checkNow(
 export async function maybeCheckUpdate(
 	agentDir: string,
 	fetchLatest: () => Promise<string | undefined> = latestVersion,
+	env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | undefined> {
 	try {
-		if (!checkDue(readCache(agentDir))) return pendingUpdate(readCache(agentDir));
+		if (!checkDue(readCache(agentDir), env)) return pendingUpdate(readCache(agentDir), env);
 		const latest = await checkNow(agentDir, fetchLatest);
 		return latest && isNewer(latest, VERSION) ? latest : undefined;
 	} catch {

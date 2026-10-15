@@ -364,11 +364,13 @@ test("maybeCheckUpdate asks again even over a fresh cache, and announces only a 
 	const dir = mkdtempSync(join(tmpdir(), "orqi-notice-"));
 	try {
 		// A minute-old "nothing newer" must not hide a release published since.
+		// env: {} by hand — `checkDue` returns false under CI, where the runner sets
+		// CI=true, and this test asserts the launch path asks anyway.
 		writeFileSync(join(dir, "update-check.json"), JSON.stringify({ checked_at: Date.now(), latest: VERSION }));
-		expect(await maybeCheckUpdate(dir, async () => "999.0.0")).toBe("999.0.0");
+		expect(await maybeCheckUpdate(dir, async () => "999.0.0", {})).toBe("999.0.0");
 		expect(readCache(dir)?.latest).toBe("999.0.0");
-		expect(await maybeCheckUpdate(dir, async () => "0.0.1")).toBeUndefined(); // not newer than this binary
-		expect(await maybeCheckUpdate(dir, async () => undefined)).toBeUndefined(); // offline: silent
+		expect(await maybeCheckUpdate(dir, async () => "0.0.1", {})).toBeUndefined(); // not newer than this binary
+		expect(await maybeCheckUpdate(dir, async () => undefined, {})).toBeUndefined(); // offline: silent
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
