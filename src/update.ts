@@ -3,12 +3,12 @@
  *
  * orqi usually ships as a single binary with no package manager watching it,
  * so nothing tells the user a newer release exists unless orqi checks itself.
- * Once a day (same cadence and same silence-on-failure contract as
- * src/skills.ts) the CLI asks GitHub's releases API for the latest tag and
- * caches the answer; the header surfaces it as a one-line note. The check
- * never blocks boot - it is fire-and-forget, and a stalled or offline GitHub
- * costs nothing because the worst acceptable outcome is "the notice is a day
- * stale", never a slow or broken startup.
+ * At launch (at most hourly, with the same silence-on-failure contract as
+ * src/skills.ts) the CLI reads the redirect on github.com/<repo>/releases/latest
+ * for the latest tag and caches the answer; a bordered notice appears above the
+ * editor when it is newer. The check never blocks boot - it runs after the
+ * session starts, and a stalled or offline GitHub costs nothing because the
+ * worst acceptable outcome is "no notice this time", never a slow or broken startup.
  *
  * How the update lands depends on the install: npm installs are handed to
  * npm (`updateViaNpm`), Homebrew and source checkouts are refused with the
@@ -45,11 +45,13 @@ import {
 } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { $ } from "bun";
-import { VERSION } from "./branding.ts";
+import { color, MUTED, PULSE_ORANGE, TEXT, VERSION } from "./branding.ts";
 import { parseChecksum, sha256Hex, sidecar } from "./checksum.ts";
-import { CHECK_TTL_MS } from "./skills.ts";
 
 export const REPO = "orq-ai/orqi";
+
+/** How long a release answer is trusted: an hour, so a relaunch does not refetch but a new release shows the same day. */
+export const UPDATE_CHECK_TTL_MS = 60 * 60 * 1000;
 
 export type InstallMethod = "binary" | "homebrew" | "npm" | "source";
 
@@ -209,7 +211,7 @@ export function checkDue(cache: UpdateCache | undefined, env: NodeJS.ProcessEnv 
 	if (env.ORQI_REFRESH_UPDATE === "1") return true;
 	if (env.CI) return false;
 	if (!cache) return true;
-	return now - cache.checked_at >= CHECK_TTL_MS;
+	return now - cache.checked_at >= UPDATE_CHECK_TTL_MS;
 }
 
 /**
@@ -300,15 +302,19 @@ export function releaseUrl(asset: string, tag?: string): string {
  * a released version - an unparsable "latest" must never trigger an update
  * prompt (same rule as `isNewer`).
  */
-export async function latestVersion(timeoutMs = FETCH_TIMEOUT_MS): Promise<string | undefined> {
+export async function latestVersion(timeoutMs = FETCH_TIMEOUT_MS, fetcher: typeof fetch = fetch): Promise<string | undefined> {
 	try {
-		const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+		// github.com answers /releases/latest with a redirect to /releases/tag/vX.Y.Z.
+		// Reading that Location, not api.github.com, keeps a check on every launch
+		// out of the API's 60-per-hour-per-IP limit, which a workshop room shares.
+		const response = await fetcher(`https://github.com/${REPO}/releases/latest`, {
+			method: "HEAD",
+			redirect: "manual",
 			signal: AbortSignal.timeout(timeoutMs),
 		});
-		if (!response.ok) return undefined;
-		const tag = ((await response.json()) as { tag_name?: string }).tag_name;
+		const tag = response.headers.get("location")?.match(/\/releases\/tag\/([^/?#]+)$/)?.[1];
 		if (!tag) return undefined;
-		const version = normalizeTag(tag);
+		const version = normalizeTag(decodeURIComponent(tag));
 		return /^\d+\.\d+\.\d+$/.test(version) ? version : undefined;
 	} catch {
 		return undefined;
@@ -345,13 +351,27 @@ export async function checkNow(
  * timestamped; an interrupted or unresolved request never reaches persistence
  * and is therefore retried on the next run.
  */
-export async function maybeCheckUpdate(agentDir: string): Promise<void> {
+export async function maybeCheckUpdate(agentDir: string): Promise<string | undefined> {
 	try {
-		if (!checkDue(readCache(agentDir))) return;
-		await checkNow(agentDir);
+		if (!checkDue(readCache(agentDir))) return pendingUpdate(readCache(agentDir));
+		const latest = await checkNow(agentDir);
+		return latest && isNewer(latest, VERSION) ? latest : undefined;
 	} catch {
-		// Silent by design; the header note and /doctor reflect whatever landed.
+		// Silent by design; the launch notice reflects whatever landed.
+		return undefined;
 	}
+}
+
+/** The block shown above the editor when a newer release exists. Pure: the caller picks the command. */
+export function updateNotice(current: string, latest: string, command: string): string[] {
+	const rule = color("─".repeat(60), PULSE_ORANGE);
+	return [
+		rule,
+		color(" Update available", PULSE_ORANGE),
+		color(` orqi ${current} → ${latest}. Run: ${command}`, TEXT),
+		color(` What changed: https://github.com/${REPO}/releases/tag/v${latest}`, MUTED),
+		rule,
+	];
 }
 
 const USAGE = `orqi update - update orqi to the latest published release

@@ -50,8 +50,9 @@ to it. Without it, only a pasted or exported key works.
 orqi update             # update to the latest release (through npm for an npm install)
 ```
 
-orqi checks once a day and surfaces a header note when a newer release exists; `orqi update` itself
-never runs automatically.
+When you open orqi it checks for a newer release (at most once an hour) and, if there is one, shows an
+"Update available" notice above the editor with the command to run, like pi does; it clears after your
+first message. `orqi update` itself never runs automatically.
 
 ## What it ships with builtin
 
@@ -91,7 +92,7 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_LOCAL_SKILLS` | Also discover skills installed on the machine (off by default; 100+ ambient skills would swamp the prompt) |
 | `ORQI_ALL_TOOLS` | Set to `1` to also expose the invocation tools that are filtered out by default ([why](ARCHITECTURE.md#tools)) |
 | `ORQI_SKILLS_UPDATE` | Set to `0` to pin skills to whatever the binary shipped with, disabling the daily check |
-| `ORQI_UPDATE_CHECK` | Set to `0` to pin: no daily update check, no header notice. `orqi update` still works when run directly |
+| `ORQI_UPDATE_CHECK` | Set to `0` to pin: no update check, no launch notice. `orqi update` still works when run directly |
 | `ORQI_REFRESH_MODELS`, `ORQI_REFRESH_SKILLS`, `ORQI_REFRESH_UPDATE` | Refresh the model catalogue at startup, force a skills check, or force an update check now, ignoring the 24 h TTL. In a running session, use `/refresh` instead. |
 | `ORQI_AGENT_DIR`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | Override the agent dir / endpoints (on-prem) |
 | `ORQI_VERSION` | Pins the release tag: which one `install.sh` installs, and which one `orqi update` installs |

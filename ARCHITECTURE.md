@@ -18,7 +18,7 @@ orqi
 │   └── startup header           session entry, not stdout        src/connection.ts
 ├── model            orq AI Router as a pi provider              src/model.ts
 ├── credentials       orq profile, ORQ_API_KEY or the login session  src/auth.ts
-└── self-update       `orqi update`, daily check, header note     src/update.ts
+└── self-update       `orqi update`, launch check and notice      src/update.ts
 ```
 
 | File | Does |
@@ -33,7 +33,7 @@ orqi
 | `src/onboarding.ts` | `MaskedInput` for `/key`, the welcome's options, the `/learn` prompts |
 | `src/skills.ts` | `pluginResources` (one copy of the orq plugin, `DROPPED_COMMANDS`), the daily plugin update, `/skills` details |
 | `src/frontmatter.ts` | `normalizeCommand`: quotes plugin command frontmatter that strict YAML would reject |
-| `src/update.ts` | `orqi update`: daily release check, header note, the binary swap, or npm for an npm install |
+| `src/update.ts` | `orqi update`: the release check, the launch notice text, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, and the commands that own state: `/route /teach /panel` |
 | `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |

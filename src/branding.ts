@@ -95,8 +95,6 @@ export interface HeaderInfo {
 	cwd: string;
 	/** True while no credential was accepted: the opening screen invites a sign-in instead of the pitch. */
 	signedOut?: boolean;
-	/** Set when the update cache reports a newer version: the command the footer line tells the user to run. */
-	updateCommand?: string;
 }
 
 /**
@@ -119,15 +117,7 @@ export function headerLines(info: HeaderInfo): string[] {
 		"",
 		...(info.signedOut ? SIGN_IN.map((line, i) => color(line, i === 0 ? TEXT : MUTED)) : PITCH.map((line) => color(line, MUTED))),
 	];
-	const footer = [
-		"",
-		`${indent}${color(VIEWS, MUTED)}`,
-		`${indent}${color(HINTS, MUTED)}`,
-		// Only when a check actually found something newer: most sessions never
-		// see this line, matching orqi update's own "check daily, tell, never
-		// auto-install" contract.
-		...(info.updateCommand ? [`${indent}${color(`update available · run: ${info.updateCommand}`, MUTED)}`] : []),
-	];
+	const footer = ["", `${indent}${color(VIEWS, MUTED)}`, `${indent}${color(HINTS, MUTED)}`];
 	const logo = ORQI_LOGO.map((row) => {
 		return color(row, PULSE_ORANGE);
 	});
