@@ -44,6 +44,22 @@ export function color(text: string, rgb: Rgb): string {
 	return `\x1b[${code}m${text}\x1b[0m`;
 }
 
+/**
+ * Whether to let pi draw the terminal's own progress bar (OSC 9;4) while a turn
+ * runs: the moving line Ghostty, WezTerm, Windows Terminal and iTerm2 3.6+ show
+ * along the top of the window. Terminals that do not know the sequence drop it,
+ * but iTerm2 before 3.6 reads any OSC 9 as a desktop notification, and pi
+ * re-sends it every second, so those get none. `ORQI_TERMINAL_PROGRESS=0` opts out.
+ */
+export function terminalProgress(env: NodeJS.ProcessEnv = process.env): boolean {
+	if (env.ORQI_TERMINAL_PROGRESS === "0") return false;
+	if (env.TERM_PROGRAM === "iTerm.app") {
+		const [major = 0, minor = 0] = (env.TERM_PROGRAM_VERSION ?? "").split(".").map(Number);
+		return major > 3 || (major === 3 && minor >= 6);
+	}
+	return true;
+}
+
 export function dim(text: string): string {
 	if (process.env.NO_COLOR || process.env.TERM === "dumb") return text;
 	return `\x1b[2m${text}\x1b[0m`;

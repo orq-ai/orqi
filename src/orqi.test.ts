@@ -4,7 +4,7 @@ import { expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { headerLines } from "./branding.ts";
+import { headerLines, terminalProgress } from "./branding.ts";
 import { ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import { orqHarness } from "./harness.ts";
 import { catalogue, onlyOrq, PROVIDER_ID } from "./model.ts";
@@ -141,6 +141,15 @@ test("the header uses the ORQI splash", () => {
 	const art = output.split("\n").filter((line) => /[█▀▄]/.test(line));
 	expect(art.length).toBe(6);
 	for (const line of art) expect(line.length).toBeLessThanOrEqual(100);
+});
+
+test("the terminal progress bar is on, except where OSC 9 means a notification", () => {
+	expect(terminalProgress({ TERM_PROGRAM: "ghostty" })).toBe(true);
+	expect(terminalProgress({})).toBe(true);
+	expect(terminalProgress({ TERM_PROGRAM: "iTerm.app", TERM_PROGRAM_VERSION: "3.6.2" })).toBe(true);
+	expect(terminalProgress({ TERM_PROGRAM: "iTerm.app", TERM_PROGRAM_VERSION: "3.5.14" })).toBe(false);
+	expect(terminalProgress({ TERM_PROGRAM: "iTerm.app" })).toBe(false); // unknown version: assume old
+	expect(terminalProgress({ TERM_PROGRAM: "ghostty", ORQI_TERMINAL_PROGRESS: "0" })).toBe(false);
 });
 
 test("the splash carries no update line: the notice above the editor owns it", () => {
