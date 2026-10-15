@@ -384,11 +384,24 @@ const makeServices = async () => {
 			],
 		},
 	});
-	// Two amber phosphor themes ship in themes/: orq-amber is one hue throughout
-	// and is the default, orq-dark keeps turquoise for success and red for errors.
-	// Both are on additionalThemePaths, so pi's own /theme picker lists them either
-	// way and a session can switch without restarting.
-	created.settingsManager.setTheme(process.env.ORQI_THEME === "dark" ? "orq-dark" : "orq-amber");
+	// Five themes ship in themes/: the two amber phosphor skins — orq-amber is
+	// one hue throughout, orq-dark keeps turquoise for success and red for errors —
+	// plus three more dark skins: orq-teal (teal-led, Harbour), orq-slate
+	// (blue-led, Blueprint) and orq-signal (colorblind-safe vermillion + sky, pass
+	// is blue and fail is orange so status never leans on red-vs-green alone).
+	// All are on additionalThemePaths, so pi's own /theme picker lists them either
+	// way and a session can switch without restarting. A light theme cannot ship
+	// here: the contrast floor is checked against the lightest plausible terminal
+	// background (#282C34), which no light-skin text colour could clear.
+	const THEMES: Record<string, string> = {
+		dark: "orq-dark",
+		teal: "orq-teal",
+		slate: "orq-slate",
+		signal: "orq-signal",
+	};
+	created.settingsManager.setTheme(
+		THEMES[process.env.ORQI_THEME ?? "amber"] ?? "orq-amber",
+	);
 	// Silence pi's own startup header - it pitches pi, and this CLI prints its own.
 	// ctrl+o still shows the full help and loaded resources on demand.
 	created.settingsManager.setQuietStartup(true);
