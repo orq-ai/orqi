@@ -72,8 +72,8 @@ const HINTS = "escape interrupt · ctrl+c/d exit · / commands · ! bash · ctrl
  */
 export const SIGN_IN = [
 	"You're not signed in to an orq.ai workspace yet. Sign in to start:",
-	"  /login  →  Sign in with an account  →  orq.ai (browser)",
 	"  /key    →  paste an API key from my.orq.ai › Settings › API keys",
+	"  /login  →  Sign in with an account  →  orq.ai, to sign in with the browser",
 	"  or run `orq auth login` in another terminal; orqi picks it up on your next message.",
 ];
 

@@ -328,7 +328,7 @@ export function orqCommands(
 		}
 		// Look around: nothing to connect; the docs and the changelog need no workspace.
 		ctx.ui.notify(
-			"Looking around without a workspace: /whatsnew shows the latest orq.ai release, /learn the guided prompts. /login orq or `orq auth login` whenever you are ready.",
+			"Looking around without a workspace: /whatsnew shows the latest orq.ai release, /learn the guided prompts. /key or `orq auth login` whenever you are ready.",
 		);
 	};
 

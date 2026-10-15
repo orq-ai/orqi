@@ -202,7 +202,10 @@ export function onlyOrq(runtime: ModelRuntime): ModelRuntime {
 			const fn = value.bind(target);
 			switch (prop) {
 				case "getProviders":
-					return () => fn().filter((provider: { id: string }) => ours.has(provider.id));
+					// Only the router: pi lists these in /login, and a key pasted against the
+					// classifier provider would sit under `orq-decisions`, which nothing reads.
+					// Lookups by id below still reach it, so `orq/auto` resolves.
+					return () => fn().filter((provider: { id: string }) => provider.id === PROVIDER_ID);
 				case "getProvider":
 					return (id: string) => (ours.has(id) ? fn(id) : undefined);
 				case "getModels":

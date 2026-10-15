@@ -258,7 +258,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   is why it is attached there. The wrapper is marked with a symbol so the next session or `/reload`
   unwraps it before wrapping again; without that, each `/reload` nested one more inspector. Ask
   upstream for a sidebar slot before building more on this.
-- **pi's `/login` → "Sign in with an account" lists `orq.ai (browser)`** (`src/oauth.ts`). pi shows
+- **pi's `/login` → "Sign in with an account" lists `orq.ai`** (`src/oauth.ts`; the provider is named
+  in `main.ts`, or pi would label it with the flow's `orq.ai (browser)`). `onlyOrq` also keeps
+  `orq-decisions` out of `getProviders`, so `/login` never offers a key slot nothing reads. pi shows
   a provider there only if it registers an OAuth flow; this one runs the orq CLI's own device login
   (`orq auth login`), shows pi's device-code view with the CLI's URL and code, and stores the login
   session's token (read back through whoami, as everywhere else). Refresh asks whoami again. The

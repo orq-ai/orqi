@@ -19,7 +19,7 @@ says the check did not answer; when every candidate was refused, it reports each
 
 | Order | Candidate | Present when | Comes from | Shown as |
 |---|---|---|---|---|
-| 0 | what `/login` stored: a pasted API key (`/key`, "Sign in with an API key") or the session token of "Sign in with an account → orq.ai (browser)" | `/login` or `/key` has been run in some session | `~/.orqi/agent/auth.json` | `/login key` |
+| 0 | what `/login` stored: a pasted API key (`/key`, "Sign in with an API key") or the session token of "Sign in with an account → orq.ai" | `/login` or `/key` has been run in some session | `~/.orqi/agent/auth.json` | `/login key` |
 | 1 | the pinned profile's key | a profile is in force | `credentials.json`, by the name whoami reports (see [6](#6-pinning-a-profile)) | `orq profile <name>` |
 | 2 | `ORQ_API_KEY` | it is set, and differs from 0 and 1 | the environment | `ORQ_API_KEY` |
 | 3 | the stored api-key login | `orq auth login --api-key` was run (CLI 11.1.1+), and it differs from 0 to 2 | `api_key_login_file` named by whoami (`~/.orq/sessions/<host>.apikey.json`, field `apiKey`) | `orq api-key login` |
