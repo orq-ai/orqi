@@ -137,6 +137,17 @@ Examples:
 		} else if (cmd === "install" && source) {
 			await pm.installAndPersist(source);
 			console.log(`Installed ${source}`);
+			// Step 8: MCP is opt-in — surface but do not auto-merge.
+			try {
+				const { existsSync } = await import("node:fs");
+				const { join } = await import("node:path");
+				const pkgs = pm.listConfiguredPackages();
+				const hit = pkgs.find((x) => x.source === source || source.includes(x.source));
+				const root = hit?.installedPath;
+				if (root && (existsSync(join(root, ".mcp.json")) || existsSync(join(root, ".claude-plugin", ".mcp.json")) || existsSync(join(root, "mcp.json")))) {
+					console.log(`  note: plugin ships MCP servers (.mcp.json) — not auto-enabled. Add to ~/.orqi/agent/mcp.json to use`);
+				}
+			} catch {}
 		} else if ((cmd === "remove" || cmd === "uninstall") && source) {
 			const ok = await pm.removeAndPersist(source);
 			console.log(ok ? `Removed ${source}` : `No plugin found for ${source}`);
