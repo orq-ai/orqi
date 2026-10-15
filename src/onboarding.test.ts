@@ -270,8 +270,8 @@ test("signed out, the opening screen invites a sign-in instead of the pitch", ()
 	const base = { name: "orqi", version: "v0", status: "not signed in", cwd: "~" };
 	const out = strip(headerLines({ ...base, signedOut: true }));
 	expect(out).toContain("You're not signed in to an orq.ai workspace yet. Sign in to start:");
-	expect(out).toContain("/login  →  Sign in with an account  →  orq.ai (browser)");
-	expect(out).toContain("/key");
+	expect(out).toContain("/login  →  Sign in with an account  →  orq.ai");
+	expect(out.indexOf("/key")).toBeLessThan(out.indexOf("/login"));
 	expect(out).not.toContain("Ask me to:");
 	expect(strip(headerLines(base))).toContain("Ask me to:");
 });

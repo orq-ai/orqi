@@ -104,7 +104,7 @@ test("onlyOrq hides every provider except orq", async () => {
 	const foreign = { provider: "anthropic", id: "claude-sonnet-4-5" };
 	const mine = { provider: PROVIDER_ID, id: "openai/gpt-5.6-terra" };
 	const fake = {
-		getProviders: () => [{ id: "anthropic" }, { id: PROVIDER_ID }],
+		getProviders: () => [{ id: "anthropic" }, { id: PROVIDER_ID }, { id: "orq-decisions" }],
 		getProvider: (id: string) => ({ id }),
 		getModels: () => [foreign, mine],
 		getAvailableSnapshot: () => [foreign, mine],
@@ -116,6 +116,8 @@ test("onlyOrq hides every provider except orq", async () => {
 	const filtered = onlyOrq(fake);
 	expect(filtered.getProviders()).toEqual([{ id: PROVIDER_ID }] as any);
 	expect(filtered.getProvider("anthropic")).toBeUndefined();
+	// Not offered by /login, but routing still resolves it by id.
+	expect(filtered.getProvider("orq-decisions")).toBeDefined();
 	expect(filtered.getModels()).toEqual([mine] as any);
 	expect(filtered.getAvailableSnapshot()).toEqual([mine] as any);
 	expect(await filtered.getAvailable()).toEqual([mine] as any);

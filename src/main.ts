@@ -205,6 +205,7 @@ const modelRuntime = models.runtime;
 // "Sign in with an account" in pi's /login: the orq CLI's browser login, so a
 // key never has to be pasted. Its token is the login session's (via whoami).
 modelRuntime.registerProvider("orq", {
+	name: "orq.ai",
 	oauth: orqOAuth(() => credentialCandidates().candidates.find((candidate) => candidate.source === SESSION_SOURCE)?.token),
 } as never);
 // `orq/auto` and the Decisions API classifiers, on the runtime itself so the
