@@ -993,8 +993,9 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	const skillLines = cardLines({ concept: GLOSSARY.skill!, used: ["list_skills"] }, 32);
 	expect(skillLines.at(-1)).toBe(`docs  ${hyperlink("open", "https://docs.orq.ai/docs/integrations/code-assistants/skills")}`);
 	expect(skillLines.every((line) => visibleWidth(line) <= 32)).toBe(true);
-	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(
-		` ◌ orqi v${VERSION}  workspace acme · routing orq/auto · tips · thread 01a1…6b7b`,
+	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", thread: "01a1…6b7b" }, 200)).toBe(
+		// Tips are on by default and the inspector says so; the header is who and where.
+		` ◌ orqi v${VERSION}  workspace acme · routing orq/auto · thread 01a1…6b7b`,
 	);
 });
 

@@ -511,7 +511,6 @@ export function orqHarness(deps: HarnessDeps) {
 				agent,
 				routing: model?.provider === "orq" && model.id === "auto" ? "orq/auto" : undefined,
 				connected: !/not connected/.test(status),
-				teach: teachOn,
 				thread: thread ? shortId(thread) : undefined,
 			};
 		};
