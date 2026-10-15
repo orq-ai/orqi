@@ -37,14 +37,25 @@ export function shortId(id: string): string {
 	return id.length > 12 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id;
 }
 
+export type TraceListItem = {
+	trace_id?: string;
+	context?: { trace_id?: string };
+	start_time?: string;
+	status?: string;
+	duration?: number;
+	total_cost?: unknown;
+	[key: string]: unknown;
+};
+
 /** One /traces list row: id, age, status, latency and cost, as /agents' trace view reads them. */
-export function traceRow(t: Record<string, any>): string {
+export function traceRow(t: TraceListItem): string {
 	const id = String(t.trace_id ?? t.context?.trace_id ?? "?");
 	const started = Date.parse(String(t.start_time ?? ""));
 	const age = Number.isFinite(started) ? ageOf(started) : String(t.start_time ?? "").slice(0, 19);
 	const status = String(t.status ?? "");
 	const error = status.toUpperCase() === "ERROR" ? "ERROR" : "";
-	return `${shortId(id).padEnd(12)} ${age.padEnd(10)} ${error.padEnd(6)} ${t.duration ?? "?"} ms${t.total_cost ? `  ${dollars(t.total_cost)}` : ""}`;
+	const cost = typeof t.total_cost === "number" && Number.isFinite(t.total_cost) ? `  ${dollars(t.total_cost)}` : typeof t.total_cost === "string" && Number.isFinite(Number(t.total_cost)) ? `  ${dollars(Number(t.total_cost))}` : "";
+	return `${shortId(id).padEnd(12)} ${age.padEnd(10)} ${error.padEnd(6)} ${t.duration ?? "?"} ms${cost}`;
 }
 
 const ageOf = (started: number): string => {
@@ -55,11 +66,12 @@ const ageOf = (started: number): string => {
 	return `${Math.floor(s / 86400)}d ago`;
 };
 
-/** `1h`, `6h`, `24h`, `7d`, `30d`, as the traces filter accepts them; undefined when it does not parse. */
+/** `1h`, `6h`, `24h`, `7d`, `30d`, as the traces filter accepts them; undefined when it does not parse or is zero. */
 export function durationMs(text: string | undefined): number | undefined {
 	const match = /^(\d+)([smhd])$/.exec((text ?? "").trim());
 	if (!match) return undefined;
 	const n = Number(match[1]);
+	if (n <= 0) return undefined;
 	return n * ({ s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 })[match[2] as "s" | "m" | "h" | "d"];
 }
 

@@ -21,7 +21,7 @@ import { DEFAULT_MODEL, talkable } from "./model.ts";
 import { bareName, schemaLines, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
 import type { Panel, PanelSpec } from "./panel.ts";
-import { agentUrl, conversationLines, durationMs, shortId, threadUrl, traceRow, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
+import { agentUrl, conversationLines, durationMs, shortId, threadUrl, traceRow, traceSummary, traceUrl, type TraceListItem, type TraceRef } from "./trace.ts";
 import { toAtif, type Trajectory } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
@@ -177,46 +177,55 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 	// /traces was written for Claude Code (Typesense filters, registry tools
 	// orqi's server does not have) and is dropped in DROPPED_COMMANDS; this
 	// one speaks list_traces' structured filters. A bare `--last <duration>`
-	// cannot be sent to the server, which takes no window: it trims what is
-	// shown, and a notice says so when it would cut the whole page.
 	pi.registerCommand("traces", {
-		description: "production traces from this workspace: filter by status, model, window; enter opens /trace",
+		description: "production traces from this workspace: filter by model, window; enter opens /trace",
 		handler: async (args, ctx) => {
-			// Flags are optional and order-free: /traces, /traces --status error,
-			// /traces --last 7d --limit 5, or plain text meant as a model filter
-			// ("traces errors from gpt-4o" reads intent the same way).
 			const argv = args.trim().split(/\s+/).filter(Boolean);
 			const flags = new Map<string, string>();
 			const free: string[] = [];
 			for (let i = 0; i < argv.length; i++) {
 				const arg = argv[i]!;
-				if (arg === "--status" || arg === "--last" || arg === "--limit" || arg === "--model") flags.set(arg.slice(2), argv[++i] ?? "");
-				else free.push(arg);
+				if (arg === "--last" || arg === "--limit" || arg === "--model") flags.set(arg.slice(2), argv[++i] ?? "");
+				else if (arg.startsWith("--")) {
+					ctx.ui.notify(`Unknown flag ${arg}. Usage: /traces [--last 7d] [--limit 20] [--model gpt-4o] [search]`, "warning");
+					return;
+				} else free.push(arg);
+			}
+			if (flags.has("last") && durationMs(flags.get("last")) === undefined) {
+				ctx.ui.notify(`Invalid --last "${flags.get("last")}": use 1h, 24h, 7d, 30d etc.`, "warning");
+				return;
 			}
 			const limit = Math.min(Number(flags.get("limit") ?? 20) || 20, 50);
+			if (flags.has("limit") && (!Number.isFinite(limit) || limit <= 0)) {
+				ctx.ui.notify(`Invalid --limit "${flags.get("limit")}": use 1-50`, "warning");
+				return;
+			}
 			const filters: Record<string, unknown> = { limit };
-			const freeText = free.join(" ");
-			const status = flags.get("status") ?? (/error|fail/i.test(freeText) ? "error" : undefined);
-			if (status) filters.status = /error|fail/i.test(status) ? "ERROR" : "OK";
-			const model = flags.get("model") ?? (free.length ? freeText : undefined);
-			if (model) filters.model = model;
+			const freeText = free.join(" ").trim();
+			if (flags.get("model")) filters.model = flags.get("model");
+			else if (freeText) {
+				// Free text is a search, not a model — "errors from gpt-4o" would otherwise
+				// be sent as model="errors from gpt-4o" and miss. Keep it as full-text search.
+				filters.search = freeText;
+			}
 			const windowMs = flags.get("last") ? durationMs(flags.get("last")) : undefined;
+			if (windowMs) filters.start_time_after = new Date(Date.now() - windowMs).toISOString();
 			const result = await deps
 				.callTool("list_traces", filters)
 				.catch((error) => ({ text: String(error), isError: true }));
-			let items: any[] = [];
+			let items: TraceListItem[] = [];
 			let parseError: string | undefined;
 			try {
-				items = JSON.parse(result.text)?.items ?? [];
+				items = (JSON.parse(result.text)?.items ?? []) as TraceListItem[];
 			} catch {
 				parseError = result.text.slice(0, 300);
 			}
-			const inWindow = (t: any) => !windowMs || Date.now() - Date.parse(String(t.start_time ?? "")) <= windowMs;
-			const shown = items.filter(inWindow);
-			if (!shown.length && items.length && windowMs) {
-				ctx.ui.notify(`Every trace is older than ${flags.get("last")}; the window only trims the newest ${limit}.`, "warning");
-			}
-			const why = [status && `status ${status}`, model && `model ${model}`].filter(Boolean).join(", ");
+			const shown = items;
+			const whyParts: string[] = [];
+			if (filters.search) whyParts.push(`search "${filters.search}"`);
+			if (filters.model) whyParts.push(`model ${filters.model}`);
+			if (filters.start_time_after) whyParts.push(`since ${flags.get("last")}`);
+			const why = whyParts.join(", ");
 			const rows = result.isError
 				? [result.text.slice(0, 300)]
 				: parseError
@@ -229,9 +238,9 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				badge: `${shown.length}`,
 				rows,
 				selectable: shown.length > 0,
-				filterable: shown.length > 0,
+				filterable: false,
 				height: 14,
-				hint: "type to filter · enter trace via /trace · esc close",
+				hint: "--last 7d --model gpt-4o [search] · enter trace via /trace · esc close",
 				keys: {
 					enter: (i) => {
 						const id = shown[i]?.trace_id ?? shown[i]?.context?.trace_id;
@@ -261,16 +270,27 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			if (!flags.has("last") && /\b(\d+[smhd])\b/.test(freeText)) last = freeText.match(/\b(\d+[smhd])\b/)![1]!;
 			else if (/\b7d\b|\bweek\b/.test(freeText)) last = "7d";
 			else if (/\b30d\b|\bmonth\b/.test(freeText)) last = "30d";
+			if (flags.has("last") && durationMs(last) === undefined) {
+				ctx.ui.notify(`Invalid --last "${last}": use 1h, 24h, 7d, 30d`, "warning");
+				return;
+			}
+			const allowedGroups = new Set(["model", "provider", "project_id", "http_status_code", "agent_name"]);
 			let groupBy = flags.get("group_by");
 			if (!groupBy) {
 				if (/\bmodel\b/.test(freeText)) groupBy = "model";
-				else if (/\bdeployment\b/.test(freeText)) groupBy = "deployment";
-				else if (/\bstatus\b/.test(freeText)) groupBy = "status";
-				else if (/\bagent\b/.test(freeText)) groupBy = "agent_name";
 				else if (/\bprovider\b/.test(freeText)) groupBy = "provider";
+				else if (/\bagent\b/.test(freeText)) groupBy = "agent_name";
+				else if (/\bstatus\b/.test(freeText) || /\bhttp\b/.test(freeText)) groupBy = "http_status_code";
+			} else if (groupBy === "deployment" || groupBy === "status") {
+				ctx.ui.notify(`--group-by ${groupBy} is not supported; using ${groupBy === "deployment" ? "model" : "http_status_code"} instead`, "warning");
+				groupBy = groupBy === "deployment" ? "model" : "http_status_code";
+			}
+			if (groupBy && !allowedGroups.has(groupBy)) {
+				ctx.ui.notify(`Unsupported --group-by "${groupBy}": use ${[...allowedGroups].join(", ")}`, "warning");
+				return;
 			}
 			const overviewPromise = deps.callTool("get_analytics_overview", {}).catch((e) => ({ text: String(e), isError: true as const }));
-			const metricForGroup = groupBy === "agent_name" ? "agents" : groupBy === "status" || groupBy === "http_status_code" ? "errors" : "cost";
+			const metricForGroup = groupBy === "agent_name" ? "agents" : groupBy === "http_status_code" ? "errors" : "cost";
 			const groupByParam = groupBy ?? "model";
 			const queryArgs: Record<string, unknown> = { metric: metricForGroup, time_range: { start: last }, group_by: [groupByParam] };
 			const queryPromise = deps.callTool("query_analytics", queryArgs).catch((e) => ({ text: String(e), isError: true as const }));
@@ -285,11 +305,12 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				const cost = o.total_cost ?? o.cost ?? 0;
 				const toks = o.total_tokens ?? o.tokens ?? "?";
 				const err = o.error_rate ?? o.errorRate ?? "?";
-				rows.push(`# Analytics — Last ${last}`);
+				rows.push(`# Analytics (snapshot)`);
 				rows.push("");
 				rows.push(`**${req}** requests · **${typeof cost === "number" ? dollars(cost) : cost}** cost · **${typeof toks === "number" ? toks.toLocaleString() : toks}** tokens · **${typeof err === "number" ? (err*100).toFixed(2)+"%" : err}** error rate`);
 				rows.push("");
 				if (o.avg_latency) rows.push(`Avg latency: ${o.avg_latency}ms` + (o.avg_ttft ? ` · TTFT ${o.avg_ttft}ms` : ""));
+				rows.push(`Breakdown below is for --last ${last}`);
 				rows.push("");
 			} else rows.push(overviewRes.text.slice(0, 500));
 			if (queryRes.isError) {
@@ -299,54 +320,62 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			} else {
 				try {
 					const q = JSON.parse(queryRes.text);
-					const items = q.items ?? q.data ?? q.groups ?? [];
+					// Normalise: server may return {items:[{dimensions:{model:"x"}, metrics:{cost:1}}]} or flat rows
+					const raw = (q.items ?? q.data ?? q.groups ?? q.rows ?? []) as any[];
+					const items = raw.map((it: any) => {
+						const dims = it.dimensions ?? {};
+						const mets = it.metrics ?? it;
+						const name = dims[groupByParam] ?? it[groupByParam] ?? it.model ?? it.name ?? it.key ?? "?";
+						return { name, requests: mets.requests ?? mets.count ?? mets.total_requests ?? it.requests ?? it.count ?? "?", cost: mets.cost ?? mets.total_cost ?? it.cost ?? it.total_cost ?? 0 };
+					});
 					if (items.length) {
-						rows.push(`### Top ${groupByParam}s`);
+						rows.push(`### Top ${groupByParam}s — last ${last}`);
 						rows.push("");
 						const head = `| # | ${groupByParam} | Requests | Cost |`;
 						rows.push(head);
 						rows.push("|---|" + "---|" .repeat(head.split("|").length-2));
 						items.slice(0, 10).forEach((it: any, i: number) => {
-							const name = it[groupByParam] ?? it.model ?? it.name ?? JSON.stringify(it).slice(0,30);
-							const r = it.requests ?? it.count ?? it.total_requests ?? "?";
-							const c = it.cost ?? it.total_cost ?? 0;
-							rows.push(`| ${i+1} | ${name} | ${r} | ${typeof c === "number" ? dollars(c) : c} |`);
+							rows.push(`| ${i+1} | ${it.name} | ${it.requests} | ${typeof it.cost === "number" ? dollars(it.cost) : it.cost} |`);
 						});
 						if (items.length > 10) rows.push(`… and ${items.length-10} more`);
-					} else rows.push("", `no breakdown for ${groupByParam}`);
+					} else rows.push("", `no breakdown for ${groupByParam} — last ${last}`);
 				} catch { rows.push(queryRes.text.slice(0, 500)); }
 			}
-			await panel(ctx, { title: `analytics · last ${last}`, rows, hint: "--group-by model|deployment|status|agent · --last 24h|7d · esc close" });
+			await panel(ctx, { title: `analytics · last ${last} · by ${groupByParam}`, rows, hint: "--group-by model|provider|project_id|http_status_code|agent_name · --last 24h|7d · esc close" });
 		},
 	});
 
 	pi.registerCommand("overview", {
-		description: "workspace overview: agents, deployments, prompts, datasets, experiments, projects, knowledge bases [section]",
+		description: "workspace overview: agents, prompts, datasets, experiments, projects, evaluators [section]",
 		handler: async (args, ctx) => {
 			const section = args.trim().toLowerCase();
-			const valid = new Set(["agents","deployments","prompts","datasets","experiments","projects","knowledge","evaluators","evaluator"]);
+			const valid = new Set(["agents","prompts","datasets","experiments","projects","evaluators","evaluator"]);
 			const want = valid.has(section) ? section : "";
-			const types: { key: string; type: string; label: string }[] = [
-				{ key: "agents", type: "agent", label: "Agents" },
-				{ key: "deployments", type: "deployment", label: "Deployments" },
+			// search_entities only supports project/dataset/prompt/evaluator/experiment; agents come from the local catalogue
+			const searchTypes: { key: string; type: string; label: string }[] = [
 				{ key: "prompts", type: "prompt", label: "Prompts" },
 				{ key: "datasets", type: "dataset", label: "Datasets" },
 				{ key: "experiments", type: "experiment", label: "Experiments" },
 				{ key: "projects", type: "project", label: "Projects" },
-				{ key: "knowledge", type: "knowledge", label: "Knowledge Bases" },
 				{ key: "evaluators", type: "evaluator", label: "Evaluators" },
 			];
-			const needed = want ? types.filter(t => t.key === want || (want === "evaluator" && t.key === "evaluators")) : types;
+			const neededSearch = want ? searchTypes.filter(t => t.key === want || (want === "evaluator" && t.key === "evaluators")) : searchTypes;
+			const includeAgents = !want || want === "agents";
 			const overviewP = deps.callTool("get_analytics_overview", {}).catch((e) => ({ text: String(e), isError: true as const }));
-			const calls = needed.map(t => deps.callTool("search_entities", { type: t.type, query: "" }).catch((e) => ({ text: String(e), isError: true as const })).then(r => ({ t, r })));
+			const calls = neededSearch.map(t => deps.callTool("search_entities", { type: t.type, query: "" }).catch((e) => ({ text: String(e), isError: true as const })).then(r => ({ t, r })));
 			const [overviewRes, ...results] = await Promise.all([overviewP, ...calls]);
 			let rows: string[] = [];
 			const counts: string[] = [];
-			const byKey = new Map<string, any[]>();
+			const byKey = new Map<string, { items: any[]; error?: string }>();
+			if (includeAgents) {
+				const agents = deps.catalogue().filter((m) => m.kind === "agent");
+				byKey.set("agents", { items: agents.map((a) => ({ display_name: a.id.slice(6), id: a.id, status: a.agent?.status })), error: undefined });
+				counts.push(`**${agents.length}** agents`);
+			}
 			for (const { t, r } of results as any[]) {
-				if ((r as any).isError) { counts.push(`**?** ${t.key}`); byKey.set(t.key, []); }
+				if ((r as any).isError) { counts.push(`**!** ${t.key} (error)`); byKey.set(t.key, { items: [], error: String((r as any).text).slice(0,120) }); }
 				else {
-					try { const j = JSON.parse((r as any).text); const items = j.items ?? j.entities ?? j.data ?? []; byKey.set(t.key, items); counts.push(`**${items.length}** ${t.key}`); } catch { byKey.set(t.key, []); counts.push(`**?** ${t.key}`); }
+					try { const j = JSON.parse((r as any).text); const items = j.items ?? j.entities ?? j.data ?? []; byKey.set(t.key, { items, error: undefined }); counts.push(`**${items.length}** ${t.key}`); } catch { byKey.set(t.key, { items: [], error: "parse error" }); counts.push(`**?** ${t.key}`); }
 				}
 			}
 			rows.push(`# Workspace — Overview`);
@@ -358,17 +387,22 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			rows.push(`Manage at **my.orq.ai**`);
 			rows.push("");
 			rows.push("---");
-			for (const t of needed) {
-				const items = byKey.get(t.key) ?? [];
+			const displayTypes = [
+				...(includeAgents ? [{ key: "agents", label: "Agents" }] : []),
+				...neededSearch.map(t => ({ key: t.key, label: t.label })),
+			];
+			for (const t of displayTypes) {
+				const entry = byKey.get(t.key) ?? { items: [], error: undefined };
 				rows.push("");
-				rows.push(`### ${t.label} (${items.length})`);
-				if (!items.length) rows.push("(none)");
-				else items.slice(0, 10).forEach((it: any) => {
+				rows.push(`### ${t.label} (${entry.items.length})`);
+				if (entry.error) rows.push(`error: ${entry.error}`);
+				else if (!entry.items.length) rows.push("(none)");
+				else entry.items.slice(0, 10).forEach((it: any) => {
 					const name = it.display_name ?? it.key ?? it.name ?? it.id ?? "?";
 					const meta = [it.model ?? it.status ?? "", it.description ? String(it.description).slice(0,40) : ""].filter(Boolean).join(" · ");
 					rows.push(`- **${name}**` + (meta ? ` — ${meta}` : ""));
 				});
-				if (items.length > 10) rows.push(`… and ${items.length-10} more`);
+				if (entry.items.length > 10) rows.push(`… and ${entry.items.length-10} more`);
 			}
 			await panel(ctx, { title: `overview · ${deps.workspace() ?? "this workspace"}`, rows, height: 18, hint: "/overview [section] · esc close" });
 		},
