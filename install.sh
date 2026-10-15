@@ -122,9 +122,14 @@ case "$(uname -s)-$(uname -m)" in
 	Darwin-arm64) PLATFORM=macos-arm64 ;;
 	Darwin-x86_64) PLATFORM=macos-x64 ;;
 	Linux-x86_64) PLATFORM=linux-x64 ;;
+	Linux-arm64|Linux-aarch64) PLATFORM=linux-arm64 ;;
+	MINGW*|MSYS*|CYGWIN*|Windows_NT-*)
+		err "Windows is supported through npm: npm install -g @orq-ai/orqi"
+		exit 1
+		;;
 	*)
 		err "unsupported platform: $(uname -s)-$(uname -m)"
-		err "supported: macOS arm64/x86_64, Linux x86_64"
+		err "supported: macOS arm64/x86_64, Linux x86_64/arm64"
 		exit 1
 		;;
 esac
