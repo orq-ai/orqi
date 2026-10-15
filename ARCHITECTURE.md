@@ -30,6 +30,7 @@ orqi
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
 | `src/connection.ts` | The connection half of the pi extension (a command goes here only if it is about the connection; the rest are `harness.ts`'s): startup header entry, the not-connected warning and reconnect, the first-run welcome, plus `/key /whoami /workspace /reconnect /doctor /update` |
+| `src/workspaces.ts` | `/workspace`'s list: the CLI's `workspace list -o json` as aligned rows, the active workspace first |
 | `src/oauth.ts` | "Sign in with an account → orq.ai" in pi's `/login`, running `orq auth login` |
 | `src/onboarding.ts` | `MaskedInput` for `/key`, the welcome's options, the `/learn` prompts |
 | `src/skills.ts` | `pluginResources` (one copy of the orq plugin, `DROPPED_COMMANDS` now filters all 6 least-common prompt templates → `additionalPromptTemplatePaths=[]`), the daily plugin update, `/skills` details |

@@ -20,6 +20,8 @@ import { refreshStoredSignIn, signInExpired } from "./oauth.ts";
 import { checkNow, currentUpdateCommand, isNewer, maybeCheckUpdate, pendingUpdate, readCache, updateNotice } from "./update.ts";
 import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
+import { Panel, panelPaint } from "./panel.ts";
+import { parseWorkspaces, sortWorkspaces, workspaceRows } from "./workspaces.ts";
 
 /**
  * Re-point the orq tools at the first of `candidates` the server accepts.
@@ -479,16 +481,55 @@ export function orqCommands(
 		// over to the tools on the next message. `orq auth login`
 		// outside the session works the same way.
 		pi.registerCommand("workspace", {
-			description: "list orq workspaces, or switch with /workspace <key>",
+			description: "pick an orq workspace from a list (enter switches), or switch with /workspace <key>",
 			handler: async (args, ctx) => {
+				const switchTo = async (key: string) => {
+					if (!report(ctx, runOrq(["workspace", "use", key]))) return;
+					const outcome = await recover(pi, ctx, pickForWorkspace);
+					if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+				};
 				const key = args.trim();
-				if (!key) {
-					report(ctx, runOrq(["workspace", "list"]));
+				if (key) return switchTo(key);
+
+				const listed = runOrq(["workspace", "list", "-o", "json"]);
+				const entries = listed.ok ? parseWorkspaces(listed.stdout) : undefined;
+				const live = ctx as unknown as { mode?: string; ui: { custom?: (factory: any, options?: any) => Promise<unknown> } };
+				// No panel to draw (one-shot, a test, a CLI answer in a shape we do not know):
+				// the CLI's own words are still the right answer.
+				if (!entries || entries.length === 0 || live.mode !== "tui" || !live.ui.custom) {
+					report(ctx, listed.ok ? listed : runOrq(["workspace", "list"]));
 					return;
 				}
-				if (!report(ctx, runOrq(["workspace", "use", key]))) return;
-				const outcome = await recover(pi, ctx, pickForWorkspace);
-				if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+				const sorted = sortWorkspaces(entries);
+				let chosen: string | undefined;
+				await live.ui.custom(
+					(tui: any, theme: any, _keys: unknown, done: (value?: unknown) => void) =>
+						new Panel(
+							{
+								title: "workspaces",
+								badge: `${sorted.length}`,
+								rows: workspaceRows(sorted),
+								selectable: true,
+								filterable: true,
+								height: 14,
+								hint: "type to filter · ↑↓ move · enter switch · esc close",
+								keys: {
+									enter: (i: number) => {
+										const picked = sorted[i];
+										// The one you are on needs no switch.
+										if (picked && !picked.active) chosen = picked.key;
+										return true;
+									},
+								},
+							},
+							panelPaint(theme),
+							() => done(),
+							() => tui.requestRender(),
+						),
+					{ overlay: true, overlayOptions: { anchor: "center", width: "70%", maxHeight: "85%" } },
+				);
+				// After the panel is gone: a switch reconnects the tools and may pin a warning.
+				if (chosen) await switchTo(chosen);
 			},
 		});
 
