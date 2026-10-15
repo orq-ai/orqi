@@ -229,8 +229,9 @@ Examples:
 				for (let i=0;i<args.length;i++) if (args[i]==="--header" && args[i+1]) { const h=args[i+1]; const colon=h.indexOf(":"); if(colon>-1) headers[h.slice(0,colon).trim()]=h.slice(colon+1).trim(); }
 				if (Object.keys(headers).length) config.headers = headers;
 			} else {
-				// stdio: everything after name is command
-				const cmdArgs = args.slice(2);
+				// stdio: everything after name is command (skip leading --)
+				let cmdArgs = args.slice(2);
+				if (cmdArgs[0] === "--") cmdArgs = cmdArgs.slice(1);
 				if (cmdArgs.length===0) { console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]"); process.exit(1); }
 				config.command = cmdArgs[0];
 				if (cmdArgs.length>1) config.args = cmdArgs.slice(1);
