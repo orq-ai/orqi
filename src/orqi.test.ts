@@ -1,9 +1,10 @@
 /** Cross-cutting checks: themes, the header, model filtering, and the names orqi registers with pi. Run with `bun test`. */
 
 import { expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PI_DIST, PI_FILES } from "../scripts/pi-files.ts";
 import { headerLines, terminalProgress } from "./branding.ts";
 import { ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import { orqHarness } from "./harness.ts";
@@ -141,6 +142,21 @@ test("the header uses the ORQI splash", () => {
 	const art = output.split("\n").filter((line) => /[█▀▄]/.test(line));
 	expect(art.length).toBe(6);
 	for (const line of art) expect(line.length).toBeLessThanOrEqual(100);
+});
+
+test("the binary carries every file a compiled pi reads beside its executable", () => {
+	// A compiled pi resolves these under PI_PACKAGE_DIR: theme/ (/settings) and
+	// export-html/ (/export). Each must exist in pi's dist to be embedded at all.
+	for (const source of Object.values(PI_FILES)) expect(existsSync(join(PI_DIST, source))).toBe(true);
+	expect(Object.keys(PI_FILES)).toContain("pi/theme/dark.json");
+	expect(Object.keys(PI_FILES)).toContain("pi/theme/light.json");
+	// Read off pi's exporter, so a pi upgrade that reads one more template file fails here.
+	const exporter = readFileSync(join(PI_DIST, "core", "export-html", "index.js"), "utf8");
+	const read = [...exporter.matchAll(/join\(templateDir, ((?:"[^"]+"(?:, )?)+)\)/g)].map((m) =>
+		[...m[1].matchAll(/"([^"]+)"/g)].map((p) => p[1]).join("/"),
+	);
+	expect(read.length).toBeGreaterThan(0);
+	for (const file of read) expect(Object.keys(PI_FILES)).toContain(`pi/export-html/${file}`);
 });
 
 test("the terminal progress bar is on, except where OSC 9 means a notification", () => {
