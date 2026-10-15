@@ -30,6 +30,7 @@ import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step 
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate } from "./gate.ts";
 import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
+import { brandBuiltinCommands, bugHint, bugIssueUrl, ORQI_ISSUES_URL, redirectPiBugCommand } from "./bug.ts";
 
 /** Visible text: truncation adds ANSI resets around its ellipsis. */
 const bare = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -1101,6 +1102,50 @@ test("the gate asks before a one-way call, remembers 'this turn' until the answe
 	expect(oneShot?.reason).toContain("rerun orqi interactively");
 	// Not an orq tool: not the gate's business.
 	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: {} }, ui(undefined))).toBeUndefined();
+});
+
+test("pi built-ins are branded as orqi", () => {
+	const commands = [
+		{ name: "quit", description: "Quit Pi" },
+		{ name: "bug", description: "Report a bug to the Pi developers" },
+		{ name: "model", description: "Select a model" },
+	];
+	brandBuiltinCommands(commands);
+	expect(commands).toEqual([
+		{ name: "quit", description: "Quit orqi" },
+		{ name: "bug", description: "Open a bug report in the orqi repository" },
+		{ name: "model", description: "Select a model" },
+	]);
+});
+
+test("/bug targets a prefilled orqi issue", async () => {
+	expect(bugHint("/bug the footer is clipped")).toBe("the footer is clipped");
+	expect(bugHint("/bug")).toBe("");
+	expect(bugHint("/buggy")).toBeUndefined();
+
+	const url = new URL(bugIssueUrl("the footer is clipped", "test platform"));
+	expect(`${url.origin}${url.pathname}`).toBe(ORQI_ISSUES_URL);
+	expect(url.searchParams.get("title")).toBe("Bug: the footer is clipped");
+	expect(url.searchParams.get("body")).toContain("the footer is clipped");
+	expect(url.searchParams.get("body")).toContain("test platform");
+
+	let opened = "";
+	let status = "";
+	class FakePiMode {
+		declare handleBugCommand: (hint?: string) => Promise<void>;
+
+		showStatus(message: string) {
+			status = message;
+		}
+	}
+	redirectPiBugCommand(FakePiMode, (target) => {
+		opened = target;
+		return true;
+	});
+	await new FakePiMode().handleBugCommand("the footer is clipped");
+	expect(new URL(opened).origin + new URL(opened).pathname).toBe(ORQI_ISSUES_URL);
+	expect(new URL(opened).searchParams.get("title")).toBe("Bug: the footer is clipped");
+	expect(status).toContain("no bug report was sent automatically");
 });
 
 test("the exit summary: who, how long, what it cost, what it changed, where to find it", () => {

@@ -111,6 +111,13 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   extension command whose name collides with a built-in. Registering `changelog` would silently do
   nothing. A test fails if any command we register collides. Owning the name needs an override hook
   upstream in pi.
+- **`/bug` and `/quit` are pi's, rebranded in place** (`src/bug.ts`). Built-ins dispatch before any
+  extension and colliding extension commands are dropped, so `main.ts` edits the descriptions in
+  pi's `BUILTIN_SLASH_COMMANDS` (imported by a `node_modules` path: pi's export map does not expose
+  it, and it is the same module instance `InteractiveMode` reads) and replaces
+  `InteractiveMode.prototype.handleBugCommand` before the mode is built. `/bug` opens a prefilled
+  `orq-ai/orqi` issue for the user to submit; pi's diagnostics upload never runs. A pi upgrade that
+  renames either symbol silently restores pi's wording, so recheck both after bumping pi.
 - **Colours are tuned against the lightest plausible background, not the darkest.** The terminal
   background belongs to the user: Ghostty and the One Dark family sit near `#282C34`, where the
   first dim amber measured 3.74:1 and read as washed out. Every text role in both themes clears
