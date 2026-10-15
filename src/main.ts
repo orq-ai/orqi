@@ -394,12 +394,15 @@ const makeServices = async () => {
 	// here: the contrast floor is checked against the lightest plausible terminal
 	// background (#282C34), which no light-skin text colour could clear.
 	const THEMES: Record<string, string> = {
+		amber: "orq-amber",
 		dark: "orq-dark",
 		teal: "orq-teal",
 		slate: "orq-slate",
 		signal: "orq-signal",
 	};
-	created.settingsManager.setTheme(THEMES[process.env.ORQI_THEME ?? "amber"] ?? "orq-amber");
+	// orq-dark is the default: amber with turquoise for success and red for errors,
+	// so a failed tool call reads as one. An unknown ORQI_THEME falls back to it too.
+	created.settingsManager.setTheme(THEMES[process.env.ORQI_THEME ?? "dark"] ?? "orq-dark");
 	// Silence pi's own startup header - it pitches pi, and this CLI prints its own.
 	// ctrl+o still shows the full help and loaded resources on demand.
 	created.settingsManager.setQuietStartup(true);
