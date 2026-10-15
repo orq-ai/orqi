@@ -1,0 +1,128 @@
+/** Checks for /whoami and /doctor's panels. Run with `bun test`. */
+
+import { expect, test } from "bun:test";
+import { checkRows, doctorHeader, fieldRows, parseDoctor, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
+
+test("fieldRows pads the labels and leaves out what the CLI did not say", () => {
+	expect(
+		fieldRows([
+			["a", "1"],
+			["longer", "2"],
+			["gone", undefined],
+		]),
+	).toEqual(["a       1", "longer  2"]);
+});
+
+test("whoami for an exported key reads as aligned fields", () => {
+	const rows = whoamiRows(
+		JSON.stringify({
+			api_key: "sk-orq-01M4Z…",
+			authenticated: true,
+			identity: null,
+			method: "api_key",
+			server: "https://my.orq.ai",
+			session_file: "/Users/a/.orq/sessions/my.orq.ai.json",
+			source: "ORQ_API_KEY",
+		}),
+	)!;
+	expect(rows).toEqual([
+		"authenticated  yes",
+		"method         api_key",
+		"source         ORQ_API_KEY",
+		"server         https://my.orq.ai",
+		"api key        sk-orq-01M4Z…",
+		"session file   /Users/a/.orq/sessions/my.orq.ai.json",
+	]);
+});
+
+test("whoami for a browser login names the host from urls, and the identity from an object", () => {
+	const rows = whoamiRows(
+		JSON.stringify({ authenticated: true, identity: { email: "a@orq.ai" }, urls: { api_base_url: "https://acme.example.orq.ai" } }),
+	)!;
+	expect(rows.join("\n")).toContain("identity       a@orq.ai");
+	expect(rows.join("\n")).toContain("server         https://acme.example.orq.ai");
+});
+
+test("a rejected credential says no, with the server's reason", () => {
+	const rows = whoamiRows(JSON.stringify({ authenticated: false, auth_error: "token expired" }))!;
+	expect(rows[0]).toBe("authenticated  no: token expired");
+	expect(whoamiRows(JSON.stringify({ authenticated: false }))![0]).toBe("authenticated  no: the server rejected it");
+});
+
+test("whoami output that is not a JSON object is undefined, so the CLI's own text is shown", () => {
+	expect(whoamiRows("not json")).toBeUndefined();
+	expect(whoamiRows("[]")).toBeUndefined();
+	expect(whoamiRows("null")).toBeUndefined();
+});
+
+const doctor = JSON.stringify({
+	auth: { active_workspace_key: "orq-research", status: "authenticated", user_email: "a@orq.ai", workspace_count: 10 },
+	binary: { name: "orq", version: "11.5.1" },
+	checks: [
+		{ id: "session_file", status: "pass", message: "Session file loaded" },
+		{ id: "coding_agent_codex", status: "info", message: "Codex detected but not wired" },
+		{ id: "mcp", status: "warn", message: "no MCP entry for codex" },
+		{ id: "api_base_url", status: "pass", message: "Reachable" },
+		{ id: "broken", status: "fail", message: "unreachable" },
+	],
+});
+
+test("doctor reads who and where, then every check", () => {
+	const parsed = parseDoctor(doctor)!;
+	expect(doctorHeader(parsed)).toEqual(["status     authenticated", "user       a@orq.ai", "workspace  orq-research", "orq cli    11.5.1"]);
+	expect(parsed.checks.length).toBe(5);
+});
+
+test("doctor puts problems first and keeps the CLI's order within a status", () => {
+	const order = sortChecks(parseDoctor(doctor)!.checks).map((c) => c.id);
+	expect(order).toEqual(["broken", "mcp", "coding_agent_codex", "session_file", "api_base_url"]);
+});
+
+test("a check row carries a mark, the status word, the id and the message", () => {
+	const rows = checkRows(sortChecks(parseDoctor(doctor)!.checks));
+	expect(rows[0]).toBe("✗ fail  broken              unreachable");
+	expect(rows[1]).toBe("! warn  mcp                 no MCP entry for codex");
+	expect(rows[4]).toBe("✓ pass  api_base_url        Reachable");
+});
+
+test("the summary counts each status, worst first", () => {
+	expect(summary(parseDoctor(doctor)!.checks)).toBe("1 fail · 1 warn · 1 info · 2 pass");
+});
+
+test("a doctor answer without checks is undefined; a check without an id is skipped", () => {
+	expect(parseDoctor("nope")).toBeUndefined();
+	expect(parseDoctor("{}")).toBeUndefined();
+	expect(
+		parseDoctor(JSON.stringify({ checks: [{ status: "pass" }, { id: "ok", status: "pass", message: "m" }] }))!.checks.map((c) => c.id),
+	).toEqual(["ok"]);
+});
+
+test("a long pass is cut with an ellipsis, so the row never wraps out of its column", () => {
+	const [row] = checkRows([{ id: "skills", status: "pass", message: "x".repeat(200) }], 20);
+	expect(row!.endsWith("xxxxxxxxxxxxxxxxxxx…")).toBe(true);
+	expect(checkRows([{ id: "a", status: "pass", message: "Reachable" }])[0]).toBe("✓ pass  a  Reachable");
+});
+
+test("a long warn keeps its whole message, wrapped under the message column", () => {
+	const message = "no MCP entry for codex, opencode, kimi, kilo run orq connect codex opencode kimi kilo mcp";
+	const rows = checkRows([{ id: "mcp", status: "warn", message }], 30);
+	expect(rows.length).toBeGreaterThan(1);
+	// Nothing was lost: the words rejoin to the original.
+	expect(
+		rows
+			.map((r) => r.slice(rows[0]!.indexOf("no MCP")))
+			.join(" ")
+			.replace(/\s+/g, " ")
+			.includes("orq connect codex opencode kimi kilo mcp"),
+	).toBe(true);
+	// Continuations start in the message column, not at the left edge.
+	const column = rows[0]!.indexOf("no MCP");
+	for (const row of rows.slice(1)) expect(row.slice(0, column).trim()).toBe("");
+	expect(rows.slice(1).every((row) => row.length > column)).toBe(true);
+});
+
+test("a long fail is wrapped too, never cut", () => {
+	const rows = checkRows([{ id: "api", status: "fail", message: "unreachable ".repeat(10).trim() }], 24);
+	expect(rows.join(" ").match(/unreachable/g)!.length).toBe(10);
+	expect(rows.some((r) => r.includes("…"))).toBe(false);
+});

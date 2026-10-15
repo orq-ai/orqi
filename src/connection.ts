@@ -13,13 +13,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { credentialCandidates, LOGIN_HINT, loginKey, runOrq, SESSION_SOURCE, type Credential } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT, loginKey, runOrq, SESSION_SOURCE, WHOAMI_ARGS, type Credential } from "./auth.ts";
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { refreshStoredSignIn, signInExpired } from "./oauth.ts";
 import { checkNow, currentUpdateCommand, isNewer, maybeCheckUpdate, pendingUpdate, readCache, updateNotice } from "./update.ts";
 import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
+import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
+import { checkRows, doctorHeader, parseDoctor, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
+import { parseWorkspaces, sortWorkspaces, workspaceRows } from "./workspaces.ts";
 
 /**
  * Re-point the orq tools at the first of `candidates` the server accepts.
@@ -113,6 +116,27 @@ function report(ctx: { ui: { notify(message: string, type?: "info" | "warning" |
 	const output = (result.stdout || result.stderr).trim();
 	ctx.ui.notify(output || (result.ok ? "done" : "failed"), result.ok ? "info" : "error");
 	return result.ok;
+}
+
+/**
+ * Show a panel when the session can draw one; false when it cannot (one-shot,
+ * a test), so the caller falls back to the CLI's own words. Resolves once the
+ * panel closes.
+ */
+async function showPanel(ctx: unknown, spec: PanelSpec, width = "70%"): Promise<boolean> {
+	const live = ctx as { mode?: string; ui?: { custom?: (factory: any, options?: any) => Promise<unknown> } };
+	if (live.mode !== "tui" || !live.ui?.custom) return false;
+	await live.ui.custom(
+		(tui: any, theme: any, _keys: unknown, done: (value?: unknown) => void) =>
+			new Panel(
+				spec,
+				panelPaint(theme),
+				() => done(),
+				() => tui.requestRender(),
+			),
+		{ overlay: true, overlayOptions: { anchor: "center", width, maxHeight: "85%" } },
+	);
+	return true;
 }
 
 const HEADER_ENTRY = "orqi-header";
@@ -470,7 +494,10 @@ export function orqCommands(
 		pi.registerCommand("whoami", {
 			description: "show the orq user and active workspace",
 			handler: async (_args, ctx) => {
-				report(ctx, runOrq(["auth", "whoami"]));
+				const answer = runOrq(WHOAMI_ARGS);
+				const rows = answer.ok ? whoamiRows(answer.stdout) : undefined;
+				if (rows && rows.length > 0 && (await showPanel(ctx, { title: "whoami", rows, hint: "esc close" }, "60%"))) return;
+				report(ctx, answer.ok ? runOrq(["auth", "whoami"]) : answer);
 			},
 		});
 
@@ -479,23 +506,67 @@ export function orqCommands(
 		// over to the tools on the next message. `orq auth login`
 		// outside the session works the same way.
 		pi.registerCommand("workspace", {
-			description: "list orq workspaces, or switch with /workspace <key>",
+			description: "pick an orq workspace from a list (enter switches), or switch with /workspace <key>",
 			handler: async (args, ctx) => {
+				const switchTo = async (key: string) => {
+					if (!report(ctx, runOrq(["workspace", "use", key]))) return;
+					const outcome = await recover(pi, ctx, pickForWorkspace);
+					if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+				};
 				const key = args.trim();
-				if (!key) {
-					report(ctx, runOrq(["workspace", "list"]));
+				if (key) return switchTo(key);
+
+				const listed = runOrq(["workspace", "list", "-o", "json"]);
+				const entries = listed.ok ? parseWorkspaces(listed.stdout) : undefined;
+				// No panel to draw (one-shot, a test, a CLI answer in a shape we do not know):
+				// the CLI's own words are still the right answer.
+				const sorted = entries && entries.length > 0 ? sortWorkspaces(entries) : undefined;
+				let chosen: string | undefined;
+				const shown =
+					sorted &&
+					(await showPanel(ctx, {
+						title: "workspaces",
+						badge: `${sorted.length}`,
+						rows: workspaceRows(sorted),
+						selectable: true,
+						filterable: true,
+						height: 14,
+						hint: "type to filter · ↑↓ move · enter switch · esc close",
+						keys: {
+							enter: (i: number) => {
+								const picked = sorted[i];
+								// The one you are on needs no switch.
+								if (picked && !picked.active) chosen = picked.key;
+								return true;
+							},
+						},
+					}));
+				if (!shown) {
+					report(ctx, listed.ok ? listed : runOrq(["workspace", "list"]));
 					return;
 				}
-				if (!report(ctx, runOrq(["workspace", "use", key]))) return;
-				const outcome = await recover(pi, ctx, pickForWorkspace);
-				if (outcome) ctx.ui.notify(outcome, rejections.length ? "warning" : "info");
+				// After the panel is gone: a switch reconnects the tools and may pin a warning.
+				if (chosen) await switchTo(chosen);
 			},
 		});
 
 		pi.registerCommand("doctor", {
-			description: "inspect orq config, auth state and endpoint reachability",
+			description: "inspect orq config, auth state and endpoint reachability: problems first",
 			handler: async (_args, ctx) => {
-				report(ctx, runOrq(["doctor"]));
+				const answer = runOrq(["doctor", "-o", "json"]);
+				const doctor = answer.ok ? parseDoctor(answer.stdout) : undefined;
+				let shown = false;
+				if (doctor && doctor.checks.length > 0) {
+					const checks = sortChecks(doctor.checks);
+					shown = await showPanel(ctx, {
+						title: "doctor",
+						badge: summary(checks),
+						rows: [...doctorHeader(doctor), "", ...checkRows(checks)],
+						height: 24,
+						hint: "↑↓ scroll · esc close · full text: orq doctor",
+					});
+				}
+				if (!shown) report(ctx, answer.ok ? runOrq(["doctor"]) : answer);
 				try {
 					const { DefaultPackageManager } = await import("@earendil-works/pi-coding-agent");
 					const { SettingsManager } = await import("@earendil-works/pi-coding-agent");

@@ -313,7 +313,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			const queryArgs: Record<string, unknown> = { metric: metricForGroup, time_range: { start: last }, group_by: [groupByParam] };
 			const queryPromise = deps.callTool("query_analytics", queryArgs).catch((e) => ({ text: String(e), isError: true as const }));
 			const [overviewRes, queryRes] = await Promise.all([overviewPromise, queryPromise]);
-			let rows: string[] = [];
+			const rows: string[] = [];
 			let overview: any = null;
 			try {
 				overview = JSON.parse(overviewRes.text);
@@ -364,11 +364,16 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 					if (items.length) {
 						rows.push(`### Top ${groupByParam}s — last ${last}`);
 						rows.push("");
-						const head = `| # | ${groupByParam} | Requests | Cost |`;
-						rows.push(head);
-						rows.push("|---|" + "---|".repeat(head.split("|").length - 2));
+						const wNum = 3;
+						const wName = Math.min(30, Math.max(groupByParam.length, ...items.slice(0, 10).map((it: any) => String(it.name).length)));
+						const wReq = 10;
+						rows.push(`${"#".padEnd(wNum)} ${groupByParam.padEnd(wName)} ${"Requests".padEnd(wReq)} Cost`);
+						rows.push(`${"-".repeat(wNum)} ${"-".repeat(wName)} ${"-".repeat(wReq)} ----`);
 						items.slice(0, 10).forEach((it: any, i: number) => {
-							rows.push(`| ${i + 1} | ${it.name} | ${it.requests} | ${typeof it.cost === "number" ? dollars(it.cost) : it.cost} |`);
+							const costStr = typeof it.cost === "number" ? dollars(it.cost) : String(it.cost);
+							rows.push(
+								`${String(i + 1).padEnd(wNum)} ${String(it.name).slice(0, wName).padEnd(wName)} ${String(it.requests).padEnd(wReq)} ${costStr}`,
+							);
 						});
 						if (items.length > 10) rows.push(`… and ${items.length - 10} more`);
 					} else rows.push("", `no breakdown for ${groupByParam} — last ${last}`);
@@ -379,7 +384,8 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			await panel(ctx, {
 				title: `analytics · last ${last} · by ${groupByParam}`,
 				rows,
-				hint: "--group-by model|provider|project_id|http_status_code|agent_name · --last 24h|7d · esc close",
+				height: 18,
+				hint: "↑↓ scroll · --group-by model|provider|project_id|http_status_code|agent_name · --last 24h|7d · esc close",
 			});
 		},
 	});
@@ -410,7 +416,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 					.then((r) => ({ t, r })),
 			);
 			const [overviewRes, ...results] = await Promise.all([overviewP, ...calls]);
-			let rows: string[] = [];
+			const rows: string[] = [];
 			const counts: string[] = [];
 			const byKey = new Map<string, { items: any[]; error?: string }>();
 			if (includeAgents) {
@@ -477,7 +483,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				title: `overview · ${deps.workspace() ?? "this workspace"}`,
 				rows,
 				height: 18,
-				hint: "/overview [section] · esc close",
+				hint: "↑↓ scroll · /overview [section] · esc close",
 			});
 		},
 	});
