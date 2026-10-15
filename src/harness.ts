@@ -784,7 +784,8 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 		const stopDecisions = deps.routing?.onDecision((decision) => {
 			const usage = decision.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: decision.cost } : undefined;
-			const label = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`;
+			// A fallback is the default rung, not a judgement: say so where the decision is listed.
+			const label = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}${decision.fallback ? " (fallback)" : ""}`;
 			trajectory.route(label, `→ ${shortModel(decision.model)}`, usage, decision.latencyMs, decision.classifier);
 			try {
 				pi.appendEntry(ROUTE_ENTRY, decision);
@@ -796,13 +797,20 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerCommand("route", {
 			description:
-				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route platform the workspace's smart routers",
+				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route classifier lists or picks the decision model, /route platform the workspace's smart routers",
 			handler: async (args, ctx) => {
 				const routing = deps.routing;
 				const arg = args.trim();
 				if (arg === "on" || arg === "off") {
 					routeShown = arg === "on";
-					ctx.ui.notify(`Route lines ${routeShown ? "shown" : "hidden"}.`);
+					const auto = ctx.model?.provider === "orq" && ctx.model.id === "auto";
+					ctx.ui.notify(
+						!routeShown
+							? "Route lines hidden."
+							: auto
+								? "Route lines shown above each answer."
+								: "Route lines on. They appear when orq/auto picks the model: /model orq/auto",
+					);
 					render();
 					return;
 				}
@@ -838,6 +846,33 @@ export function orqHarness(deps: HarnessDeps) {
 					ctx.ui.notify("orq/auto is not available in this session.", "warning");
 					return;
 				}
+				if (arg === "classifier" || arg.startsWith("classifier ")) {
+					const wanted = arg.slice("classifier".length).trim();
+					const available = deps
+						.catalogue()
+						.filter((model) => model.kind === "classifier")
+						.map((model) => model.id);
+					if (!wanted) {
+						ctx.ui.notify(
+							[
+								"classifiers in this workspace (/route classifier <id> to switch)",
+								...(available.length
+									? available.map((id) => `  ${id === routing.classifier ? "●" : "○"} ${id}`)
+									: ["  none: orq/auto falls back to medium on every turn"]),
+							].join("\n"),
+						);
+						return;
+					}
+					if (!available.includes(wanted)) {
+						ctx.ui.notify(`${wanted} is not a classifier in this workspace; /route classifier lists them`, "warning");
+						return;
+					}
+					// Until orqi exits. A sticky 403 is cleared too: a different model deserves its own answer.
+					routing.classifier = wanted;
+					routing.unavailable = undefined;
+					ctx.ui.notify(`orq/auto now asks ${wanted}. ORQI_ROUTE_CLASSIFIER=${wanted} makes it stick.`);
+					return;
+				}
 				const pool = TIERS.map((t: Tier) => `${t} ${shortModel(routing.pool[t])}`).join(" · ");
 				if (arg === "explain" || arg === "") {
 					ctx.ui.notify(
@@ -858,7 +893,7 @@ export function orqHarness(deps: HarnessDeps) {
 					);
 					return;
 				}
-				ctx.ui.notify("usage: /route on|off|explain|platform", "warning");
+				ctx.ui.notify("usage: /route on|off|explain|classifier [id]|platform", "warning");
 			},
 		});
 
