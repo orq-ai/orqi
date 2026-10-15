@@ -1,6 +1,7 @@
 /** Checks for /workspace's list view. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { parseWorkspaces, sortWorkspaces, workspaceRows } from "./workspaces.ts";
 
 const cli = JSON.stringify({
@@ -66,4 +67,28 @@ test("a hostile workspace name stays one row, and the key you switch to is untou
 	const odd = parseWorkspaces(JSON.stringify({ workspaces: [{ key: "a\nb", name: "n" }] }))!;
 	expect(odd[0]!.key).toBe("a\nb");
 	expect(workspaceRows(odd).join("")).not.toContain("\n");
+});
+
+test("columns line up in display cells for CJK, emoji and coloured names", () => {
+	const red = (text: string) => `\x1b[31m${text}\x1b[0m`;
+	const rows = workspaceRows([
+		{ key: "acme", name: "Acme", active: true, members: 3 },
+		{ key: "nihon", name: "日本語ワークスペース", active: false, members: 5 },
+		{ key: "emoji", name: "😀 fun", active: false, members: 1 },
+		{ key: "col", name: red("Coloured name"), active: false, members: 2 },
+	]);
+	// The key starts at the same display cell on every row.
+	const keys = ["acme", "nihon", "emoji", "col"];
+	const at = rows.map((row, i) => visibleWidth(row.slice(0, row.indexOf(keys[i]!, 4))));
+	expect(new Set(at).size).toBe(1);
+});
+
+test("a long coloured name is cut to its column and the colour is closed", () => {
+	const name = `\x1b[31m${"x".repeat(60)}\x1b[0m`;
+	const [row] = workspaceRows([{ key: "k", name, active: false }]);
+	// Cut at 28 cells, not 28 bytes of escape and text.
+	expect(visibleWidth(row!.slice(0, row!.indexOf("  k")))).toBe(3 + 28);
+	// Cut inside the colour, so a reset must follow or the colour bleeds into the next column.
+	expect(row!.indexOf("\x1b[0m")).toBeGreaterThan(row!.indexOf("\x1b[31m"));
+	expect(row!.includes("…")).toBe(true);
 });

@@ -21,7 +21,7 @@ import { checkNow, currentUpdateCommand, isNewer, maybeCheckUpdate, pendingUpdat
 import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
-import { checkRows, doctorHeader, parseDoctor, redactKeys, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
+import { checkRows, doctorHeader, noticeText, parseDoctor, redactKeys, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
 import { parseWorkspaces, sortWorkspaces, workspaceRows } from "./workspaces.ts";
 
 /**
@@ -498,7 +498,7 @@ export function orqCommands(
 				const rows = answer.ok ? whoamiRows(answer.stdout) : undefined;
 				if (rows && rows.length > 0) {
 					// One call, not two: with no panel to draw the same rows are the notice.
-					if (!(await showPanel(ctx, { title: "whoami", rows, hint: "esc close" }, "60%"))) ctx.ui.notify(rows.join("\n"));
+					if (!(await showPanel(ctx, { title: "whoami", rows, hint: "esc close" }, "60%"))) ctx.ui.notify(noticeText(rows));
 					return;
 				}
 				// An unknown shape or a failed call: the CLI's own words, with any key hidden.
@@ -549,7 +549,7 @@ export function orqCommands(
 				if (!shown) {
 					// One call, not two: no panel means the same rows are the notice, and
 					// an answer we cannot read is shown as the CLI gave it.
-					if (sorted) ctx.ui.notify(workspaceRows(sorted).join("\n"));
+					if (sorted) ctx.ui.notify(noticeText(workspaceRows(sorted)));
 					else report(ctx, { ...listed, stdout: redactKeys(listed.stdout), stderr: redactKeys(listed.stderr) });
 					return;
 				}
@@ -568,7 +568,7 @@ export function orqCommands(
 					const rows = [...doctorHeader(doctor), "", ...checkRows(checks)];
 					// One call, not two: with no panel to draw the same rows are the notice.
 					const spec = { title: "doctor", badge: summary(checks), rows, height: 24, hint: "↑↓ scroll · esc close · full text: orq doctor" };
-					if (!(await showPanel(ctx, spec))) ctx.ui.notify([`doctor · ${summary(checks)}`, ...rows].join("\n"));
+					if (!(await showPanel(ctx, spec))) ctx.ui.notify(noticeText([`doctor · ${summary(checks)}`, ...rows]));
 				} else {
 					report(ctx, { ...answer, stdout: redactKeys(answer.stdout), stderr: redactKeys(answer.stderr) });
 				}

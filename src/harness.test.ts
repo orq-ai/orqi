@@ -23,7 +23,7 @@ import {
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
-import { boxLines, filterRows, oneLine, Panel, plainPanel } from "./panel.ts";
+import { boxLines, cells, filterRows, fit, oneLine, Panel, plainPanel } from "./panel.ts";
 import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
@@ -593,6 +593,46 @@ test("a row is one line: server text cannot split the box or drive the terminal"
 	expect(titled[0]).not.toContain("\x1b[2J");
 });
 
+test("8-bit control codes are text, not commands: C1 CSI and OSC are one byte each", () => {
+	// 0x9b is a one-byte CSI and 0x9d a one-byte OSC; a terminal in 8-bit mode runs them.
+	expect(oneLine("a\x9b2Jb")).toBe("a 2Jb");
+	expect(oneLine("a\x9d0;x\x07b")).toBe("a 0;x b");
+	expect(/[\x80-\x9f]/.test(oneLine("\x80\x85\x9b\x9d\x9f"))).toBe(false);
+	// Through a whole panel too.
+	const lines = boxLines({ title: "t", rows: ["a\x9b2Jb"], selectable: true }, 40);
+	expect(lines.join("")).not.toMatch(/[\x80-\x9f]/);
+	// The 7-bit form that is split by a newline is already safe, and stays so.
+	expect(oneLine("a\x1b\n[2Jb")).toBe("a [2Jb");
+	// Ordinary text above 0x9f is untouched: accents, CJK, emoji.
+	expect(oneLine("café 日本語 😀 ✓ ·")).toBe("café 日本語 😀 ✓ ·");
+});
+
+test("fit makes text exactly N display cells: padded, or cut with an ellipsis", () => {
+	expect(fit("ab", 6)).toBe("ab    ");
+	expect(cells(fit("日本", 8))).toBe(8); // two cells a character
+	expect(cells(fit("日本語ワークスペース", 9))).toBe(9);
+	expect(cells(fit("😀😀😀😀", 5))).toBe(5); // never splits a pair
+	expect(fit("a\nb\x1b[2J", 6)).toBe("a b   ");
+	const coloured = `\x1b[31m${"x".repeat(40)}\x1b[0m`;
+	expect(cells(fit(coloured, 10))).toBe(10);
+	expect(fit(coloured, 10)).toContain("\x1b[0m"); // the colour is closed
+});
+
+test("the analytics breakdown lines up with CJK and emoji names, and a long label", () => {
+	const rows = breakdownRows("model", [
+		{ name: "gpt-4.1", requests: 5200, cost: 4.1 },
+		{ name: "日本語モデル", requests: 12345678901234, cost: 0.5 },
+		{ name: "😀model", requests: 7, cost: 0 },
+	]);
+	const costAt = rows.slice(2).map((row) => visibleWidth(row.slice(0, row.lastIndexOf("  "))));
+	expect(new Set(costAt).size).toBe(1);
+	// A label wider than the name column is cut like the data, so the header lines up.
+	const long = breakdownRows("a-very-long-dimension-label-that-exceeds-thirty", [{ name: "m", requests: 1, cost: 1 }]);
+	const head = visibleWidth(long[0]!.slice(0, long[0]!.lastIndexOf("  ")));
+	expect(head).toBe(visibleWidth(long[2]!.slice(0, long[2]!.lastIndexOf("  "))));
+	expect(long[0]).toContain("…");
+});
+
 test("the analytics breakdown keeps its columns aligned however wide a count is", () => {
 	const items = [
 		{ name: "gpt-4.1", requests: 5200, cost: 4.1 },
@@ -600,9 +640,10 @@ test("the analytics breakdown keeps its columns aligned however wide a count is"
 		{ name: "a-model-name-that-is-far-too-long-to-fit-in-the-column", requests: 7, cost: 0 },
 	];
 	const rows = breakdownRows("model", items);
-	// The cost column starts at the same offset on every row, header and rule included.
-	const costAt = rows.map((row) => row.lastIndexOf("  ") + 2);
-	expect(new Set(costAt.slice(0, 5)).size).toBe(1);
+	// The cost column starts at the same display cell on every row, header and rule included.
+	// Display cells, not string offsets: a cut name carries colour-reset bytes that cost no width.
+	const costAt = rows.map((row) => visibleWidth(row.slice(0, row.lastIndexOf("  "))));
+	expect(new Set(costAt).size).toBe(1);
 	// A 14-digit count is shown whole, not truncated into a wrong number.
 	expect(rows.join("\n")).toContain("12345678901234");
 	// A long name is cut with an ellipsis to the name column, not wrapped.
