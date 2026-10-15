@@ -213,8 +213,14 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			}
 			const filters: Record<string, unknown> = { limit };
 			const freeText = free.join(" ").trim();
-			if (flags.get("model")) filters.model = flags.get("model");
-			else if (freeText) {
+			if (flags.has("model")) {
+				const m = flags.get("model") ?? "";
+				if (!m || m.startsWith("--")) {
+					ctx.ui.notify("Invalid --model: provide a model name", "warning");
+					return;
+				}
+				filters.model = m;
+			} else if (freeText) {
 				// Free text is a search, not a model — "errors from gpt-4o" would otherwise
 				// be sent as model="errors from gpt-4o" and miss. Keep it as full-text search.
 				filters.search = freeText;
