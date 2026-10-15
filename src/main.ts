@@ -90,6 +90,9 @@ if (oneShot === "--help" || oneShot === "-h") {
   orqi plugin list               list installed plugins
   orqi plugin update [source]    update plugins
   orqi plugin remove <source>    remove a plugin
+  orqi mcp list                  list MCP servers
+  orqi mcp add <name> --url <url>   add MCP server
+  orqi mcp remove <name>         remove MCP server
 
 Sign in with \`orq auth login\` or export ORQ_API_KEY.`);
 	process.exit(0);
@@ -173,6 +176,87 @@ Examples:
 			console.log(source ? `Updated ${source}` : "Updated plugins");
 		} else {
 			console.error(`Unknown plugin command: ${args.join(" ")}\nUsage: orqi plugin install|remove|list|update [source]`);
+			process.exit(1);
+		}
+	} catch (e) {
+		console.error(e instanceof Error ? e.message : String(e));
+		process.exit(1);
+	}
+	process.exit(0);
+}
+if (oneShot === "mcp") {
+	const args = process.argv.slice(3);
+	if (args.includes("--help") || args.includes("-h") || args.length === 0) {
+		console.log(`orqi mcp - manage MCP servers
+
+  orqi mcp list                              list MCP servers
+  orqi mcp add <name> --url <url> [--header "K: V"]  add HTTP server
+  orqi mcp add <name> <command> [args...]    add stdio server
+  orqi mcp remove <name>                     remove server
+  orqi mcp login <name>                      sign in (OAuth)
+
+Examples:
+  orqi mcp add my-tools --url https://example.com/mcp
+  orqi mcp add my-stdio -- npx my-mcp-server`);
+		process.exit(0);
+	}
+	const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import("node:fs");
+	const { join } = await import("node:path");
+	const mcpPath = join(AGENT_DIR, "mcp.json");
+	const cmd = args[0];
+	try {
+		if (cmd === "list") {
+			if (!existsSync(mcpPath)) { console.log("No MCP servers configured."); process.exit(0); }
+			const j = JSON.parse(readFileSync(mcpPath, "utf8"));
+			const servers = j.mcpServers ?? {};
+			if (Object.keys(servers).length === 0) console.log("No MCP servers configured.");
+			else for (const [name, cfg] of Object.entries(servers)) {
+				const c = cfg as any;
+				const desc = c.url ? `url ${c.url}` : `cmd ${c.command}`;
+				console.log(`  ${name}: ${desc}`);
+			}
+		} else if (cmd === "add") {
+			const name = args[1];
+			if (!name) { console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]"); process.exit(1); }
+			const urlIdx = args.indexOf("--url");
+			let config: any = {};
+			if (urlIdx !== -1) {
+				const url = args[urlIdx+1];
+				if (!url) { console.error("--url needs a value"); process.exit(1); }
+				config.url = url;
+				// collect --header repeats: --header "K: V"
+				const headers: Record<string,string> = {};
+				for (let i=0;i<args.length;i++) if (args[i]==="--header" && args[i+1]) { const h=args[i+1]; const colon=h.indexOf(":"); if(colon>-1) headers[h.slice(0,colon).trim()]=h.slice(colon+1).trim(); }
+				if (Object.keys(headers).length) config.headers = headers;
+			} else {
+				// stdio: everything after name is command
+				const cmdArgs = args.slice(2);
+				if (cmdArgs.length===0) { console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]"); process.exit(1); }
+				config.command = cmdArgs[0];
+				if (cmdArgs.length>1) config.args = cmdArgs.slice(1);
+			}
+			let j: any = {};
+			if (existsSync(mcpPath)) try { j = JSON.parse(readFileSync(mcpPath, "utf8")); } catch {}
+			if (!j.mcpServers || typeof j.mcpServers !== "object") j.mcpServers = {};
+			const replaced = j.mcpServers[name] !== undefined;
+			j.mcpServers[name] = config;
+			mkdirSync(join(AGENT_DIR), { recursive: true });
+			writeFileSync(mcpPath, JSON.stringify(j, null, 2) + "\n");
+			console.log(`${replaced?"Replaced":"Added"} MCP server "${name}" in ${mcpPath}`);
+		} else if (cmd === "remove") {
+			const name = args[1];
+			if (!name) { console.error("Usage: orqi mcp remove <name>"); process.exit(1); }
+			if (!existsSync(mcpPath)) { console.error(`No mcp.json at ${mcpPath}`); process.exit(1); }
+			const j = JSON.parse(readFileSync(mcpPath, "utf8"));
+			if (!j.mcpServers || !(name in j.mcpServers)) { console.error(`No MCP server "${name}" in ${mcpPath}`); process.exit(1); }
+			delete j.mcpServers[name];
+			writeFileSync(mcpPath, JSON.stringify(j, null, 2) + "\n");
+			console.log(`Removed MCP server "${name}" from ${mcpPath}`);
+		} else if (cmd === "login" || cmd === "logout") {
+			console.error(`Use: orqi mcp login is via the TUI /mcp login ${args[1] ?? ""} (OAuth flow needs UI)`);
+			process.exit(1);
+		} else {
+			console.error(`Unknown mcp command: ${cmd}\nUsage: orqi mcp list|add|remove|login`);
 			process.exit(1);
 		}
 	} catch (e) {
