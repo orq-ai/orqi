@@ -334,11 +334,13 @@ test("isNewer compares versions numerically, not lexically", () => {
 	expect(isNewer("0.9.0-rc1", "0.8.0")).toBe(false);
 });
 
-test("the update check is due hourly, not daily", () => {
+test("the update check runs on every launch, even right after the last one", () => {
+	// GitHub's latest-release redirect lags a minute or two after a release:
+	// reusing an answer from a launch a minute ago would hide the new version.
 	const now = Date.now();
 	const cache: UpdateCache = { checked_at: now, latest: "0.2.0" };
-	expect(checkDue(cache, {}, now + 30 * 60 * 1000)).toBe(false); // half an hour: reuse the answer
-	expect(checkDue(cache, {}, now + 61 * 60 * 1000)).toBe(true); // an hour on: ask again
+	expect(checkDue(cache, {}, now)).toBe(true);
+	expect(checkDue(cache, {}, now + 60 * 1000)).toBe(true);
 });
 
 test("latestVersion reads the tag off github.com's redirect, not the rate-limited API", async () => {
@@ -358,13 +360,15 @@ test("latestVersion reads the tag off github.com's redirect, not the rate-limite
 	expect(await latestVersion(1000, (async () => Promise.reject(new Error("offline"))) as unknown as typeof fetch)).toBeUndefined();
 });
 
-test("maybeCheckUpdate answers from a fresh cache without asking GitHub", async () => {
+test("maybeCheckUpdate asks again even over a fresh cache, and announces only a newer release", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-notice-"));
 	try {
-		writeFileSync(join(dir, "update-check.json"), JSON.stringify({ checked_at: Date.now(), latest: "999.0.0" }));
-		expect(await maybeCheckUpdate(dir)).toBe("999.0.0");
-		writeFileSync(join(dir, "update-check.json"), JSON.stringify({ checked_at: Date.now(), latest: "0.0.1" }));
-		expect(await maybeCheckUpdate(dir)).toBeUndefined(); // cached, but not newer than this binary
+		// A minute-old "nothing newer" must not hide a release published since.
+		writeFileSync(join(dir, "update-check.json"), JSON.stringify({ checked_at: Date.now(), latest: VERSION }));
+		expect(await maybeCheckUpdate(dir, async () => "999.0.0")).toBe("999.0.0");
+		expect(readCache(dir)?.latest).toBe("999.0.0");
+		expect(await maybeCheckUpdate(dir, async () => "0.0.1")).toBeUndefined(); // not newer than this binary
+		expect(await maybeCheckUpdate(dir, async () => undefined)).toBeUndefined(); // offline: silent
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -385,7 +389,7 @@ test("the daily update check is due only when it should be", () => {
 	const now = Date.now();
 	const cache: UpdateCache = { checked_at: now, latest: "0.2.0" };
 	expect(checkDue(undefined, {})).toBe(true); // never checked
-	expect(checkDue(cache, {})).toBe(false); // just checked
+	expect(checkDue(cache, {})).toBe(true); // just checked, and asked again: no reuse
 	expect(checkDue(cache, {}, now + 25 * 60 * 60 * 1000)).toBe(true); // long after
 	expect(checkDue(cache, { ORQI_REFRESH_UPDATE: "1" })).toBe(true); // forced
 	expect(checkDue(cache, { CI: "true" })).toBe(false); // nobody there to see it
@@ -477,13 +481,13 @@ test("a successful update check survives a cache write failure", async () => {
 	}
 });
 
-test("a completed failed update check is cached for the normal TTL", async () => {
+test("a completed failed update check is recorded, and the next launch asks again", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-update-failed-"));
 	try {
 		expect(await checkNow(dir, async () => undefined)).toBeUndefined();
 		const cache = readCache(dir);
 		expect(cache?.latest).toBeNull();
-		expect(checkDue(cache, {}, cache?.checked_at)).toBe(false);
+		expect(checkDue(cache, {}, cache?.checked_at)).toBe(true);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

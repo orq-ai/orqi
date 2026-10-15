@@ -51,7 +51,7 @@ to it. Without it, only a pasted or exported key works.
 orqi update             # update to the latest release (through npm for an npm install)
 ```
 
-When you open orqi it checks for a newer release (at most once an hour) and, if there is one, shows an
+When you open orqi it checks for a newer release (one request, after startup) and, if there is one, shows an
 "Update available" notice above the editor with the command to run, like pi does; it clears after your
 first message. `orqi update` itself never runs automatically.
 

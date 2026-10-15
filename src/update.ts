@@ -50,8 +50,12 @@ import { parseChecksum, sha256Hex, sidecar } from "./checksum.ts";
 
 export const REPO = "orq-ai/orqi";
 
-/** How long a release answer is trusted: an hour, so a relaunch does not refetch but a new release shows the same day. */
-export const UPDATE_CHECK_TTL_MS = 60 * 60 * 1000;
+/**
+ * How long a release answer is reused: not at all. The redirect is one cheap,
+ * unmetered HEAD, and GitHub's cache serves the old tag for a minute or two
+ * after a release, so a reused "nothing newer" hid 0.16.1 for an hour.
+ */
+export const UPDATE_CHECK_TTL_MS = 0;
 
 export type InstallMethod = "binary" | "homebrew" | "npm" | "source";
 
@@ -351,10 +355,13 @@ export async function checkNow(
  * timestamped; an interrupted or unresolved request never reaches persistence
  * and is therefore retried on the next run.
  */
-export async function maybeCheckUpdate(agentDir: string): Promise<string | undefined> {
+export async function maybeCheckUpdate(
+	agentDir: string,
+	fetchLatest: () => Promise<string | undefined> = latestVersion,
+): Promise<string | undefined> {
 	try {
 		if (!checkDue(readCache(agentDir))) return pendingUpdate(readCache(agentDir));
-		const latest = await checkNow(agentDir);
+		const latest = await checkNow(agentDir, fetchLatest);
 		return latest && isNewer(latest, VERSION) ? latest : undefined;
 	} catch {
 		// Silent by design; the launch notice reflects whatever landed.
