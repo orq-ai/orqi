@@ -199,6 +199,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   or a failed `--version` verification never touches `target`, so there is nothing to roll back to.
   The daily background check (`maybeCheckUpdate`) only ever writes a cache entry the header reads -
   it never runs the swap itself.
+- **`orqi update` refuses an `ORQI_VERSION` pin older than the running binary** unless given `--allow-downgrade`
+  (an equal pin is a no-op). A workshop repo's `.env` pinned `0.1.0` for `install.sh` and silently
+  downgraded a user's 0.6.0; `install.sh` only warns, since running it is an explicit install.
 - **A download without a checksum is refused on `latest` and allowed on a pinned version.** Every
   release from 0.2.0 on publishes `<asset>.sha256` beside the tarball (`src/checksum.ts` owns the
   name and the `shasum -c` line format), and `install.sh` and `runUpdate` verify it with the same
