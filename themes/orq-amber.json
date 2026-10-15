@@ -68,12 +68,12 @@
 		"syntaxOperator": "amberDim",
 		"syntaxPunctuation": "amberDim",
 
-		"thinkingOff": "amberLine",
-		"thinkingMinimal": "amberFaint",
-		"thinkingLow": "amberLine",
-		"thinkingMedium": "amberFaint",
-		"thinkingHigh": "amber",
-		"thinkingXhigh": "amberText",
+		"thinkingOff": "#BC8B57",
+		"thinkingMinimal": "#C9975F",
+		"thinkingLow": "#D6A266",
+		"thinkingMedium": "#E0A85E",
+		"thinkingHigh": "#FFA23C",
+		"thinkingXhigh": "#FFC489",
 		"thinkingMax": "amberHot",
 
 		"bashMode": "amber"

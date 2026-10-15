@@ -73,12 +73,12 @@
 		"syntaxOperator": "tealDim",
 		"syntaxPunctuation": "tealDim",
 
-		"thinkingOff": "#1E332E",
-		"thinkingMinimal": "tealFaint",
-		"thinkingLow": "deepTeal",
-		"thinkingMedium": "#1A6E5C",
-		"thinkingHigh": "#2BB397",
-		"thinkingXhigh": "turquoise",
+		"thinkingOff": "#74A093",
+		"thinkingMinimal": "#7BAD9E",
+		"thinkingLow": "#4DBBA2",
+		"thinkingMedium": "#2EC8A8",
+		"thinkingHigh": "#2BD9B4",
+		"thinkingXhigh": "#3FE0C5",
 		"thinkingMax": "tealHot",
 
 		"bashMode": "teal"

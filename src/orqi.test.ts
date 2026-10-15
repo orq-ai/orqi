@@ -45,6 +45,14 @@ test("every theme's text stays legible on a light-ish dark background", () => {
 		"customMessageText",
 		"accent",
 		"warning",
+		// pi colours the working message ("thinking", a tool name) with the editor
+		// border, which follows the thinking level: these are text, not decoration.
+		"thinkingOff",
+		"thinkingMinimal",
+		"thinkingLow",
+		"thinkingMedium",
+		"thinkingHigh",
+		"thinkingXhigh",
 	];
 	const LIGHTEST_BG = "#282C34";
 

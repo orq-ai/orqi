@@ -72,12 +72,12 @@
 		"syntaxOperator": "vermDim",
 		"syntaxPunctuation": "vermDim",
 
-		"thinkingOff": "#3A2B22",
-		"thinkingMinimal": "vermFaint",
-		"thinkingLow": "#4A352B",
-		"thinkingMedium": "#7A523F",
-		"thinkingHigh": "#C05E36",
-		"thinkingXhigh": "sky",
+		"thinkingOff": "#B28A79",
+		"thinkingMinimal": "#BE9482",
+		"thinkingLow": "#D2977C",
+		"thinkingMedium": "#E39A79",
+		"thinkingHigh": "#F4A07A",
+		"thinkingXhigh": "#5FC9FF",
 		"thinkingMax": "skyHot",
 
 		"bashMode": "sky"

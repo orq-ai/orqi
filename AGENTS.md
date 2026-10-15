@@ -121,7 +121,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **Colours are tuned against the lightest plausible background, not the darkest.** The terminal
   background belongs to the user: Ghostty and the One Dark family sit near `#282C34`, where the
   first dim amber measured 3.74:1 and read as washed out. Every text role in all five themes clears
-  4.5:1 there, and a test enforces it. Borders are decoration and exempt.
+  4.5:1 there, and a test enforces it. Borders are decoration and exempt, except the
+  `thinking*` colours: pi paints the input box's border with them and writes the working message
+  ("thinking", a tool name) in the same colour, so they are tested as text. A 2.12:1 teal made
+  "thinking" unreadable.
 - **Five themes; `orq-dark` is the default.** It keeps the amber surface with turquoise for success
   and red for errors, so a failed tool call reads as one. `orq-amber` (`ORQI_THEME=amber`) is one
   hue throughout, chosen for the 80s monochrome look, at a known cost: a failed tool call reads much
