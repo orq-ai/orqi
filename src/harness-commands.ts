@@ -36,7 +36,7 @@ import {
 import { toAtif, type Trajectory } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
-import { selectionName, openUrl, costLines, topModel, contextRows } from "./harness-views.ts";
+import { breakdownRows, selectionName, openUrl, costLines, topModel, contextRows } from "./harness-views.ts";
 import type { HarnessDeps } from "./harness.ts";
 
 export type PanelFn = (
@@ -364,18 +364,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 					if (items.length) {
 						rows.push(`### Top ${groupByParam}s — last ${last}`);
 						rows.push("");
-						const wNum = 3;
-						const wName = Math.min(30, Math.max(groupByParam.length, ...items.slice(0, 10).map((it: any) => String(it.name).length)));
-						const wReq = 10;
-						rows.push(`${"#".padEnd(wNum)} ${groupByParam.padEnd(wName)} ${"Requests".padEnd(wReq)} Cost`);
-						rows.push(`${"-".repeat(wNum)} ${"-".repeat(wName)} ${"-".repeat(wReq)} ----`);
-						items.slice(0, 10).forEach((it: any, i: number) => {
-							const costStr = typeof it.cost === "number" ? dollars(it.cost) : String(it.cost);
-							rows.push(
-								`${String(i + 1).padEnd(wNum)} ${String(it.name).slice(0, wName).padEnd(wName)} ${String(it.requests).padEnd(wReq)} ${costStr}`,
-							);
-						});
-						if (items.length > 10) rows.push(`… and ${items.length - 10} more`);
+						rows.push(...breakdownRows(groupByParam, items));
 					} else rows.push("", `no breakdown for ${groupByParam} — last ${last}`);
 				} catch {
 					rows.push(queryRes.text.slice(0, 500));

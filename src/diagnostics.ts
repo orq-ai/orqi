@@ -16,6 +16,29 @@ export function fieldRows(fields: [string, string | undefined][]): string[] {
 	return present.map(([label, value]) => `${label.padEnd(width)}  ${value}`);
 }
 
+/**
+ * A key as it may be shown: the CLI already masks it (`sk-orq-01M4Z…`), but
+ * that is the CLI's promise, not ours, and a key is a credential. Anything that
+ * is not already a short, ellipsised stub is cut to its first ten characters.
+ */
+export function maskKey(key: string): string {
+	const stub = key.endsWith("…") && key.length <= 20;
+	return stub ? key : `${key.slice(0, 10)}…`;
+}
+
+/**
+ * Hide any orq key inside free text: the fallback prints the CLI's own words,
+ * whose shape we do not know, so a pattern is the only guard it can have.
+ */
+export function redactKeys(output: string): string {
+	return output.replace(/sk-orq-[A-Za-z0-9._-]{8,}/g, (key) => maskKey(key));
+}
+
+/** One line: server-supplied text (an auth error runs to several lines) collapsed to single spaces. */
+const flat = (value: string | undefined): string | undefined => (value === undefined ? undefined : value.replace(/\s+/g, " ").trim());
+
+const maskKeyIfPresent = (key: string | undefined): string | undefined => (key === undefined ? undefined : maskKey(key));
+
 /** Rows for `orq auth whoami -o json`, or undefined when it is not a JSON object. */
 export function whoamiRows(json: string): string[] | undefined {
 	let who: Record<string, unknown>;
@@ -36,7 +59,7 @@ export function whoamiRows(json: string): string[] | undefined {
 	// failed check leaves it true, which is no verdict.
 	const authenticated =
 		who.authenticated === false
-			? `no: ${text(who.auth_error) ?? "the server rejected it"}`
+			? `no: ${flat(text(who.auth_error)) ?? "the server rejected it"}`
 			: who.authenticated === true
 				? "yes"
 				: undefined;
@@ -47,7 +70,7 @@ export function whoamiRows(json: string): string[] | undefined {
 		["source", text(who.source)],
 		["profile", text(who.profile)],
 		["server", text(who.server) ?? text((who.urls as Record<string, unknown> | undefined)?.api_base_url)],
-		["api key", text(who.api_key)],
+		["api key", flat(maskKeyIfPresent(text(who.api_key)))],
 		["session file", text(who.session_file)],
 	]);
 }

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
 import { brandTitle, exitSummary, orqHarness, repoOf } from "./harness.ts";
-import { contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
+import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
 	memoryLines,
@@ -23,7 +23,7 @@ import {
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
-import { boxLines, filterRows, Panel, plainPanel } from "./panel.ts";
+import { boxLines, filterRows, oneLine, Panel, plainPanel } from "./panel.ts";
 import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
@@ -568,6 +568,62 @@ test("panels draw a box that fits the width, selection and disabled rows include
 	expect(lines[1]).toBe("│ ▌ support-triage                     │");
 	expect(lines.at(-1)).toBe(`└${"─".repeat(38)}┘`);
 	expect(lines.every((line) => visibleWidth(line) === 40)).toBe(true);
+});
+
+test("a row is one line: server text cannot split the box or drive the terminal", () => {
+	// A workspace name is chosen by whoever created it. A newline splits the row,
+	// ESC[2J clears the screen, an OSC sequence retitles the window.
+	const hostile = "line1\nline2\x1b[2Jgone\x1b]0;pwned\x07end\ttab";
+	expect(oneLine(hostile)).toBe("line1 line2gonened tab".replace("gonened", "goneend"));
+	expect(oneLine("a\x07b\x00c\x7fd")).toBe("a b c d");
+	// Colour codes are the panel's own paint and must survive.
+	expect(oneLine("\x1b[1mbold\x1b[0m plain")).toBe("\x1b[1mbold\x1b[0m plain");
+	expect(oneLine("plain text · with ✓ marks")).toBe("plain text · with ✓ marks");
+
+	const lines = boxLines({ title: "ws", rows: ["ok", hostile], selectable: true }, 50);
+	// Two rows stay two rows, between the top and bottom borders.
+	expect(lines.length).toBe(4);
+	expect(lines.join("")).not.toContain("\x1b[2J");
+	expect(lines.join("")).not.toContain("\x1b]");
+	expect(lines.join("")).not.toContain("\n");
+	expect(lines.every((line) => visibleWidth(line) === 50)).toBe(true);
+	// The title and badge are server-adjacent too (a workspace name in the title).
+	const titled = boxLines({ title: "a\nb\x1b[2J", badge: "x\ny", rows: ["r"] }, 40);
+	expect(titled[0]).not.toContain("\n");
+	expect(titled[0]).not.toContain("\x1b[2J");
+});
+
+test("the analytics breakdown keeps its columns aligned however wide a count is", () => {
+	const items = [
+		{ name: "gpt-4.1", requests: 5200, cost: 4.1 },
+		{ name: "claude-sonnet-4-5", requests: "12345678901234", cost: 0.5 },
+		{ name: "a-model-name-that-is-far-too-long-to-fit-in-the-column", requests: 7, cost: 0 },
+	];
+	const rows = breakdownRows("model", items);
+	// The cost column starts at the same offset on every row, header and rule included.
+	const costAt = rows.map((row) => row.lastIndexOf("  ") + 2);
+	expect(new Set(costAt.slice(0, 5)).size).toBe(1);
+	// A 14-digit count is shown whole, not truncated into a wrong number.
+	expect(rows.join("\n")).toContain("12345678901234");
+	// A long name is cut with an ellipsis to the name column, not wrapped.
+	expect(rows.some((row) => row.includes("…"))).toBe(true);
+	expect(rows.every((row) => !row.includes("\n"))).toBe(true);
+	// Counts are right-aligned under their header.
+	expect(rows[0]).toMatch(/Requests {2}Cost$/);
+});
+
+test("the analytics breakdown caps at ten rows and says how many it left out", () => {
+	const items = Array.from({ length: 13 }, (_, i) => ({ name: `m${i}`, requests: i, cost: 0 }));
+	const rows = breakdownRows("model", items);
+	expect(rows.length).toBe(2 + 10 + 1);
+	expect(rows.at(-1)).toBe("… and 3 more");
+	expect(breakdownRows("model", []).length).toBe(2);
+});
+
+test("a hostile model name in the breakdown cannot add a row", () => {
+	const rows = breakdownRows("model", [{ name: "x\ny\x1b[2Jz", requests: 1, cost: 1 }]);
+	expect(rows.length).toBe(3);
+	expect(rows.join("")).not.toContain("\x1b");
 });
 
 test("the repo header never carries credentials from the remote", () => {

@@ -8,6 +8,7 @@ import { dollars, shortModel, tokens } from "./footer.ts";
 import { contextUsed, type ContextSplit } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
 import { bareName, hintsSection, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
+import { oneLine } from "./panel.ts";
 import type { Step, StepUsage } from "./trajectory.ts";
 
 /** `orq/auto`, not `auto`: the virtual model's id alone reads like nothing. */
@@ -195,4 +196,38 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 			? [lever(`cache hit ${Math.round(split.cache * 100)}%`, "the prefix is cached; routing keeps it (/route explain)")]
 			: []),
 	];
+}
+
+export interface BreakdownItem {
+	name: unknown;
+	requests: unknown;
+	cost: unknown;
+}
+
+/**
+ * The /analytics breakdown as aligned columns: `#`, the dimension, requests, cost.
+ *
+ * Every width comes from the rows shown, never from a constant, so a count with
+ * twelve digits widens its column instead of pushing the cost out of line, and a
+ * long name is cut to `maxName` with an ellipsis rather than wrapping. Values are
+ * server-supplied, so each is reduced to one line before it is measured.
+ */
+export function breakdownRows(label: string, items: BreakdownItem[], limit = 10, maxName = 30): string[] {
+	const shown = items.slice(0, limit).map((item, i) => ({
+		n: String(i + 1),
+		name: oneLine(String(item.name)),
+		requests: oneLine(String(item.requests)),
+		cost: oneLine(typeof item.cost === "number" ? dollars(item.cost) : String(item.cost)),
+	}));
+	const cut = (text: string, width: number) => (text.length > width ? `${text.slice(0, width - 1)}…` : text);
+	const wNum = Math.max(1, ...shown.map((row) => row.n.length));
+	const wName = Math.min(maxName, Math.max(label.length, ...shown.map((row) => row.name.length)));
+	const wReq = Math.max("Requests".length, ...shown.map((row) => row.requests.length));
+	const rule = `${"-".repeat(wNum)}  ${"-".repeat(wName)}  ${"-".repeat(wReq)}  ----`;
+	const rows = [`${"#".padEnd(wNum)}  ${label.padEnd(wName)}  ${"Requests".padStart(wReq)}  Cost`, rule];
+	for (const row of shown) {
+		rows.push(`${row.n.padEnd(wNum)}  ${cut(row.name, wName).padEnd(wName)}  ${row.requests.padStart(wReq)}  ${row.cost}`);
+	}
+	if (items.length > limit) rows.push(`… and ${items.length - limit} more`);
+	return rows;
 }
