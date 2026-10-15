@@ -143,20 +143,16 @@ test("the header uses the ORQI splash", () => {
 	for (const line of art) expect(line.length).toBeLessThanOrEqual(100);
 });
 
-test("the header shows an update line only when a newer release is cached", () => {
-	// The footer must stay silent for the common case (no update, or a check
-	// that hasn't run yet) and the six-row logo must survive either way - a
-	// regression here would either nag every session or silently drop the notice.
+test("the splash carries no update line: the notice above the editor owns it", () => {
+	// An update used to be a grey line here; now connection.ts shows a bordered
+	// notice in the session, and saying it twice in one screenful is noise.
 	const strip = (lines: string[]) => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
 	const base = { name: "orqi", version: "v0", workspace: "orq-research", status: "s", cwd: "~" };
 
-	const withoutUpdate = strip(headerLines(base));
-	expect(withoutUpdate).not.toContain("update available");
+	const output = strip(headerLines(base));
+	expect(output).not.toContain("update available");
 
-	const withUpdate = strip(headerLines({ ...base, updateCommand: "orqi update" }));
-	expect(withUpdate).toContain("update available · run: orqi update");
-
-	const art = withUpdate.split("\n").filter((line) => /[█▀▄]/.test(line));
+	const art = output.split("\n").filter((line) => /[█▀▄]/.test(line));
 	expect(art.length).toBe(6);
 });
 

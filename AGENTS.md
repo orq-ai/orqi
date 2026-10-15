@@ -204,8 +204,12 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   where the path is unambiguous.
 - **`orqi update` has no rollback copy and never auto-updates.** For a binary install it is one file: a failed download
   or a failed `--version` verification never touches `target`, so there is nothing to roll back to.
-  The daily background check (`maybeCheckUpdate`) only ever writes a cache entry the header reads -
-  it never runs the swap itself.
+  The launch check (`maybeCheckUpdate`) only ever writes a cache entry and shows a notice above the
+  editor (`announceUpdate` in `src/connection.ts`) - it never runs the swap itself. It reads the
+  redirect on `github.com/<repo>/releases/latest`, not `api.github.com`: a check on every launch
+  would spend the API's 60-per-hour-per-IP budget, which a workshop room shares. The answer is
+  trusted for an hour, the notice shows from the cache at once and again if the fresh check finds
+  something newer, and it is a widget, not a session entry, so a resume never replays a stale one.
 - **`orqi update` refuses an `ORQI_VERSION` pin older than the running binary** unless given `--allow-downgrade`
   (an equal pin is a no-op). A workshop repo's `.env` pinned `0.1.0` for `install.sh` and silently
   downgraded a user's 0.6.0; `install.sh` only warns, since running it is an explicit install.

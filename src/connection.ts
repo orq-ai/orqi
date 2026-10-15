@@ -17,7 +17,7 @@ import { credentialCandidates, LOGIN_HINT, loginKey, runOrq, SESSION_SOURCE, typ
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { refreshStoredSignIn, signInExpired } from "./oauth.ts";
-import { checkNow, currentUpdateCommand, isNewer } from "./update.ts";
+import { checkNow, currentUpdateCommand, isNewer, maybeCheckUpdate, pendingUpdate, readCache, updateNotice } from "./update.ts";
 import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
 
@@ -114,6 +114,7 @@ function report(ctx: { ui: { notify(message: string, type?: "info" | "warning" |
 const HEADER_ENTRY = "orqi-header";
 const WORKSPACE_STATUS = "orq-workspace";
 const AUTH_WIDGET = "orq-auth";
+const UPDATE_WIDGET = "orqi-update";
 
 type Ui = {
 	notify(message: string, type?: "info" | "warning" | "error"): void;
@@ -334,6 +335,24 @@ export function orqCommands(
 	};
 
 	return (pi: ExtensionAPI) => {
+		// A pinned notice above the editor, once per launch: from the cache at
+		// once, then again if the check that follows finds something newer. Never
+		// awaited by startup; a stale handle or a failed check just means no notice.
+		let updateShown = false;
+		const announceUpdate = async (ctx: { ui: Ui }) => {
+			const show = (latest: string) => {
+				try {
+					ctx.ui.setWidget(UPDATE_WIDGET, updateNotice(VERSION, latest, currentUpdateCommand()));
+					updateShown = true;
+				} catch {
+					// The session was replaced while the check ran.
+				}
+			};
+			const cached = pendingUpdate(readCache(agentDir));
+			if (cached) show(cached);
+			const fresh = await maybeCheckUpdate(agentDir);
+			if (fresh && fresh !== cached) show(fresh);
+		};
 		// The header lives in the transcript rather than on stdout: fullscreen mode
 		// runs on the terminal's alternate screen, where anything printed before
 		// the TUI starts is never seen.
@@ -358,6 +377,7 @@ export function orqCommands(
 			// The header scrolls away; the footer is where you look to check which
 			// workspace a tool call just hit.
 			showWorkspace(ctx);
+			if (event.reason === "startup" && ctx.hasUI) void announceUpdate(ctx);
 			// Pinned rather than notified: a notify scrolls away with the first
 			// answer, and the user has to see this until it is fixed. Once, not twice.
 			if (rejections.length > 0 || loginRefused) showAuth(ctx);
@@ -377,6 +397,11 @@ export function orqCommands(
 		// starts no new run. The check re-reads the candidates (one 0.2 s whoami)
 		// and only knocks on the server when the set changed since the last refusal.
 		pi.on("input", async (_event, ctx) => {
+			// The update notice has had its moment: the first message clears it.
+			if (updateShown) {
+				updateShown = false;
+				ctx.ui.setWidget(UPDATE_WIDGET, undefined);
+			}
 			// Renewed, not just re-read: the whoami inside also refreshes a CLI login
 			// session that is inside its last five minutes, so the turn that follows
 			// never sends a token the router is about to refuse.

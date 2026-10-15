@@ -25,6 +25,8 @@ import {
 	formatStatus,
 	installMethod,
 	isNewer,
+	latestVersion,
+	updateNotice,
 	normalizeTag,
 	readCache,
 	refusal,
@@ -36,6 +38,7 @@ import {
 	verifyChecksum,
 	type SuccessfulUpdateCache,
 	type UpdateCache,
+	maybeCheckUpdate,
 	pendingUpdate,
 	currentUpdateCommand,
 	npmFailure,
@@ -331,6 +334,51 @@ test("isNewer compares versions numerically, not lexically", () => {
 	expect(isNewer("0.9.0-rc1", "0.8.0")).toBe(false);
 });
 
+test("the update check is due hourly, not daily", () => {
+	const now = Date.now();
+	const cache: UpdateCache = { checked_at: now, latest: "0.2.0" };
+	expect(checkDue(cache, {}, now + 30 * 60 * 1000)).toBe(false); // half an hour: reuse the answer
+	expect(checkDue(cache, {}, now + 61 * 60 * 1000)).toBe(true); // an hour on: ask again
+});
+
+test("latestVersion reads the tag off github.com's redirect, not the rate-limited API", async () => {
+	const answer = (status: number, location?: string) =>
+		(async (url: unknown, init?: RequestInit) => {
+			expect(String(url)).toBe("https://github.com/orq-ai/orqi/releases/latest");
+			expect(init?.method).toBe("HEAD");
+			expect(init?.redirect).toBe("manual");
+			return new Response(null, { status, headers: location ? { location } : {} });
+		}) as unknown as typeof fetch;
+	expect(await latestVersion(1000, answer(302, "https://github.com/orq-ai/orqi/releases/tag/v0.9.1"))).toBe("0.9.1");
+	expect(await latestVersion(1000, answer(302, "/orq-ai/orqi/releases/tag/v1.0.0"))).toBe("1.0.0");
+	// Anything that is not a released three-part version must never prompt an update.
+	expect(await latestVersion(1000, answer(302, "https://github.com/orq-ai/orqi/releases/tag/v0.9.1-rc1"))).toBeUndefined();
+	expect(await latestVersion(1000, answer(302, "https://github.com/orq-ai/orqi/releases"))).toBeUndefined();
+	expect(await latestVersion(1000, answer(200))).toBeUndefined(); // no redirect at all
+	expect(await latestVersion(1000, (async () => Promise.reject(new Error("offline"))) as unknown as typeof fetch)).toBeUndefined();
+});
+
+test("maybeCheckUpdate answers from a fresh cache without asking GitHub", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-notice-"));
+	try {
+		writeFileSync(join(dir, "update-check.json"), JSON.stringify({ checked_at: Date.now(), latest: "999.0.0" }));
+		expect(await maybeCheckUpdate(dir)).toBe("999.0.0");
+		writeFileSync(join(dir, "update-check.json"), JSON.stringify({ checked_at: Date.now(), latest: "0.0.1" }));
+		expect(await maybeCheckUpdate(dir)).toBeUndefined(); // cached, but not newer than this binary
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the update notice names both versions, the command for this install and the release", () => {
+	const text = updateNotice("0.9.0", "0.9.1", "brew upgrade orq-ai/tap/orqi")
+		.join("\n")
+		.replace(/\x1b\[[0-9;]*m/g, "");
+	expect(text).toContain("Update available");
+	expect(text).toContain("orqi 0.9.0 → 0.9.1. Run: brew upgrade orq-ai/tap/orqi");
+	expect(text).toContain("https://github.com/orq-ai/orqi/releases/tag/v0.9.1");
+});
+
 test("the daily update check is due only when it should be", () => {
 	// Direct analogue of the skills updateDue test: wrong answers here mean
 	// either hammering GitHub every boot or never telling anyone about a release.
@@ -338,7 +386,7 @@ test("the daily update check is due only when it should be", () => {
 	const cache: UpdateCache = { checked_at: now, latest: "0.2.0" };
 	expect(checkDue(undefined, {})).toBe(true); // never checked
 	expect(checkDue(cache, {})).toBe(false); // just checked
-	expect(checkDue(cache, {}, now + 25 * 60 * 60 * 1000)).toBe(true); // a day later
+	expect(checkDue(cache, {}, now + 25 * 60 * 60 * 1000)).toBe(true); // long after
 	expect(checkDue(cache, { ORQI_REFRESH_UPDATE: "1" })).toBe(true); // forced
 	expect(checkDue(cache, { CI: "true" })).toBe(false); // nobody there to see it
 	expect(checkDue(cache, { CI: "true", ORQI_REFRESH_UPDATE: "1" })).toBe(true); // an explicit force wins

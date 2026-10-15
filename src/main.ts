@@ -45,7 +45,7 @@ import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
 import { createSubagentTool } from "./subagent.ts";
-import { currentUpdateCommand, maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
+import { runUpdate } from "./update.ts";
 import { brandBuiltinCommands, redirectPiBugCommand } from "./bug.ts";
 
 const oneShot = process.argv[2];
@@ -409,22 +409,16 @@ async function refreshCatalogue(): Promise<{ ok: boolean; note?: string }> {
 }
 
 const skills = services.resourceLoader.getSkills().skills.length;
-const update = pendingUpdate(readCache(AGENT_DIR));
 header.workspace = credential?.workspace;
 header.project = credential ? await projectForCredential(credential.token) : undefined;
 header.status = statusLine(credential ? "orq MCP" : "not signed in");
 header.signedOut = !credential;
 const startupLine = [header.name, header.workspace, header.status, credential?.source].filter(Boolean).join(" · ");
-// The header's "update available" line is the only place a pending update is
-// announced: it used to also ride in the status list above, saying the same
-// thing twice in one screenful.
-header.updateCommand = update === undefined ? undefined : currentUpdateCommand();
-
-// Daily skills update and update-availability check, after the session is
-// wired: boot must never wait on GitHub, and a failure in either costs
-// nothing but freshness. Both land on the next run.
+// The update-availability check lives in the connection extension, which shows
+// the notice in this same session (src/connection.ts, `announceUpdate`).
+// Daily skills update, after the session is wired: boot must never wait on
+// GitHub, and a failure costs nothing but freshness. It lands on the next run.
 void maybeUpdateSkills(AGENT_DIR);
-void maybeCheckUpdate(AGENT_DIR);
 
 try {
 	if (oneShot) {
