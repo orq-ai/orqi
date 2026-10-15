@@ -48,13 +48,7 @@ test("every theme's text stays legible on a light-ish dark background", () => {
 	];
 	const LIGHTEST_BG = "#282C34";
 
-	for (const file of [
-		"orq-dark.json",
-		"orq-amber.json",
-		"orq-teal.json",
-		"orq-slate.json",
-		"orq-signal.json",
-	]) {
+	for (const file of ["orq-dark.json", "orq-amber.json", "orq-teal.json", "orq-slate.json", "orq-signal.json"]) {
 		const theme = JSON.parse(readFileSync(join(import.meta.dir, "..", "themes", file), "utf8"));
 		const resolve = (value: string) => (value?.startsWith("#") ? value : theme.vars[value]);
 

@@ -399,9 +399,7 @@ const makeServices = async () => {
 		slate: "orq-slate",
 		signal: "orq-signal",
 	};
-	created.settingsManager.setTheme(
-		THEMES[process.env.ORQI_THEME ?? "amber"] ?? "orq-amber",
-	);
+	created.settingsManager.setTheme(THEMES[process.env.ORQI_THEME ?? "amber"] ?? "orq-amber");
 	// Silence pi's own startup header - it pitches pi, and this CLI prints its own.
 	// ctrl+o still shows the full help and loaded resources on demand.
 	created.settingsManager.setQuietStartup(true);
