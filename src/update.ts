@@ -359,8 +359,10 @@ const USAGE = `orqi update - update orqi to the latest published release
   orqi update                  install the latest release (through npm for an npm install)
   orqi update --check          report what is available, change nothing
   orqi update --check --json   machine-readable output (requires --check)
+  orqi update --allow-downgrade  install an ORQI_VERSION pin older than the running version
 
-ORQI_VERSION pins the release tag to install.`;
+ORQI_VERSION pins the release tag to install. A pin older than the running version is refused
+without --allow-downgrade; a pin equal to it is a no-op.`;
 
 /** Orphaned staging dirs are swept, in-flight ones are not: a swap takes seconds, not an hour. */
 const STAGING_ORPHAN_MS = 60 * 60 * 1000;
@@ -425,7 +427,7 @@ export async function verifyChecksum(
  * `maybeCheckUpdate` or startup.
  */
 export async function runUpdate(args: string[], agentDir: string, options: RunUpdateOptions = {}): Promise<number> {
-	const known = new Set(["--check", "--json"]);
+	const known = new Set(["--check", "--json", "--allow-downgrade"]);
 	for (const arg of args) {
 		if (!known.has(arg)) {
 			console.error(USAGE);
@@ -438,6 +440,12 @@ export async function runUpdate(args: string[], agentDir: string, options: RunUp
 	// path below and perform a live binary swap while printing human-readable
 	// text throughout - the flag has to gate on --check, not stand alone.
 	if (json && !check) {
+		console.error(USAGE);
+		return 1;
+	}
+	// --allow-downgrade only qualifies the real update; --check changes nothing.
+	const allowDowngrade = args.includes("--allow-downgrade");
+	if (allowDowngrade && check) {
 		console.error(USAGE);
 		return 1;
 	}
@@ -454,6 +462,22 @@ export async function runUpdate(args: string[], agentDir: string, options: RunUp
 	if (pinned !== undefined && !/^v?\d+\.\d+\.\d+$/.test(pinned)) {
 		console.error(`cannot update: ORQI_VERSION "${pinned}" is not a valid release tag (expected e.g. "0.2.0" or "v0.2.0")`);
 		return 1;
+	}
+	// A pin is not "latest": an ORQI_VERSION left in the environment (a project's
+	// .env pinned for install.sh) must not silently downgrade the running binary.
+	// Before any network or filesystem work, and ahead of the npm branch.
+	if (pinned !== undefined && !check) {
+		const pinnedVersion = normalizeTag(pinned);
+		if (pinnedVersion === VERSION) {
+			console.log(`orqi ${VERSION} is already the pinned version (ORQI_VERSION).`);
+			return 0;
+		}
+		if (isNewer(VERSION, pinnedVersion) && !allowDowngrade) {
+			console.error(
+				`cannot update: ORQI_VERSION=${pinned} would downgrade orqi ${VERSION} -> ${pinnedVersion}. Unset ORQI_VERSION to get the latest release, or pass --allow-downgrade to install ${pinnedVersion}.`,
+			);
+			return 1;
+		}
 	}
 
 	// This is a foreground command: a throw here (a vanished /proc/self/exe, an

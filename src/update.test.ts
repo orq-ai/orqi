@@ -543,6 +543,98 @@ test("runUpdate treats an empty ORQI_VERSION as unpinned, matching install.sh", 
 	}
 });
 
+async function withPin<T>(pin: string, fn: () => Promise<T>): Promise<T> {
+	const prior = process.env.ORQI_VERSION;
+	process.env.ORQI_VERSION = pin;
+	try {
+		return await fn();
+	} finally {
+		if (prior === undefined) delete process.env.ORQI_VERSION;
+		else process.env.ORQI_VERSION = prior;
+	}
+}
+
+test("runUpdate refuses a pin older than the running version, and downloads nothing", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-downgrade-"));
+	const target = join(root, "orqi");
+	writeVersionBinary(target, VERSION);
+	const err = spyOn(console, "error").mockImplementation(() => {});
+	let urls = 0;
+	try {
+		const code = await withPin("0.0.1", () =>
+			runUpdate([], join(root, "agent"), {
+				execPath: target,
+				releaseUrl: () => {
+					urls++;
+					return "file:///nonexistent";
+				},
+			}),
+		);
+		expect(code).toBe(1);
+		expect(urls).toBe(0);
+		const message = err.mock.calls.map((c) => String(c[0])).join("\n");
+		expect(message).toContain(`ORQI_VERSION=0.0.1 would downgrade orqi ${VERSION} -> 0.0.1`);
+		expect(message).toContain("--allow-downgrade");
+		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe(VERSION);
+		expect(readdirSync(root).sort()).toEqual(["orqi"]);
+	} finally {
+		err.mockRestore();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runUpdate installs an older pin when --allow-downgrade is passed", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-downgrade-ok-"));
+	const target = join(root, "orqi");
+	const tarball = releaseFixture(root, "0.0.1");
+	writeSidecar(tarball);
+	writeVersionBinary(target, VERSION);
+	try {
+		const code = await withPin("0.0.1", () =>
+			runUpdate(["--allow-downgrade"], join(root, "agent"), {
+				execPath: target,
+				releaseUrl: () => `file://${tarball}`,
+				fetchText: sidecarFetch(),
+			}),
+		);
+		expect(code).toBe(0);
+		expect(Bun.spawnSync([target, "--version"]).stdout.toString().trim()).toBe("0.0.1");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runUpdate treats a pin equal to the running version as a no-op", async () => {
+	const root = mkdtempSync(join(tmpdir(), "orqi-update-samepin-"));
+	const target = join(root, "orqi");
+	writeVersionBinary(target, VERSION);
+	const log = spyOn(console, "log").mockImplementation(() => {});
+	try {
+		const code = await withPin(`v${VERSION}`, () =>
+			runUpdate([], join(root, "agent"), {
+				execPath: target,
+				releaseUrl: () => {
+					throw new Error("must not download");
+				},
+			}),
+		);
+		expect(code).toBe(0);
+		expect(log.mock.calls.map((c) => String(c[0])).join("\n")).toContain("is already the pinned version");
+	} finally {
+		log.mockRestore();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runUpdate rejects --allow-downgrade with --check", async () => {
+	const err = spyOn(console, "error").mockImplementation(() => {});
+	try {
+		expect(await runUpdate(["--check", "--allow-downgrade"], tmpdir())).toBe(1);
+	} finally {
+		err.mockRestore();
+	}
+});
+
 test("runUpdate verifies and atomically replaces a binary from a release tarball", async () => {
 	const root = mkdtempSync(join(tmpdir(), "orqi-update-integration-"));
 	const target = join(root, "orqi");
