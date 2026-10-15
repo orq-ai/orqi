@@ -45,6 +45,7 @@ import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
+import { createLocalFileTools } from "./local-tools.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { runUpdate } from "./update.ts";
 import { resolveSession, resumeHint } from "./resume.ts";
@@ -471,7 +472,12 @@ const routing = registerRouting(
 	process.env.ORQI_ROUTE_LOG === "1" ? join(AGENT_DIR, "routes.jsonl") : undefined,
 );
 const model = pickModel(models);
+// `edit` retains pi's native before/after diff preview. Deliberately do not add
+// `bash` or `write`: targeted edits are inspectable, while shell execution and
+// whole-file replacement need a separate product decision.
+const localFileTools = createLocalFileTools(process.cwd());
 const customTools = [
+	...localFileTools,
 	createSubagentTool({
 		model,
 		modelRuntime,
@@ -576,7 +582,9 @@ const makeServices = async () => {
 				orqHarness({
 					agentDir: AGENT_DIR,
 					catalogue: () => models.catalogue,
-					toolCount: () => mcp.toolNames().length,
+					// MCP tools arrive after their connection completes; local tools are
+					// registered synchronously through `customTools`.
+					toolCount: () => localFileTools.length + 1 + mcp.toolNames().length,
 					// Slash commands cannot run tools in pi, so they make one direct
 					// call - after waiting for any session renewal in flight, so the
 					// short-lived connection never carries a token about to expire.
