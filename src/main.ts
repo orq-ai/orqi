@@ -26,7 +26,7 @@ import {
 import { BUILTIN_SLASH_COMMANDS } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/slash-commands.js";
 import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { orqOAuth, refreshStoredSignIn, storedOAuthToken } from "./oauth.ts";
-import { dim, type HeaderInfo, VERSION } from "./branding.ts";
+import { dim, type HeaderInfo, terminalProgress, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import {
 	callOrqTool,
@@ -373,6 +373,8 @@ const makeServices = async () => {
 	// panel. Parking the marker ahead of any real pi version suppresses it; orq's
 	// changelog is linked from the header.
 	created.settingsManager.setLastChangelogVersion("999.0.0");
+	// The terminal's own progress bar while a turn runs (off by default in pi).
+	created.settingsManager.setShowTerminalProgress(terminalProgress());
 	return created;
 };
 const services = await makeServices();

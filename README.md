@@ -89,11 +89,12 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_TAG` | Sent as `X-ORQ-METADATA-tag` on every router call, so a workshop instructor can filter the Threads tab by it |
 | `ORQI_WORKSPACE` | Workspace key for Studio links (`/open`, `/trace`), for an API key that cannot read its own workspace's settings |
 | `ORQI_THEME` | `dark` selects the theme that keeps turquoise for success and red for errors; the default is one-hue amber. `/theme` switches mid-session |
+| `ORQI_TERMINAL_PROGRESS` | Set to `0` to turn off the moving progress line your terminal draws while orqi works (Ghostty, WezTerm, Windows Terminal, iTerm2 3.6+; off by default on older iTerm2, which would show it as notifications) |
 | `ORQI_LOCAL_SKILLS` | Also discover skills installed on the machine (off by default; 100+ ambient skills would swamp the prompt) |
 | `ORQI_ALL_TOOLS` | Set to `1` to also expose the invocation tools that are filtered out by default ([why](ARCHITECTURE.md#tools)) |
 | `ORQI_SKILLS_UPDATE` | Set to `0` to pin skills to whatever the binary shipped with, disabling the daily check |
 | `ORQI_UPDATE_CHECK` | Set to `0` to pin: no update check, no launch notice. `orqi update` still works when run directly |
-| `ORQI_REFRESH_MODELS`, `ORQI_REFRESH_SKILLS`, `ORQI_REFRESH_UPDATE` | Refresh the model catalogue at startup, force a skills check, or force an update check now, ignoring the 24 h TTL. In a running session, use `/refresh` instead. |
+| `ORQI_REFRESH_MODELS`, `ORQI_REFRESH_SKILLS`, `ORQI_REFRESH_UPDATE` | Refresh the model catalogue at startup, force a skills check, or force an update check now, ignoring their cache. In a running session, use `/refresh` instead. |
 | `ORQI_AGENT_DIR`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` | Override the agent dir / endpoints (on-prem) |
 | `ORQI_VERSION` | Pins the release tag: which one `install.sh` installs, and which one `orqi update` installs |
 | `ORQI_INSTALL_DIR` | Read by `install.sh` only: where the binary lands (default `~/.local/bin`) |
