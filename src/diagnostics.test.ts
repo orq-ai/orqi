@@ -1,7 +1,7 @@
 /** Checks for /whoami and /doctor's panels. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { checkRows, doctorHeader, fieldRows, parseDoctor, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
+import { checkRows, doctorHeader, fieldRows, maskKey, parseDoctor, redactKeys, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
 
 test("fieldRows pads the labels and leaves out what the CLI did not say", () => {
 	expect(
@@ -125,4 +125,33 @@ test("a long fail is wrapped too, never cut", () => {
 	const rows = checkRows([{ id: "api", status: "fail", message: "unreachable ".repeat(10).trim() }], 24);
 	expect(rows.join(" ").match(/unreachable/g)!.length).toBe(10);
 	expect(rows.some((r) => r.includes("…"))).toBe(false);
+});
+
+test("a key is never shown whole, even if the CLI stops masking it", () => {
+	// What the CLI sends today: already a stub, kept as it is.
+	expect(maskKey("sk-orq-01M4Z…")).toBe("sk-orq-01M…".replace("01M…", "01M4Z…"));
+	// What an older or changed CLI might send: the whole credential.
+	const raw = "sk-orq-eyJhbGciOiJIUzI1NiJ9.payload.signature";
+	expect(maskKey(raw)).toBe("sk-orq-eyJ…");
+	expect(maskKey(raw)).not.toContain("signature");
+	const rows = whoamiRows(JSON.stringify({ authenticated: true, method: "api_key", api_key: raw }))!;
+	expect(rows.join("\n")).not.toContain("payload");
+	expect(rows.join("\n")).not.toContain("signature");
+	expect(rows.join("\n")).toContain("api key        sk-orq-eyJ…");
+});
+
+test("redactKeys hides an orq key inside the CLI's own words, and leaves the rest", () => {
+	const out = redactKeys("error: key sk-orq-eyJhbGciOiJIUzI1NiJ9.payload.sig rejected\nsee https://docs.orq.ai");
+	expect(out).toBe("error: key sk-orq-eyJ… rejected\nsee https://docs.orq.ai");
+	expect(redactKeys("nothing secret here")).toBe("nothing secret here");
+	// A short, already-masked stub is not mangled.
+	expect(redactKeys("api_key: sk-orq-01M4Z…")).toBe("api_key: sk-orq-01M4Z…");
+});
+
+test("a multi-line auth error is one line in the whoami panel", () => {
+	const rows = whoamiRows(
+		JSON.stringify({ authenticated: false, auth_error: "Authorization token is invalid.\n  docs: https://docs.orq.ai/reference" }),
+	)!;
+	expect(rows[0]).toBe("authenticated  no: Authorization token is invalid. docs: https://docs.orq.ai/reference");
+	expect(rows.every((row) => !row.includes("\n"))).toBe(true);
 });

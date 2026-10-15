@@ -37,6 +37,29 @@ export interface PanelSpec {
 }
 
 /**
+ * One safe line of text. Rows carry strings the server chose (a workspace name,
+ * a model name, an error message), and a terminal acts on what it is sent: a
+ * newline splits the row and breaks the box, `ESC[2J` clears the screen, an OSC
+ * sequence retitles the window. Colour codes (SGR) are the only escapes a row
+ * may carry, because the panel's own paint adds them; every other escape is
+ * dropped, and any control character left (newline, tab, bell) becomes a space.
+ */
+export function oneLine(text: string): string {
+	return text
+		.split(/(\x1b\[[0-9;]*m)/)
+		.map((part, i) =>
+			i % 2 === 1
+				? part
+				: part
+						.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
+						.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+						.replace(/\x1b./g, "")
+						.replace(/[\x00-\x1f\x7f]+/g, " "),
+		)
+		.join("");
+}
+
+/**
  * Indices of the rows that contain every word of `query`, case-insensitively.
  * Rows whose first column (the name) matches come first: "trace" should put
  * `orq-analyze-traces` above a skill that merely mentions traces.
@@ -55,12 +78,12 @@ export function filterRows(rows: string[], query: string): number[] {
 /** Draw a box `width` wide. Pure, so the views are testable. */
 export function boxLines(spec: PanelSpec, width: number, selected = 0, paint: PanelPaint = plainPanel, offset = 0): string[] {
 	const inner = Math.max(10, width - 4);
-	const titleText = ` ${spec.title} `;
-	const badge = spec.badge ? ` ${spec.badge} ` : "";
+	const titleText = ` ${oneLine(spec.title)} `;
+	const badge = spec.badge ? ` ${oneLine(spec.badge)} ` : "";
 	const fill = Math.max(1, width - 2 - visibleWidth(titleText) - visibleWidth(badge) - 1);
 	const top = `${paint.border("┌─")}${paint.title(truncateToWidth(titleText, width - 6))}${paint.border("─".repeat(fill))}${paint.dim(badge)}${paint.border("┐")}`;
 	const line = (content: string) => {
-		const fitted = truncateToWidth(content, inner, "…");
+		const fitted = truncateToWidth(oneLine(content), inner, "…");
 		return `${paint.border("│")} ${fitted}${" ".repeat(Math.max(0, inner - visibleWidth(fitted)))} ${paint.border("│")}`;
 	};
 	const out = [truncateToWidth(top, width)];

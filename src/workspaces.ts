@@ -5,6 +5,8 @@
  * has answered in are covered by tests rather than by a live workspace.
  */
 
+import { oneLine } from "./panel.ts";
+
 export interface WorkspaceEntry {
 	key: string;
 	name: string;
@@ -29,7 +31,8 @@ export function parseWorkspaces(stdout: string): WorkspaceEntry[] | undefined {
 		if (typeof w?.key !== "string" || !w.key) continue;
 		entries.push({
 			key: w.key,
-			name: typeof w.name === "string" && w.name ? w.name : w.key,
+			// A name is chosen by whoever made the workspace: one line, so it cannot skew the columns.
+			name: typeof w.name === "string" && oneLine(w.name).trim() ? oneLine(w.name).trim() : oneLine(w.key).trim(),
 			members: typeof w.total_members === "number" ? w.total_members : undefined,
 			active: w.active === true || w.key === activeKey,
 		});
@@ -42,11 +45,18 @@ export function sortWorkspaces(entries: WorkspaceEntry[]): WorkspaceEntry[] {
 	return [...entries].sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
 }
 
-/** `●  orq-research   orq-research   19 members`: marker, name, key, members, aligned. */
+/**
+ * `●  orq-research   orq-research   19 members`: marker, name, key, members, aligned.
+ *
+ * The key is shown through `oneLine` but never rewritten on the entry: it is what
+ * `orq workspace use` is given when you press enter, so it must stay exactly what
+ * the CLI said. Only the picture of it is made safe.
+ */
 export function workspaceRows(entries: WorkspaceEntry[]): string[] {
-	const wName = Math.min(28, Math.max(0, ...entries.map((e) => e.name.length)));
-	const wKey = Math.min(28, Math.max(0, ...entries.map((e) => e.key.length)));
-	return entries.map((e) => {
+	const shown = entries.map((e) => ({ ...e, name: oneLine(e.name), key: oneLine(e.key) }));
+	const wName = Math.min(28, Math.max(0, ...shown.map((e) => e.name.length)));
+	const wKey = Math.min(28, Math.max(0, ...shown.map((e) => e.key.length)));
+	return shown.map((e) => {
 		const members = e.members === undefined ? "" : `${e.members} member${e.members === 1 ? "" : "s"}`;
 		return `${e.active ? "●" : " "}  ${e.name.slice(0, wName).padEnd(wName)}  ${e.key.slice(0, wKey).padEnd(wKey)}  ${members}`.trimEnd();
 	});

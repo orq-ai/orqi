@@ -46,3 +46,24 @@ test("rows align name, key and members, and mark the active one", () => {
 		"   OrquestaDemos  orquesta-demos  34 members",
 	]);
 });
+
+test("a hostile workspace name stays one row, and the key you switch to is untouched", () => {
+	const entries = parseWorkspaces(
+		JSON.stringify({
+			workspaces: [
+				{ key: "evil", name: "two\nlines\x1b[2Jhere", total_members: 3 },
+				{ key: "fine", name: "Fine", total_members: 1 },
+			],
+		}),
+	)!;
+	const rows = workspaceRows(entries);
+	expect(rows.length).toBe(2);
+	expect(rows.join("")).not.toContain("\n");
+	expect(rows.join("")).not.toContain("\x1b");
+	// What enter passes to `orq workspace use` is the CLI's key, byte for byte.
+	expect(entries.map((e) => e.key)).toEqual(["evil", "fine"]);
+	// And a key with control characters in it is shown safely but never rewritten.
+	const odd = parseWorkspaces(JSON.stringify({ workspaces: [{ key: "a\nb", name: "n" }] }))!;
+	expect(odd[0]!.key).toBe("a\nb");
+	expect(workspaceRows(odd).join("")).not.toContain("\n");
+});

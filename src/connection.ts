@@ -21,7 +21,7 @@ import { checkNow, currentUpdateCommand, isNewer, maybeCheckUpdate, pendingUpdat
 import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
-import { checkRows, doctorHeader, parseDoctor, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
+import { checkRows, doctorHeader, parseDoctor, redactKeys, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
 import { parseWorkspaces, sortWorkspaces, workspaceRows } from "./workspaces.ts";
 
 /**
@@ -496,8 +496,13 @@ export function orqCommands(
 			handler: async (_args, ctx) => {
 				const answer = runOrq(WHOAMI_ARGS);
 				const rows = answer.ok ? whoamiRows(answer.stdout) : undefined;
-				if (rows && rows.length > 0 && (await showPanel(ctx, { title: "whoami", rows, hint: "esc close" }, "60%"))) return;
-				report(ctx, answer.ok ? runOrq(["auth", "whoami"]) : answer);
+				if (rows && rows.length > 0) {
+					// One call, not two: with no panel to draw the same rows are the notice.
+					if (!(await showPanel(ctx, { title: "whoami", rows, hint: "esc close" }, "60%"))) ctx.ui.notify(rows.join("\n"));
+					return;
+				}
+				// An unknown shape or a failed call: the CLI's own words, with any key hidden.
+				report(ctx, { ...answer, stdout: redactKeys(answer.stdout), stderr: redactKeys(answer.stderr) });
 			},
 		});
 
@@ -542,7 +547,10 @@ export function orqCommands(
 						},
 					}));
 				if (!shown) {
-					report(ctx, listed.ok ? listed : runOrq(["workspace", "list"]));
+					// One call, not two: no panel means the same rows are the notice, and
+					// an answer we cannot read is shown as the CLI gave it.
+					if (sorted) ctx.ui.notify(workspaceRows(sorted).join("\n"));
+					else report(ctx, { ...listed, stdout: redactKeys(listed.stdout), stderr: redactKeys(listed.stderr) });
 					return;
 				}
 				// After the panel is gone: a switch reconnects the tools and may pin a warning.
@@ -555,18 +563,15 @@ export function orqCommands(
 			handler: async (_args, ctx) => {
 				const answer = runOrq(["doctor", "-o", "json"]);
 				const doctor = answer.ok ? parseDoctor(answer.stdout) : undefined;
-				let shown = false;
 				if (doctor && doctor.checks.length > 0) {
 					const checks = sortChecks(doctor.checks);
-					shown = await showPanel(ctx, {
-						title: "doctor",
-						badge: summary(checks),
-						rows: [...doctorHeader(doctor), "", ...checkRows(checks)],
-						height: 24,
-						hint: "↑↓ scroll · esc close · full text: orq doctor",
-					});
+					const rows = [...doctorHeader(doctor), "", ...checkRows(checks)];
+					// One call, not two: with no panel to draw the same rows are the notice.
+					const spec = { title: "doctor", badge: summary(checks), rows, height: 24, hint: "↑↓ scroll · esc close · full text: orq doctor" };
+					if (!(await showPanel(ctx, spec))) ctx.ui.notify([`doctor · ${summary(checks)}`, ...rows].join("\n"));
+				} else {
+					report(ctx, { ...answer, stdout: redactKeys(answer.stdout), stderr: redactKeys(answer.stderr) });
 				}
-				if (!shown) report(ctx, answer.ok ? runOrq(["doctor"]) : answer);
 				try {
 					const { DefaultPackageManager } = await import("@earendil-works/pi-coding-agent");
 					const { SettingsManager } = await import("@earendil-works/pi-coding-agent");
