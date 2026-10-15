@@ -34,6 +34,26 @@ const CATALOGUE: ModelInfo[] = [
 	{ id: "typesafe/jev-latest", kind: "classifier" },
 ];
 
+test("orq/auto asks orq/decider-4b when the workspace has it, then jev, then whatever it has", () => {
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const saved = process.env.ORQI_ROUTE_CLASSIFIER;
+	delete process.env.ORQI_ROUTE_CLASSIFIER;
+	try {
+		const chat = CATALOGUE.filter((model) => model.kind !== "classifier");
+		const classifier = (...ids: string[]) =>
+			registerRouting(runtime, [...chat, ...ids.map((id) => ({ id, kind: "classifier" as const }))], "openai/gpt-5.6-terra").classifier;
+		expect(classifier("alibaba/decision-model-preview", "typesafe/jev-latest", "orq/decider-4b")).toBe("orq/decider-4b");
+		expect(classifier("alibaba/decision-model-preview", "typesafe/jev-latest")).toBe("typesafe/jev-latest");
+		expect(classifier("alibaba/decision-model-preview")).toBe("alibaba/decision-model-preview");
+		expect(classifier()).toBeUndefined();
+		process.env.ORQI_ROUTE_CLASSIFIER = "perplexity/pplx-decider-v1-27b";
+		expect(classifier("orq/decider-4b")).toBe("perplexity/pplx-decider-v1-27b");
+	} finally {
+		if (saved === undefined) delete process.env.ORQI_ROUTE_CLASSIFIER;
+		else process.env.ORQI_ROUTE_CLASSIFIER = saved;
+	}
+});
+
 test("the Decisions API spells bool as noul, both ways", () => {
 	const questions = toDecisionsQuestions({
 		destructive: { type: "bool", instructions: "Delete?", criteria: { true: "yes", false: "no" } },

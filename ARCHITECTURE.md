@@ -109,7 +109,7 @@ surfaces. **`orq/auto`** decides in the harness: `src/router.ts` registers a pi 
 model runtime (before any session, so it can be the boot model and subagents can resolve its rungs)
 plus an `orq-decisions` classifier provider over `POST /v3/router/decisions`.
 
-On a user turn it asks `typesafe/jev-latest` the `general_v2` difficulty question from
+On a user turn it asks `orq/decider-4b` (`ORQI_ROUTE_CLASSIFIER` overrides) the `general_v2` difficulty question from
 orq-smart-router (RES-1619) and cuts the expected tier (`p_medium + 2 p_hard`) at 0.5 and 1.5. Tool
 follow-ups and retries stay on the turn's model so the prompt cache holds; an overload or context
 overflow on retry moves one rung up. The same Decisions call asks the door question (evaluatorq's
