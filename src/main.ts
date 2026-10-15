@@ -23,6 +23,7 @@ import {
 	SessionManager,
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
+import { BUILTIN_SLASH_COMMANDS } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/slash-commands.js";
 import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { orqOAuth, refreshStoredSignIn, storedOAuthToken } from "./oauth.ts";
 import { dim, type HeaderInfo, VERSION } from "./branding.ts";
@@ -45,6 +46,7 @@ import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { currentUpdateCommand, maybeCheckUpdate, pendingUpdate, readCache, runUpdate } from "./update.ts";
+import { brandBuiltinCommands, redirectPiBugCommand } from "./bug.ts";
 
 const oneShot = process.argv[2];
 const AGENT_DIR = process.env.ORQI_AGENT_DIR ?? join(homedir(), ".orqi", "agent");
@@ -108,6 +110,12 @@ async function assetDir(): Promise<string> {
 }
 
 const pkgDir = await assetDir();
+
+// Pi owns these commands, so extension commands cannot replace their legend
+// or dispatch. Rebrand the list and replace `/bug` before InteractiveMode is
+// constructed; reports go to orqi, never pi's diagnostics-upload flow.
+brandBuiltinCommands(BUILTIN_SLASH_COMMANDS);
+redirectPiBugCommand(InteractiveMode as any);
 
 // pi derives every default path it is not handed (session files, /resume's
 // list, /new and /fork) from this variable, so setting it is what keeps orqi's
