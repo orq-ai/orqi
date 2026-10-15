@@ -54,7 +54,12 @@ export function traceRow(t: TraceListItem): string {
 	const age = Number.isFinite(started) ? ageOf(started) : String(t.start_time ?? "").slice(0, 19);
 	const status = String(t.status ?? "");
 	const error = status.toUpperCase() === "ERROR" ? "ERROR" : "";
-	const cost = typeof t.total_cost === "number" && Number.isFinite(t.total_cost) ? `  ${dollars(t.total_cost)}` : typeof t.total_cost === "string" && Number.isFinite(Number(t.total_cost)) ? `  ${dollars(Number(t.total_cost))}` : "";
+	const cost =
+		typeof t.total_cost === "number" && Number.isFinite(t.total_cost)
+			? `  ${dollars(t.total_cost)}`
+			: typeof t.total_cost === "string" && Number.isFinite(Number(t.total_cost))
+				? `  ${dollars(Number(t.total_cost))}`
+				: "";
 	return `${shortId(id).padEnd(12)} ${age.padEnd(10)} ${error.padEnd(6)} ${t.duration ?? "?"} ms${cost}`;
 }
 
@@ -72,7 +77,7 @@ export function durationMs(text: string | undefined): number | undefined {
 	if (!match) return undefined;
 	const n = Number(match[1]);
 	if (n <= 0) return undefined;
-	return n * ({ s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 })[match[2] as "s" | "m" | "h" | "d"];
+	return n * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2] as "s" | "m" | "h" | "d"];
 }
 
 /** One router call the session made, from its `x-orq-trace-id` response header. */

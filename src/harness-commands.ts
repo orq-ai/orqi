@@ -21,7 +21,18 @@ import { DEFAULT_MODEL, talkable } from "./model.ts";
 import { bareName, schemaLines, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
 import type { Panel, PanelSpec } from "./panel.ts";
-import { agentUrl, conversationLines, durationMs, shortId, threadUrl, traceRow, traceSummary, traceUrl, type TraceListItem, type TraceRef } from "./trace.ts";
+import {
+	agentUrl,
+	conversationLines,
+	durationMs,
+	shortId,
+	threadUrl,
+	traceRow,
+	traceSummary,
+	traceUrl,
+	type TraceListItem,
+	type TraceRef,
+} from "./trace.ts";
 import { toAtif, type Trajectory } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
@@ -210,9 +221,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			}
 			const windowMs = flags.get("last") ? durationMs(flags.get("last")) : undefined;
 			if (windowMs) filters.start_time_after = new Date(Date.now() - windowMs).toISOString();
-			const result = await deps
-				.callTool("list_traces", filters)
-				.catch((error) => ({ text: String(error), isError: true }));
+			const result = await deps.callTool("list_traces", filters).catch((error) => ({ text: String(error), isError: true }));
 			let items: TraceListItem[] = [];
 			let parseError: string | undefined;
 			try {
@@ -282,7 +291,10 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				else if (/\bagent\b/.test(freeText)) groupBy = "agent_name";
 				else if (/\bstatus\b/.test(freeText) || /\bhttp\b/.test(freeText)) groupBy = "http_status_code";
 			} else if (groupBy === "deployment" || groupBy === "status") {
-				ctx.ui.notify(`--group-by ${groupBy} is not supported; using ${groupBy === "deployment" ? "model" : "http_status_code"} instead`, "warning");
+				ctx.ui.notify(
+					`--group-by ${groupBy} is not supported; using ${groupBy === "deployment" ? "model" : "http_status_code"} instead`,
+					"warning",
+				);
 				groupBy = groupBy === "deployment" ? "model" : "http_status_code";
 			}
 			if (groupBy && !allowedGroups.has(groupBy)) {
@@ -297,7 +309,11 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			const [overviewRes, queryRes] = await Promise.all([overviewPromise, queryPromise]);
 			let rows: string[] = [];
 			let overview: any = null;
-			try { overview = JSON.parse(overviewRes.text); } catch { overview = null; }
+			try {
+				overview = JSON.parse(overviewRes.text);
+			} catch {
+				overview = null;
+			}
 			if (overviewRes.isError) rows.push(`overview error: ${overviewRes.text.slice(0, 200)}`);
 			else if (overview) {
 				const o = overview.overview ?? overview;
@@ -307,7 +323,9 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				const err = o.error_rate ?? o.errorRate ?? "?";
 				rows.push(`# Analytics (snapshot)`);
 				rows.push("");
-				rows.push(`**${req}** requests · **${typeof cost === "number" ? dollars(cost) : cost}** cost · **${typeof toks === "number" ? toks.toLocaleString() : toks}** tokens · **${typeof err === "number" ? (err*100).toFixed(2)+"%" : err}** error rate`);
+				rows.push(
+					`**${req}** requests · **${typeof cost === "number" ? dollars(cost) : cost}** cost · **${typeof toks === "number" ? toks.toLocaleString() : toks}** tokens · **${typeof err === "number" ? (err * 100).toFixed(2) + "%" : err}** error rate`,
+				);
 				rows.push("");
 				if (o.avg_latency) rows.push(`Avg latency: ${o.avg_latency}ms` + (o.avg_ttft ? ` · TTFT ${o.avg_ttft}ms` : ""));
 				rows.push(`Breakdown below is for --last ${last}`);
@@ -315,7 +333,12 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			} else rows.push(overviewRes.text.slice(0, 500));
 			if (queryRes.isError) {
 				const msg = queryRes.text;
-				if (/project_id/i.test(msg)) rows.push("", `query error (needs project): ${msg.slice(0, 300)}`, "hint: list_traces → attributes.orq.project_id, then /analytics --group-by " + groupByParam + " with project filter");
+				if (/project_id/i.test(msg))
+					rows.push(
+						"",
+						`query error (needs project): ${msg.slice(0, 300)}`,
+						"hint: list_traces → attributes.orq.project_id, then /analytics --group-by " + groupByParam + " with project filter",
+					);
 				else rows.push("", `breakdown error: ${msg.slice(0, 300)}`);
 			} else {
 				try {
@@ -326,22 +349,32 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 						const dims = it.dimensions ?? {};
 						const mets = it.metrics ?? it;
 						const name = dims[groupByParam] ?? it[groupByParam] ?? it.model ?? it.name ?? it.key ?? "?";
-						return { name, requests: mets.requests ?? mets.count ?? mets.total_requests ?? it.requests ?? it.count ?? "?", cost: mets.cost ?? mets.total_cost ?? it.cost ?? it.total_cost ?? 0 };
+						return {
+							name,
+							requests: mets.requests ?? mets.count ?? mets.total_requests ?? it.requests ?? it.count ?? "?",
+							cost: mets.cost ?? mets.total_cost ?? it.cost ?? it.total_cost ?? 0,
+						};
 					});
 					if (items.length) {
 						rows.push(`### Top ${groupByParam}s — last ${last}`);
 						rows.push("");
 						const head = `| # | ${groupByParam} | Requests | Cost |`;
 						rows.push(head);
-						rows.push("|---|" + "---|" .repeat(head.split("|").length-2));
+						rows.push("|---|" + "---|".repeat(head.split("|").length - 2));
 						items.slice(0, 10).forEach((it: any, i: number) => {
-							rows.push(`| ${i+1} | ${it.name} | ${it.requests} | ${typeof it.cost === "number" ? dollars(it.cost) : it.cost} |`);
+							rows.push(`| ${i + 1} | ${it.name} | ${it.requests} | ${typeof it.cost === "number" ? dollars(it.cost) : it.cost} |`);
 						});
-						if (items.length > 10) rows.push(`… and ${items.length-10} more`);
+						if (items.length > 10) rows.push(`… and ${items.length - 10} more`);
 					} else rows.push("", `no breakdown for ${groupByParam} — last ${last}`);
-				} catch { rows.push(queryRes.text.slice(0, 500)); }
+				} catch {
+					rows.push(queryRes.text.slice(0, 500));
+				}
 			}
-			await panel(ctx, { title: `analytics · last ${last} · by ${groupByParam}`, rows, hint: "--group-by model|provider|project_id|http_status_code|agent_name · --last 24h|7d · esc close" });
+			await panel(ctx, {
+				title: `analytics · last ${last} · by ${groupByParam}`,
+				rows,
+				hint: "--group-by model|provider|project_id|http_status_code|agent_name · --last 24h|7d · esc close",
+			});
 		},
 	});
 
@@ -349,7 +382,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 		description: "workspace overview: agents, prompts, datasets, experiments, projects, evaluators [section]",
 		handler: async (args, ctx) => {
 			const section = args.trim().toLowerCase();
-			const valid = new Set(["agents","prompts","datasets","experiments","projects","evaluators","evaluator"]);
+			const valid = new Set(["agents", "prompts", "datasets", "experiments", "projects", "evaluators", "evaluator"]);
 			const want = valid.has(section) ? section : "";
 			// search_entities only supports project/dataset/prompt/evaluator/experiment; agents come from the local catalogue
 			const searchTypes: { key: string; type: string; label: string }[] = [
@@ -359,37 +392,64 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				{ key: "projects", type: "project", label: "Projects" },
 				{ key: "evaluators", type: "evaluator", label: "Evaluators" },
 			];
-			const neededSearch = want ? searchTypes.filter(t => t.key === want || (want === "evaluator" && t.key === "evaluators")) : searchTypes;
+			const neededSearch = want
+				? searchTypes.filter((t) => t.key === want || (want === "evaluator" && t.key === "evaluators"))
+				: searchTypes;
 			const includeAgents = !want || want === "agents";
 			const overviewP = deps.callTool("get_analytics_overview", {}).catch((e) => ({ text: String(e), isError: true as const }));
-			const calls = neededSearch.map(t => deps.callTool("search_entities", { type: t.type, query: "" }).catch((e) => ({ text: String(e), isError: true as const })).then(r => ({ t, r })));
+			const calls = neededSearch.map((t) =>
+				deps
+					.callTool("search_entities", { type: t.type, query: "" })
+					.catch((e) => ({ text: String(e), isError: true as const }))
+					.then((r) => ({ t, r })),
+			);
 			const [overviewRes, ...results] = await Promise.all([overviewP, ...calls]);
 			let rows: string[] = [];
 			const counts: string[] = [];
 			const byKey = new Map<string, { items: any[]; error?: string }>();
 			if (includeAgents) {
 				const agents = deps.catalogue().filter((m) => m.kind === "agent");
-				byKey.set("agents", { items: agents.map((a) => ({ display_name: a.id.slice(6), id: a.id, status: a.agent?.status })), error: undefined });
+				byKey.set("agents", {
+					items: agents.map((a) => ({ display_name: a.id.slice(6), id: a.id, status: a.agent?.status })),
+					error: undefined,
+				});
 				counts.push(`**${agents.length}** agents`);
 			}
 			for (const { t, r } of results as any[]) {
-				if ((r as any).isError) { counts.push(`**!** ${t.key} (error)`); byKey.set(t.key, { items: [], error: String((r as any).text).slice(0,120) }); }
-				else {
-					try { const j = JSON.parse((r as any).text); const items = j.items ?? j.entities ?? j.data ?? []; byKey.set(t.key, { items, error: undefined }); counts.push(`**${items.length}** ${t.key}`); } catch { byKey.set(t.key, { items: [], error: "parse error" }); counts.push(`**?** ${t.key}`); }
+				if ((r as any).isError) {
+					counts.push(`**!** ${t.key} (error)`);
+					byKey.set(t.key, { items: [], error: String((r as any).text).slice(0, 120) });
+				} else {
+					try {
+						const j = JSON.parse((r as any).text);
+						const items = j.items ?? j.entities ?? j.data ?? [];
+						byKey.set(t.key, { items, error: undefined });
+						counts.push(`**${items.length}** ${t.key}`);
+					} catch {
+						byKey.set(t.key, { items: [], error: "parse error" });
+						counts.push(`**?** ${t.key}`);
+					}
 				}
 			}
 			rows.push(`# Workspace — Overview`);
 			rows.push("");
 			rows.push(counts.join(" · "));
 			rows.push("");
-			try { const o = JSON.parse((overviewRes as any).text); const ov = o.overview ?? o; if (ov.total_requests) rows.push(`Last 24h: **${ov.total_requests}** requests · **${dollars(ov.total_cost ?? 0)}** cost · **${ov.error_rate ? (ov.error_rate*100).toFixed(2)+"%" : "?"}** error rate`); } catch {}
+			try {
+				const o = JSON.parse((overviewRes as any).text);
+				const ov = o.overview ?? o;
+				if (ov.total_requests)
+					rows.push(
+						`Last 24h: **${ov.total_requests}** requests · **${dollars(ov.total_cost ?? 0)}** cost · **${ov.error_rate ? (ov.error_rate * 100).toFixed(2) + "%" : "?"}** error rate`,
+					);
+			} catch {}
 			rows.push("");
 			rows.push(`Manage at **my.orq.ai**`);
 			rows.push("");
 			rows.push("---");
 			const displayTypes = [
 				...(includeAgents ? [{ key: "agents", label: "Agents" }] : []),
-				...neededSearch.map(t => ({ key: t.key, label: t.label })),
+				...neededSearch.map((t) => ({ key: t.key, label: t.label })),
 			];
 			for (const t of displayTypes) {
 				const entry = byKey.get(t.key) ?? { items: [], error: undefined };
@@ -397,14 +457,22 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				rows.push(`### ${t.label} (${entry.items.length})`);
 				if (entry.error) rows.push(`error: ${entry.error}`);
 				else if (!entry.items.length) rows.push("(none)");
-				else entry.items.slice(0, 10).forEach((it: any) => {
-					const name = it.display_name ?? it.key ?? it.name ?? it.id ?? "?";
-					const meta = [it.model ?? it.status ?? "", it.description ? String(it.description).slice(0,40) : ""].filter(Boolean).join(" · ");
-					rows.push(`- **${name}**` + (meta ? ` — ${meta}` : ""));
-				});
-				if (entry.items.length > 10) rows.push(`… and ${entry.items.length-10} more`);
+				else
+					entry.items.slice(0, 10).forEach((it: any) => {
+						const name = it.display_name ?? it.key ?? it.name ?? it.id ?? "?";
+						const meta = [it.model ?? it.status ?? "", it.description ? String(it.description).slice(0, 40) : ""]
+							.filter(Boolean)
+							.join(" · ");
+						rows.push(`- **${name}**` + (meta ? ` — ${meta}` : ""));
+					});
+				if (entry.items.length > 10) rows.push(`… and ${entry.items.length - 10} more`);
 			}
-			await panel(ctx, { title: `overview · ${deps.workspace() ?? "this workspace"}`, rows, height: 18, hint: "/overview [section] · esc close" });
+			await panel(ctx, {
+				title: `overview · ${deps.workspace() ?? "this workspace"}`,
+				rows,
+				height: 18,
+				hint: "/overview [section] · esc close",
+			});
 		},
 	});
 
