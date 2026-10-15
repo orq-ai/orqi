@@ -16,10 +16,15 @@ const TREES = ["skills", "commands", "themes"];
 const FILES = ["src/system-prompt.txt"];
 
 function walk(dir: string): string[] {
-	return readdirSync(dir).flatMap((entry) => {
-		const path = join(dir, entry);
-		return statSync(path).isDirectory() ? walk(path) : [path];
-	});
+	try {
+		return readdirSync(dir).flatMap((entry) => {
+			const path = join(dir, entry);
+			return statSync(path).isDirectory() ? walk(path) : [path];
+		});
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw e;
+	}
 }
 
 const assets: Record<string, string> = {};

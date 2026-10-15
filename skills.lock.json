@@ -22,12 +22,5 @@
 		"orq-shared",
 		"orq-simulate-agent"
 	],
-	"commands": [
-		"analytics",
-		"models",
-		"orq-manage-skills",
-		"quickstart",
-		"traces",
-		"workspace"
-	]
+	"commands": []
 }

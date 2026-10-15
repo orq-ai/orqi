@@ -15,6 +15,7 @@ orqi
 │   ├── system prompt            src/system-prompt.txt
 │   ├── slash commands           auth, workspace, update        src/connection.ts
 │   │                            the harness views                src/harness.ts
+│   │                            structured traces/analytics       src/harness-commands.ts
 │   └── startup header           session entry, not stdout        src/connection.ts
 ├── model            orq AI Router as a pi provider              src/model.ts
 ├── credentials       orq profile, ORQ_API_KEY or the login session  src/auth.ts
@@ -31,12 +32,12 @@ orqi
 | `src/connection.ts` | The connection half of the pi extension (a command goes here only if it is about the connection; the rest are `harness.ts`'s): startup header entry, the not-connected warning and reconnect, the first-run welcome, plus `/key /whoami /workspace /reconnect /doctor /update` |
 | `src/oauth.ts` | "Sign in with an account → orq.ai" in pi's `/login`, running `orq auth login` |
 | `src/onboarding.ts` | `MaskedInput` for `/key`, the welcome's options, the `/learn` prompts |
-| `src/skills.ts` | `pluginResources` (one copy of the orq plugin, `DROPPED_COMMANDS`), the daily plugin update, `/skills` details |
+| `src/skills.ts` | `pluginResources` (one copy of the orq plugin, `DROPPED_COMMANDS` now filters all 6 least-common prompt templates → `additionalPromptTemplatePaths=[]`), the daily plugin update, `/skills` details |
 | `src/frontmatter.ts` | `normalizeCommand`: quotes plugin command frontmatter that strict YAML would reject |
 | `src/update.ts` | `orqi update`: the release check, the launch notice text, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
 | `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, and the commands that own state: `/route /teach /panel` |
-| `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
+| `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /traces /analytics /overview /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
 | `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
@@ -48,7 +49,7 @@ orqi
 | `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
 
 `pluginResources` in `src/skills.ts` hands pi exactly one copy of the orq marketplace plugin, its
-skills and its slash commands (as prompt templates), as individual paths: the daily-updated copy in
+skills (prompt templates now filtered to `[]` via `DROPPED_COMMANDS`; structured `/traces`/`/analytics`/`/overview` live in `harness-commands.ts` instead) as individual paths: the daily-updated copy in
 `~/.orqi/agent/skills-live/current` when it is newer than the bundled one, the bundled one
 otherwise, plus orqi's own `orqi-*` skills. No name is offered twice, so startup shows no collision
 block. The updater is fire-and-forget, never installs an older commit, and updates land on the next

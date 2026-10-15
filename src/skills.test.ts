@@ -109,7 +109,7 @@ test("one copy of the orq plugin: bundled by default, so pi never sees a name tw
 			"/skills/orqi-platform-guide",
 		]);
 		// The plugin's commands become prompt templates, minus names orqi already owns and the ones it drops.
-		expect(resources.additionalPromptTemplatePaths.map((p) => p.slice(pkg.length))).toEqual(["/commands/traces.md"]);
+		expect(resources.additionalPromptTemplatePaths).toEqual([]);
 		expect(resources.note).toBeUndefined();
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -125,7 +125,8 @@ test("a live copy is used only when it is newer than the bundled one", () => {
 		expect(names).toEqual(["orq-build-agent", "orq-cli", "orq-new-skill", "orqi-platform-guide"]); // no duplicates
 		expect(live.additionalSkillPaths.filter((p) => p.includes("skills-live")).length).toBe(3);
 		expect(live.additionalSkillPaths.find((p) => p.endsWith("orqi-platform-guide"))).toStartWith(newer.pkg); // ours always bundled
-		expect(live.additionalPromptTemplatePaths.map((p) => p.split("/").at(-1))).toEqual(["quickstart.md", "traces.md"]);
+		// /traces and /quickstart are also dropped now; nothing upstream survives.
+		expect(live.additionalPromptTemplatePaths).toEqual([]);
 		expect(live.note).toBe("orq plugin 3.10.0 (updated)");
 		// The bug this replaced: a live copy 12 commits behind the binary used to win.
 		const stale = pluginResources(older.pkg, older.agent);
@@ -163,15 +164,23 @@ test("the daily check installs only what is newer, and drops a stale live copy",
 
 test("the lock records what a live update is compared against", () => {
 	expect(Number.isFinite(Date.parse(SKILLS_LOCK.committed))).toBe(true);
-	const commands = readdirSync(join(import.meta.dir, "..", "commands"))
-		.map((name) => name.replace(/\.md$/, ""))
-		.sort();
+	let commands: string[] = [];
+	try {
+		commands = readdirSync(join(import.meta.dir, "..", "commands"))
+			.filter((name) => name.endsWith(".md"))
+			.map((name) => name.replace(/\.md$/, ""))
+			.sort();
+	} catch {}
 	expect(SKILLS_LOCK.commands).toEqual(commands);
 });
 
 test("every bundled plugin command loads in pi with no diagnostic", async () => {
 	// One unparseable frontmatter upstream is a "Prompt conflicts" block at every boot.
 	const dir = join(import.meta.dir, "..", "commands");
+	let entries: string[] = [];
+	try {
+		entries = readdirSync(dir).filter((name) => name.endsWith(".md"));
+	} catch {}
 	const loader = new DefaultResourceLoader({
 		cwd: tmpdir(),
 		agentDir: mkdtempSync(join(tmpdir(), "orqi-prompts-")),
@@ -179,7 +188,7 @@ test("every bundled plugin command loads in pi with no diagnostic", async () => 
 		noExtensions: true,
 		noPromptTemplates: true,
 		noContextFiles: true,
-		additionalPromptTemplatePaths: readdirSync(dir).map((name) => join(dir, name)),
+		additionalPromptTemplatePaths: entries.map((name) => join(dir, name)),
 	});
 	await loader.reload();
 	const loaded = (loader as any).getPrompts();
