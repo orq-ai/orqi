@@ -120,12 +120,18 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   renames either symbol silently restores pi's wording, so recheck both after bumping pi.
 - **Colours are tuned against the lightest plausible background, not the darkest.** The terminal
   background belongs to the user: Ghostty and the One Dark family sit near `#282C34`, where the
-  first dim amber measured 3.74:1 and read as washed out. Every text role in both themes clears
+  first dim amber measured 3.74:1 and read as washed out. Every text role in all five themes clears
   4.5:1 there, and a test enforces it. Borders are decoration and exempt.
-- **Two themes; `orq-amber` is the default.** One hue throughout, chosen for the 80s monochrome
-  look. The cost is real and known: a failed tool call reads much like a successful one, and
-  syntax highlighting carries less information. `ORQI_THEME=dark` selects `orq-dark`, which keeps
-  turquoise for success and red for errors, and `/theme` switches mid-session.
+- **Five themes; `orq-amber` is the default.** orq-amber is one hue throughout, chosen for the
+  80s monochrome look. The cost is real and known: a failed tool call reads much like a successful
+  one, and syntax highlighting carries less information. `ORQI_THEME` picks a skin at startup:
+  `dark` keeps turquoise for success and red for errors, `teal` is teal-led, `slate` is blue-led,
+  and `signal` is colorblind-safe (pass is sky blue, fail is vermillion, so status never leans on
+  red-vs-green alone). `/theme` switches mid-session.
+- **Every theme is dark, and that is deliberate.** The contrast test floor is the lightest
+  plausible terminal background (`#282C34`); a light-skin palette would fail it, so no light theme
+  ships. The dark ramp work is per-theme: each skin's five thinking steps and dim/faint stops are
+  separate vars, all ≥ 4.5:1.
 - **Constraints the server's schema omits ride in the system prompt** (`TOOL_HINTS`,
   `{{ORQ_TOOL_HINTS}}`). pi gives no hook to append to an MCP tool's description. The
   `query_analytics` matrix was measured against a live workspace; drop an entry once the server
