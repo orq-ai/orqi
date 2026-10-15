@@ -224,7 +224,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   editor (`announceUpdate` in `src/connection.ts`) - it never runs the swap itself. It reads the
   redirect on `github.com/<repo>/releases/latest`, not `api.github.com`: a check on every launch
   would spend the API's 60-per-hour-per-IP budget, which a workshop room shares. The answer is
-  trusted for an hour, the notice shows from the cache at once and again if the fresh check finds
+  not reused between launches: GitHub's cache serves the old tag for a minute or two after a
+  release, and an hour-long cache once hid 0.16.1 behind an answer fetched 20 s after it shipped. The notice shows from the cache at once and again if the fresh check finds
   something newer, and it is a widget, not a session entry, so a resume never replays a stale one.
 - **`orqi update` refuses an `ORQI_VERSION` pin older than the running binary** unless given `--allow-downgrade`
   (an equal pin is a no-op). A workshop repo's `.env` pinned `0.1.0` for `install.sh` and silently
