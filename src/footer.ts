@@ -131,8 +131,6 @@ export interface HeaderBarState {
 	/** `orq/auto` when routing is on. */
 	routing?: string;
 	connected: boolean;
-	/** Short thread (session) id. */
-	thread?: string;
 	/** `orq plugin 3.10.0 (updated)` when a newer plugin is in use. */
 	plugin?: string;
 }
@@ -140,7 +138,7 @@ export interface HeaderBarState {
 /**
  * The fixed header line:
  *
- *   ◌ orqi v<version>  workspace acme · project Arian · agent support-triage · routing orq/auto · thread 01a1…ed4f
+ *   ◌ orqi v<version>  workspace acme · project Arian · agent support-triage · routing orq/auto
  *
  * Segments drop from the right as the terminal narrows; the workspace and
  * the agent stay longest, being the two that change what every call does.
@@ -155,7 +153,6 @@ export function headerBar(state: HeaderBarState, width: number, paint: Paint = p
 	if (state.agent) segments.push(`${paint.dim("agent")} ${paint.hot(state.agent)}`);
 	if (state.project) segments.push(label("project", state.project));
 	if (state.routing) segments.push(label("routing", state.routing));
-	if (state.thread) segments.push(label("thread", state.thread));
 	if (state.plugin) segments.push(paint.dim(state.plugin));
 	// ◌ stands in for orq's dotted-ring mark (docs/splash.svg) in one column.
 	const mark = ` ${(paint.brand ?? paint.text)("◌ orqi")} ${paint.dim(`v${VERSION}`)}  `;

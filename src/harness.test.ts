@@ -660,11 +660,10 @@ test("the fixed header says who and where, dropping segments from the right as i
 		agent: "support-triage",
 		routing: "orq/auto",
 		connected: true,
-		thread: "01a1…ed4f",
 		plugin: "orq plugin 3.10.0 (updated)",
 	};
 	expect(headerBar(state, 200)).toBe(
-		` ◌ orqi v${VERSION}  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)`,
+		` ◌ orqi v${VERSION}  workspace acme · agent support-triage · project Arian · routing orq/auto · orq plugin 3.10.0 (updated)`,
 	);
 	const narrow = headerBar(state, 70);
 	expect(narrow).toBe(` ◌ orqi v${VERSION}  workspace acme · agent support-triage · project Arian`);
@@ -993,9 +992,10 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	const skillLines = cardLines({ concept: GLOSSARY.skill!, used: ["list_skills"] }, 32);
 	expect(skillLines.at(-1)).toBe(`docs  ${hyperlink("open", "https://docs.orq.ai/docs/integrations/code-assistants/skills")}`);
 	expect(skillLines.every((line) => visibleWidth(line) <= 32)).toBe(true);
-	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", thread: "01a1…6b7b" }, 200)).toBe(
-		// Tips are on by default and the inspector says so; the header is who and where.
-		` ◌ orqi v${VERSION}  workspace acme · routing orq/auto · thread 01a1…6b7b`,
+	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto" }, 200)).toBe(
+		// No tips (on by default, the inspector says so) and no thread id (/open opens it,
+		// the exit summary prints it): the header is who and where.
+		` ◌ orqi v${VERSION}  workspace acme · routing orq/auto`,
 	);
 });
 
