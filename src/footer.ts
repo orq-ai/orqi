@@ -131,7 +131,7 @@ export interface HeaderBarState {
 	/** `orq/auto` when routing is on. */
 	routing?: string;
 	connected: boolean;
-	/** Teach mode is on. */
+	/** Tips (teach mode) are on. */
 	teach?: boolean;
 	/** Short thread (session) id. */
 	thread?: string;
@@ -142,7 +142,7 @@ export interface HeaderBarState {
 /**
  * The fixed header line:
  *
- *   orqi v<version>  workspace acme · project Arian · agent support-triage · routing orq/auto · teach · thread 01a1…ed4f
+ *   orqi v<version>  workspace acme · project Arian · agent support-triage · routing orq/auto · tips · thread 01a1…ed4f
  *
  * Segments drop from the right as the terminal narrows; the workspace and
  * the agent stay longest, being the two that change what every call does.
@@ -157,7 +157,7 @@ export function headerBar(state: HeaderBarState, width: number, paint: Paint = p
 	if (state.agent) segments.push(`${paint.dim("agent")} ${paint.hot(state.agent)}`);
 	if (state.project) segments.push(label("project", state.project));
 	if (state.routing) segments.push(label("routing", state.routing));
-	if (state.teach) segments.push(paint.text("teach"));
+	if (state.teach) segments.push(paint.text("tips"));
 	if (state.thread) segments.push(label("thread", state.thread));
 	if (state.plugin) segments.push(paint.dim(state.plugin));
 	const mark = ` ${(paint.brand ?? paint.text)("orqi")} ${paint.dim(`v${VERSION}`)}  `;

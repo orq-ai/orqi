@@ -195,5 +195,5 @@ export function cardLines(card: { concept: Concept; used: string[] }, width: num
 /** The one dim line regular mode shows above the editor instead. */
 export function cardLine(card: { concept: Concept; used: string[] }): string {
 	const sentence = card.concept.body.split(/(?<=\.)\s/)[0]!;
-	return `▸ teach  ${card.concept.title}: ${sentence}  used ${card.used.join(" · ")}${card.concept.docs ? ` · ${hyperlink(`${DOCS}${card.concept.docs}`, `${DOCS}${card.concept.docs}`)}` : ""}`;
+	return `▸ tips  ${card.concept.title}: ${sentence}  used ${card.used.join(" · ")}${card.concept.docs ? ` · ${hyperlink(`${DOCS}${card.concept.docs}`, `${DOCS}${card.concept.docs}`)}` : ""}`;
 }

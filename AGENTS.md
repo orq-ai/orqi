@@ -151,7 +151,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
   runs when the classifier errors, 403s, times out, or the workspace has no classifier. A response
   without a door answer has no opinion; the router does not invent one.
-- **Teach lives in the inspector (the side panel), never the transcript.** Cards are not session
+- **Teach lives in the inspector (the side panel), never the transcript.** Users see it as "tips" (`/tips`; `/teach` stays an alias), the code keeps the name `teach`. Cards are not session
   entries, so `/trajectory` exports only the conversation and a resume shows no lessons. When the
   panel is hidden (under 140 columns unless `alt+i` forces it, in fullscreen or as the regular-mode
   overlay) the card and a tool-loop warning fall back to one widget line above the editor, for the
