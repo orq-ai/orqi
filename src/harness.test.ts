@@ -664,11 +664,11 @@ test("the fixed header says who and where, dropping segments from the right as i
 		plugin: "orq plugin 3.10.0 (updated)",
 	};
 	expect(headerBar(state, 200)).toBe(
-		` orqi v${VERSION}  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)`,
+		` ◌ orqi v${VERSION}  workspace acme · agent support-triage · project Arian · routing orq/auto · thread 01a1…ed4f · orq plugin 3.10.0 (updated)`,
 	);
 	const narrow = headerBar(state, 70);
-	expect(narrow).toBe(` orqi v${VERSION}  workspace acme · agent support-triage · project Arian`);
-	expect(headerBar({ connected: false }, 80)).toBe(` orqi v${VERSION}  not signed in · /login`);
+	expect(narrow).toBe(` ◌ orqi v${VERSION}  workspace acme · agent support-triage · project Arian`);
+	expect(headerBar({ connected: false }, 80)).toBe(` ◌ orqi v${VERSION}  not signed in · /login`);
 	expect(visibleWidth(headerBar(state, 20))).toBeLessThanOrEqual(20);
 });
 
@@ -994,7 +994,7 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(skillLines.at(-1)).toBe(`docs  ${hyperlink("open", "https://docs.orq.ai/docs/integrations/code-assistants/skills")}`);
 	expect(skillLines.every((line) => visibleWidth(line) <= 32)).toBe(true);
 	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(
-		` orqi v${VERSION}  workspace acme · routing orq/auto · tips · thread 01a1…6b7b`,
+		` ◌ orqi v${VERSION}  workspace acme · routing orq/auto · tips · thread 01a1…6b7b`,
 	);
 });
 
