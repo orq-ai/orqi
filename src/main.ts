@@ -145,12 +145,28 @@ Examples:
 				if (existsSync(liveJson)) {
 					const j = JSON.parse(readFileSync(liveJson, "utf8"));
 					const hasPkg = pkgs.some((x) => x.source.includes("assistant-plugins"));
-					if (!hasPkg) console.log(`  legacy live ${j.version ?? j.sha?.slice(0,8)} (${j.committed}) — run orqi plugin install git:github.com/orq-ai/assistant-plugins to migrate`);
-					else console.log(`  legacy live ${j.version ?? j.sha?.slice(0,8)} — will be ignored once plugin is installed (remove skills-live/current to clean up)`);
+					if (!hasPkg)
+						console.log(
+							`  legacy live ${j.version ?? j.sha?.slice(0, 8)} (${j.committed}) — run orqi plugin install git:github.com/orq-ai/assistant-plugins to migrate`,
+						);
+					else
+						console.log(
+							`  legacy live ${j.version ?? j.sha?.slice(0, 8)} — will be ignored once plugin is installed (remove skills-live/current to clean up)`,
+						);
 				}
 				const errPath = join(agentDir, "skills-live", "last-error.json");
 				if (existsSync(errPath)) {
-					try { const e = JSON.parse(readFileSync(errPath, "utf8")); const age = (()=>{try{return Math.round((Date.now()-statSync(errPath).mtimeMs)/3600000)}catch{return 0}})(); if (age < 24) console.log(`  last skills update error (${age}h ago): ${e.error}`); } catch {}
+					try {
+						const e = JSON.parse(readFileSync(errPath, "utf8"));
+						const age = (() => {
+							try {
+								return Math.round((Date.now() - statSync(errPath).mtimeMs) / 3600000);
+							} catch {
+								return 0;
+							}
+						})();
+						if (age < 24) console.log(`  last skills update error (${age}h ago): ${e.error}`);
+					} catch {}
 				}
 			} catch {}
 		} else if (cmd === "install" && source) {
@@ -163,7 +179,12 @@ Examples:
 				const pkgs = pm.listConfiguredPackages();
 				const hit = pkgs.find((x) => x.source === source || source.includes(x.source));
 				const root = hit?.installedPath;
-				if (root && (existsSync(join(root, ".mcp.json")) || existsSync(join(root, ".claude-plugin", ".mcp.json")) || existsSync(join(root, "mcp.json")))) {
+				if (
+					root &&
+					(existsSync(join(root, ".mcp.json")) ||
+						existsSync(join(root, ".claude-plugin", ".mcp.json")) ||
+						existsSync(join(root, "mcp.json")))
+				) {
 					console.log(`  note: plugin ships MCP servers (.mcp.json) — not auto-enabled. Add to ~/.orqi/agent/mcp.json to use`);
 				}
 			} catch {}
@@ -206,50 +227,80 @@ Examples:
 	const cmd = args[0];
 	try {
 		if (cmd === "list") {
-			if (!existsSync(mcpPath)) { console.log("No MCP servers configured."); process.exit(0); }
+			if (!existsSync(mcpPath)) {
+				console.log("No MCP servers configured.");
+				process.exit(0);
+			}
 			const j = JSON.parse(readFileSync(mcpPath, "utf8"));
 			const servers = j.mcpServers ?? {};
 			if (Object.keys(servers).length === 0) console.log("No MCP servers configured.");
-			else for (const [name, cfg] of Object.entries(servers)) {
-				const c = cfg as any;
-				const desc = c.url ? `url ${c.url}` : `cmd ${c.command}`;
-				console.log(`  ${name}: ${desc}`);
-			}
+			else
+				for (const [name, cfg] of Object.entries(servers)) {
+					const c = cfg as any;
+					const desc = c.url ? `url ${c.url}` : `cmd ${c.command}`;
+					console.log(`  ${name}: ${desc}`);
+				}
 		} else if (cmd === "add") {
 			const name = args[1];
-			if (!name) { console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]"); process.exit(1); }
+			if (!name) {
+				console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]");
+				process.exit(1);
+			}
 			const urlIdx = args.indexOf("--url");
 			let config: any = {};
 			if (urlIdx !== -1) {
-				const url = args[urlIdx+1];
-				if (!url) { console.error("--url needs a value"); process.exit(1); }
+				const url = args[urlIdx + 1];
+				if (!url) {
+					console.error("--url needs a value");
+					process.exit(1);
+				}
 				config.url = url;
 				// collect --header repeats: --header "K: V"
-				const headers: Record<string,string> = {};
-				for (let i=0;i<args.length;i++) if (args[i]==="--header" && args[i+1]) { const h=args[i+1]; const colon=h.indexOf(":"); if(colon>-1) headers[h.slice(0,colon).trim()]=h.slice(colon+1).trim(); }
+				const headers: Record<string, string> = {};
+				for (let i = 0; i < args.length; i++)
+					if (args[i] === "--header" && args[i + 1]) {
+						const h = args[i + 1];
+						const colon = h.indexOf(":");
+						if (colon > -1) headers[h.slice(0, colon).trim()] = h.slice(colon + 1).trim();
+					}
 				if (Object.keys(headers).length) config.headers = headers;
 			} else {
 				// stdio: everything after name is command (skip leading --)
 				let cmdArgs = args.slice(2);
 				if (cmdArgs[0] === "--") cmdArgs = cmdArgs.slice(1);
-				if (cmdArgs.length===0) { console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]"); process.exit(1); }
+				if (cmdArgs.length === 0) {
+					console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]");
+					process.exit(1);
+				}
 				config.command = cmdArgs[0];
-				if (cmdArgs.length>1) config.args = cmdArgs.slice(1);
+				if (cmdArgs.length > 1) config.args = cmdArgs.slice(1);
 			}
 			let j: any = {};
-			if (existsSync(mcpPath)) try { j = JSON.parse(readFileSync(mcpPath, "utf8")); } catch {}
+			if (existsSync(mcpPath))
+				try {
+					j = JSON.parse(readFileSync(mcpPath, "utf8"));
+				} catch {}
 			if (!j.mcpServers || typeof j.mcpServers !== "object") j.mcpServers = {};
 			const replaced = j.mcpServers[name] !== undefined;
 			j.mcpServers[name] = config;
 			mkdirSync(join(AGENT_DIR), { recursive: true });
 			writeFileSync(mcpPath, JSON.stringify(j, null, 2) + "\n");
-			console.log(`${replaced?"Replaced":"Added"} MCP server "${name}" in ${mcpPath}`);
+			console.log(`${replaced ? "Replaced" : "Added"} MCP server "${name}" in ${mcpPath}`);
 		} else if (cmd === "remove") {
 			const name = args[1];
-			if (!name) { console.error("Usage: orqi mcp remove <name>"); process.exit(1); }
-			if (!existsSync(mcpPath)) { console.error(`No mcp.json at ${mcpPath}`); process.exit(1); }
+			if (!name) {
+				console.error("Usage: orqi mcp remove <name>");
+				process.exit(1);
+			}
+			if (!existsSync(mcpPath)) {
+				console.error(`No mcp.json at ${mcpPath}`);
+				process.exit(1);
+			}
 			const j = JSON.parse(readFileSync(mcpPath, "utf8"));
-			if (!j.mcpServers || !(name in j.mcpServers)) { console.error(`No MCP server "${name}" in ${mcpPath}`); process.exit(1); }
+			if (!j.mcpServers || !(name in j.mcpServers)) {
+				console.error(`No MCP server "${name}" in ${mcpPath}`);
+				process.exit(1);
+			}
 			delete j.mcpServers[name];
 			writeFileSync(mcpPath, JSON.stringify(j, null, 2) + "\n");
 			console.log(`Removed MCP server "${name}" from ${mcpPath}`);

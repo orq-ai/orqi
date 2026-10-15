@@ -510,11 +510,15 @@ export function orqCommands(
 					if (existsSync(liveJson)) {
 						try {
 							const j = JSON.parse(readFileSync(liveJson, "utf8"));
-							liveInfo = `\n  legacy live ${j.version ?? j.sha?.slice(0,8)} (${j.committed})`;
+							liveInfo = `\n  legacy live ${j.version ?? j.sha?.slice(0, 8)} (${j.committed})`;
 						} catch {}
 					}
 					const lastCheck = (() => {
-						try { return new Date(statSync(join(getAgentDir(), "skills-live", "last-check")).mtimeMs).toISOString(); } catch { return "never"; }
+						try {
+							return new Date(statSync(join(getAgentDir(), "skills-live", "last-check")).mtimeMs).toISOString();
+						} catch {
+							return "never";
+						}
 					})();
 					ctx.ui.notify(`Plugins:\n${lines}${liveInfo}\n  last-check ${lastCheck}`);
 				} catch {}
