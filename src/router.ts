@@ -30,7 +30,10 @@ import { BASE_MODEL, type ModelInfo } from "./model.ts";
 export const DECISIONS_PROVIDER = "orq-decisions";
 export const DECISIONS_API = "orq-decisions";
 export const AUTO_ID = "auto";
-export const DEFAULT_CLASSIFIER = "typesafe/jev-latest";
+/** orq's own decision model: measured 2026-10-15 at ~0.3 s and a third of jev's cost per call. */
+export const DEFAULT_CLASSIFIER = "orq/decider-4b";
+/** Tried in order when ORQI_ROUTE_CLASSIFIER is unset; a workspace with neither uses its first classifier. */
+export const CLASSIFIER_PREFERENCE = [DEFAULT_CLASSIFIER, "typesafe/jev-latest"];
 
 export type Tier = "easy" | "medium" | "hard";
 export const TIERS: Tier[] = ["easy", "medium", "hard"];
@@ -369,7 +372,8 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 			routing.pool = routePool(next, base);
 			routing.classifier =
 				process.env.ORQI_ROUTE_CLASSIFIER ??
-				(classifiers.some((model) => model.id === DEFAULT_CLASSIFIER) ? DEFAULT_CLASSIFIER : classifiers[0]?.id);
+				CLASSIFIER_PREFERENCE.find((id) => classifiers.some((model) => model.id === id)) ??
+				classifiers[0]?.id;
 			routing.unavailable = undefined;
 			if (classifiers.length) runtime.registerProvider(DECISIONS_PROVIDER, decisionsProvider(classifiers));
 		},
