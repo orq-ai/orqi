@@ -313,7 +313,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			const queryArgs: Record<string, unknown> = { metric: metricForGroup, time_range: { start: last }, group_by: [groupByParam] };
 			const queryPromise = deps.callTool("query_analytics", queryArgs).catch((e) => ({ text: String(e), isError: true as const }));
 			const [overviewRes, queryRes] = await Promise.all([overviewPromise, queryPromise]);
-			let rows: string[] = [];
+			const rows: string[] = [];
 			let overview: any = null;
 			try {
 				overview = JSON.parse(overviewRes.text);
@@ -416,7 +416,7 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 					.then((r) => ({ t, r })),
 			);
 			const [overviewRes, ...results] = await Promise.all([overviewP, ...calls]);
-			let rows: string[] = [];
+			const rows: string[] = [];
 			const counts: string[] = [];
 			const byKey = new Map<string, { items: any[]; error?: string }>();
 			if (includeAgents) {
