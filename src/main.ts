@@ -134,6 +134,22 @@ Examples:
 			const pkgs = pm.listConfiguredPackages();
 			if (pkgs.length === 0) console.log("No plugins installed.\n  orqi plugin install <source>");
 			else for (const p of pkgs) console.log(`  ${p.source}${p.installedPath ? ` -> ${p.installedPath}` : ""} [${p.scope}]`);
+			// Step 10: surface legacy skills-live for migration
+			try {
+				const { existsSync, readFileSync, statSync } = await import("node:fs");
+				const { join } = await import("node:path");
+				const liveJson = join(agentDir, "skills-live", "current.json");
+				if (existsSync(liveJson)) {
+					const j = JSON.parse(readFileSync(liveJson, "utf8"));
+					const hasPkg = pkgs.some((x) => x.source.includes("assistant-plugins"));
+					if (!hasPkg) console.log(`  legacy live ${j.version ?? j.sha?.slice(0,8)} (${j.committed}) — run orqi plugin install git:github.com/orq-ai/assistant-plugins to migrate`);
+					else console.log(`  legacy live ${j.version ?? j.sha?.slice(0,8)} — will be ignored once plugin is installed (remove skills-live/current to clean up)`);
+				}
+				const errPath = join(agentDir, "skills-live", "last-error.json");
+				if (existsSync(errPath)) {
+					try { const e = JSON.parse(readFileSync(errPath, "utf8")); const age = (()=>{try{return Math.round((Date.now()-statSync(errPath).mtimeMs)/3600000)}catch{return 0}})(); if (age < 24) console.log(`  last skills update error (${age}h ago): ${e.error}`); } catch {}
+				}
+			} catch {}
 		} else if (cmd === "install" && source) {
 			await pm.installAndPersist(source);
 			console.log(`Installed ${source}`);

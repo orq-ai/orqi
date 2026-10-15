@@ -219,8 +219,11 @@ export async function maybeUpdateSkills(agentDir: string): Promise<void> {
 			return;
 		}
 		if (action === "install") await downloadAndSwap(root, upstream);
-	} catch {
-		// Silent by design; the header note reflects whatever landed.
+	} catch (e) {
+		try {
+			const msg = e instanceof Error ? e.message : String(e);
+			writeFileSync(join(liveRoot(agentDir), "last-error.json"), JSON.stringify({ at: new Date().toISOString(), error: msg }));
+		} catch {}
 	}
 }
 
