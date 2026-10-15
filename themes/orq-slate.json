@@ -73,12 +73,12 @@
 		"syntaxOperator": "blueDim",
 		"syntaxPunctuation": "blueDim",
 
-		"thinkingOff": "#232E4A",
-		"thinkingMinimal": "blueFaint",
-		"thinkingLow": "deepNavy",
-		"thinkingMedium": "#3A5A9C",
-		"thinkingHigh": "#5B7FC9",
-		"thinkingXhigh": "cyberBlue",
+		"thinkingOff": "#7C94B6",
+		"thinkingMinimal": "#859EC2",
+		"thinkingLow": "#7FA3D9",
+		"thinkingMedium": "#86AEEA",
+		"thinkingHigh": "#98BDF5",
+		"thinkingXhigh": "#8FC7FF",
 		"thinkingMax": "blueHot",
 
 		"bashMode": "blue"

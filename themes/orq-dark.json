@@ -72,12 +72,12 @@
 		"syntaxOperator": "amberDim",
 		"syntaxPunctuation": "amberDim",
 
-		"thinkingOff": "amberLine",
-		"thinkingMinimal": "amberFaint",
-		"thinkingLow": "deepTeal",
-		"thinkingMedium": "#00695C",
-		"thinkingHigh": "#00A896",
-		"thinkingXhigh": "turquoise",
+		"thinkingOff": "#BC8B57",
+		"thinkingMinimal": "#C29159",
+		"thinkingLow": "#22B3A1",
+		"thinkingMedium": "#00C4AD",
+		"thinkingHigh": "#00DCC2",
+		"thinkingXhigh": "#00FFDD",
 		"thinkingMax": "turquoiseAccent",
 
 		"bashMode": "turquoise"
