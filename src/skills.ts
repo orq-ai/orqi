@@ -121,10 +121,15 @@ export interface PluginResources {
 /**
  * Plugin commands orqi leaves out. `/models` spends a model turn and three
  * `list_models` calls to print what pi's `/model` already lists for free, and
- * its error hint is Claude Code setup. Filtered here, not deleted from
- * `commands/`, because `bun run vendor` would bring the file back.
+ * its error hint is Claude Code setup. The rest were written for Claude Code
+ * (their `allowed-tools` name `orq*`, their tool list names `mcp__orq-workspace__*`,
+ * their error hints say `claude mcp add`) and describe APIs orqi's server does
+ * not have: `traces.md` builds Typesense filter strings and calls
+ * `list_registry_keys`, neither of which exists here. orqi's own `/traces`
+ * covers the debugging entry point instead. Filtered by name, not deleted from
+ * `commands/`, because `bun run vendor` would bring the files back.
  */
-export const DROPPED_COMMANDS = ["models"];
+export const DROPPED_COMMANDS = ["models", "analytics", "traces", "workspace", "quickstart", "orq-manage-skills"];
 
 /**
  * Exactly one copy of the plugin, as individual skill dirs and template files.

@@ -21,7 +21,7 @@ import { DEFAULT_MODEL, talkable } from "./model.ts";
 import { bareName, schemaLines, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
 import type { Panel, PanelSpec } from "./panel.ts";
-import { agentUrl, conversationLines, shortId, threadUrl, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
+import { agentUrl, conversationLines, durationMs, shortId, threadUrl, traceRow, traceSummary, traceUrl, type TraceRef } from "./trace.ts";
 import { toAtif, type Trajectory } from "./trajectory.ts";
 import { ageLabel, latestRelease } from "./whatsnew.ts";
 import { LEARN_PROMPTS, learnRows } from "./onboarding.ts";
@@ -104,6 +104,63 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 		},
 	});
 
+	/** The /trace overlay, shared with /traces so its enter key opens one trace. */
+	const openTrace = async (id: string, ctx: ExtensionContext) => {
+		const ref = traces.find((t) => t.traceId === id);
+		const { host, workspace } = await studio();
+		const threadId = ctx.sessionManager.getSessionId();
+		const url = workspace ? traceUrl(host, workspace, id, ref?.spanId) : undefined;
+		const turnNote = ref ? ` (this session, turn ${ref.turn} of ${trajectory.turn})` : "";
+		const head = [url ?? `${host} · workspace key unknown, search Traces for ${id}`, ""];
+		// The panel opens at once and fills in: list_spans goes to the MCP
+		// server, which stalls now and then, and ingestion lags the call.
+		const spec = (close: () => void, body: string[]): PanelSpec => ({
+			title: `trace ${shortId(id)} · thread ${shortId(threadId)}${turnNote}`,
+			rows: [...head, ...body],
+			hint: "enter open trace · t open thread · c conversation · esc close",
+			keys: {
+				enter: () => {
+					if (url) openUrl(url);
+					return true;
+				},
+				t: () => {
+					if (workspace) openUrl(threadUrl(host, workspace, threadId));
+					return true;
+				},
+				c: () => {
+					const result = runOrq(["traces", "conversation", id, "-o", "json"]);
+					close();
+					void panel(ctx, {
+						title: `conversation ${shortId(id)}`,
+						rows: result.ok ? conversationLines(result.stdout) : [result.stderr.trim() || "no conversation"],
+						hint: "esc close",
+					});
+				},
+			},
+		});
+		let live: Panel | undefined;
+		let closeLive = () => {};
+		const shown = panel(
+			ctx,
+			(close) => {
+				closeLive = close;
+				return spec(close, ["reading spans…"]);
+			},
+			"80%",
+			(p) => (live = p),
+		);
+		deps
+			.callTool("list_spans", { trace_id: id })
+			.then((listed) => {
+				const spans = listed.isError ? [] : (JSON.parse(listed.text)?.items ?? []);
+				live?.update(
+					spec(closeLive, spans.length ? traceSummary(spans) : ["no spans yet: the gateway ingests traces a few seconds after the call"]),
+				);
+			})
+			.catch((error) => live?.update(spec(closeLive, [`spans unavailable: ${error instanceof Error ? error.message : error}`])));
+		await shown;
+	};
+
 	pi.registerCommand("trace", {
 		description: "the last turn's trace: route, spans, cost; /trace <id> for any trace",
 		handler: async (args, ctx) => {
@@ -112,59 +169,208 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 				ctx.ui.notify("No trace yet: send a message first, or pass a trace id.", "warning");
 				return;
 			}
-			const ref = traces.find((t) => t.traceId === id);
-			const { host, workspace } = await studio();
-			const threadId = ctx.sessionManager.getSessionId();
-			const url = workspace ? traceUrl(host, workspace, id, ref?.spanId) : undefined;
-			const turnNote = ref ? ` (this session, turn ${ref.turn} of ${trajectory.turn})` : "";
-			const head = [url ?? `${host} · workspace key unknown, search Traces for ${id}`, ""];
-			// The panel opens at once and fills in: list_spans goes to the MCP
-			// server, which stalls now and then, and ingestion lags the call.
-			const spec = (close: () => void, body: string[]): PanelSpec => ({
-				title: `trace ${shortId(id)} · thread ${shortId(threadId)}${turnNote}`,
-				rows: [...head, ...body],
-				hint: "enter open trace · t open thread · c conversation · esc close",
+			await openTrace(id, ctx);
+		},
+	});
+
+	// Production traces, unlike /trace's session turns. The plugin's own
+	// /traces was written for Claude Code (Typesense filters, registry tools
+	// orqi's server does not have) and is dropped in DROPPED_COMMANDS; this
+	// one speaks list_traces' structured filters. A bare `--last <duration>`
+	// cannot be sent to the server, which takes no window: it trims what is
+	// shown, and a notice says so when it would cut the whole page.
+	pi.registerCommand("traces", {
+		description: "production traces from this workspace: filter by status, model, window; enter opens /trace",
+		handler: async (args, ctx) => {
+			// Flags are optional and order-free: /traces, /traces --status error,
+			// /traces --last 7d --limit 5, or plain text meant as a model filter
+			// ("traces errors from gpt-4o" reads intent the same way).
+			const argv = args.trim().split(/\s+/).filter(Boolean);
+			const flags = new Map<string, string>();
+			const free: string[] = [];
+			for (let i = 0; i < argv.length; i++) {
+				const arg = argv[i]!;
+				if (arg === "--status" || arg === "--last" || arg === "--limit" || arg === "--model") flags.set(arg.slice(2), argv[++i] ?? "");
+				else free.push(arg);
+			}
+			const limit = Math.min(Number(flags.get("limit") ?? 20) || 20, 50);
+			const filters: Record<string, unknown> = { limit };
+			const freeText = free.join(" ");
+			const status = flags.get("status") ?? (/error|fail/i.test(freeText) ? "error" : undefined);
+			if (status) filters.status = /error|fail/i.test(status) ? "ERROR" : "OK";
+			const model = flags.get("model") ?? (free.length ? freeText : undefined);
+			if (model) filters.model = model;
+			const windowMs = flags.get("last") ? durationMs(flags.get("last")) : undefined;
+			const result = await deps
+				.callTool("list_traces", filters)
+				.catch((error) => ({ text: String(error), isError: true }));
+			let items: any[] = [];
+			let parseError: string | undefined;
+			try {
+				items = JSON.parse(result.text)?.items ?? [];
+			} catch {
+				parseError = result.text.slice(0, 300);
+			}
+			const inWindow = (t: any) => !windowMs || Date.now() - Date.parse(String(t.start_time ?? "")) <= windowMs;
+			const shown = items.filter(inWindow);
+			if (!shown.length && items.length && windowMs) {
+				ctx.ui.notify(`Every trace is older than ${flags.get("last")}; the window only trims the newest ${limit}.`, "warning");
+			}
+			const why = [status && `status ${status}`, model && `model ${model}`].filter(Boolean).join(", ");
+			const rows = result.isError
+				? [result.text.slice(0, 300)]
+				: parseError
+					? [parseError]
+					: shown.length
+						? shown.map(traceRow)
+						: [`no traces match${why ? ` (${why})` : ""}`];
+			await panel(ctx, {
+				title: `traces · ${deps.workspace() ?? "this workspace"}`,
+				badge: `${shown.length}`,
+				rows,
+				selectable: shown.length > 0,
+				filterable: shown.length > 0,
+				height: 14,
+				hint: "type to filter · enter trace via /trace · esc close",
 				keys: {
-					enter: () => {
-						if (url) openUrl(url);
+					enter: (i) => {
+						const id = shown[i]?.trace_id ?? shown[i]?.context?.trace_id;
+						if (id) void openTrace(String(id), ctx);
 						return true;
-					},
-					t: () => {
-						if (workspace) openUrl(threadUrl(host, workspace, threadId));
-						return true;
-					},
-					c: () => {
-						const result = runOrq(["traces", "conversation", id, "-o", "json"]);
-						close();
-						void panel(ctx, {
-							title: `conversation ${shortId(id)}`,
-							rows: result.ok ? conversationLines(result.stdout) : [result.stderr.trim() || "no conversation"],
-							hint: "esc close",
-						});
 					},
 				},
 			});
-			let live: Panel | undefined;
-			let closeLive = () => {};
-			const shown = panel(
-				ctx,
-				(close) => {
-					closeLive = close;
-					return spec(close, ["reading spans…"]);
-				},
-				"80%",
-				(p) => (live = p),
-			);
-			deps
-				.callTool("list_spans", { trace_id: id })
-				.then((listed) => {
-					const spans = listed.isError ? [] : (JSON.parse(listed.text)?.items ?? []);
-					live?.update(
-						spec(closeLive, spans.length ? traceSummary(spans) : ["no spans yet: the gateway ingests traces a few seconds after the call"]),
-					);
-				})
-				.catch((error) => live?.update(spec(closeLive, [`spans unavailable: ${error instanceof Error ? error.message : error}`])));
-			await shown;
+		},
+	});
+
+	pi.registerCommand("analytics", {
+		description: "workspace analytics: requests, cost, tokens, errors, top models; --last 24h --group-by model",
+		handler: async (args, ctx) => {
+			const argv = args.trim().split(/\s+/).filter(Boolean);
+			const flags = new Map<string, string>();
+			const free: string[] = [];
+			for (let i = 0; i < argv.length; i++) {
+				const a = argv[i]!;
+				if (a === "--last" && argv[i + 1]) flags.set("last", argv[++i]!);
+				else if ((a === "--group-by" || a === "--group_by") && argv[i + 1]) flags.set("group_by", argv[++i]!);
+				else if (a.startsWith("--")) flags.set(a.slice(2), argv[i + 1] ?? "");
+				else free.push(a);
+			}
+			const freeText = free.join(" ").toLowerCase();
+			let last = flags.get("last") ?? flags.get("period") ?? "24h";
+			if (!flags.has("last") && /\b(\d+[smhd])\b/.test(freeText)) last = freeText.match(/\b(\d+[smhd])\b/)![1]!;
+			else if (/\b7d\b|\bweek\b/.test(freeText)) last = "7d";
+			else if (/\b30d\b|\bmonth\b/.test(freeText)) last = "30d";
+			let groupBy = flags.get("group_by");
+			if (!groupBy) {
+				if (/\bmodel\b/.test(freeText)) groupBy = "model";
+				else if (/\bdeployment\b/.test(freeText)) groupBy = "deployment";
+				else if (/\bstatus\b/.test(freeText)) groupBy = "status";
+				else if (/\bagent\b/.test(freeText)) groupBy = "agent_name";
+				else if (/\bprovider\b/.test(freeText)) groupBy = "provider";
+			}
+			const overviewPromise = deps.callTool("get_analytics_overview", {}).catch((e) => ({ text: String(e), isError: true as const }));
+			const metricForGroup = groupBy === "agent_name" ? "agents" : groupBy === "status" || groupBy === "http_status_code" ? "errors" : "cost";
+			const groupByParam = groupBy ?? "model";
+			const queryArgs: Record<string, unknown> = { metric: metricForGroup, time_range: { start: last }, group_by: [groupByParam] };
+			const queryPromise = deps.callTool("query_analytics", queryArgs).catch((e) => ({ text: String(e), isError: true as const }));
+			const [overviewRes, queryRes] = await Promise.all([overviewPromise, queryPromise]);
+			let rows: string[] = [];
+			let overview: any = null;
+			try { overview = JSON.parse(overviewRes.text); } catch { overview = null; }
+			if (overviewRes.isError) rows.push(`overview error: ${overviewRes.text.slice(0, 200)}`);
+			else if (overview) {
+				const o = overview.overview ?? overview;
+				const req = o.total_requests ?? o.requests ?? "?";
+				const cost = o.total_cost ?? o.cost ?? 0;
+				const toks = o.total_tokens ?? o.tokens ?? "?";
+				const err = o.error_rate ?? o.errorRate ?? "?";
+				rows.push(`# Analytics — Last ${last}`);
+				rows.push("");
+				rows.push(`**${req}** requests · **${typeof cost === "number" ? dollars(cost) : cost}** cost · **${typeof toks === "number" ? toks.toLocaleString() : toks}** tokens · **${typeof err === "number" ? (err*100).toFixed(2)+"%" : err}** error rate`);
+				rows.push("");
+				if (o.avg_latency) rows.push(`Avg latency: ${o.avg_latency}ms` + (o.avg_ttft ? ` · TTFT ${o.avg_ttft}ms` : ""));
+				rows.push("");
+			} else rows.push(overviewRes.text.slice(0, 500));
+			if (queryRes.isError) {
+				const msg = queryRes.text;
+				if (/project_id/i.test(msg)) rows.push("", `query error (needs project): ${msg.slice(0, 300)}`, "hint: list_traces → attributes.orq.project_id, then /analytics --group-by " + groupByParam + " with project filter");
+				else rows.push("", `breakdown error: ${msg.slice(0, 300)}`);
+			} else {
+				try {
+					const q = JSON.parse(queryRes.text);
+					const items = q.items ?? q.data ?? q.groups ?? [];
+					if (items.length) {
+						rows.push(`### Top ${groupByParam}s`);
+						rows.push("");
+						const head = `| # | ${groupByParam} | Requests | Cost |`;
+						rows.push(head);
+						rows.push("|---|" + "---|" .repeat(head.split("|").length-2));
+						items.slice(0, 10).forEach((it: any, i: number) => {
+							const name = it[groupByParam] ?? it.model ?? it.name ?? JSON.stringify(it).slice(0,30);
+							const r = it.requests ?? it.count ?? it.total_requests ?? "?";
+							const c = it.cost ?? it.total_cost ?? 0;
+							rows.push(`| ${i+1} | ${name} | ${r} | ${typeof c === "number" ? dollars(c) : c} |`);
+						});
+						if (items.length > 10) rows.push(`… and ${items.length-10} more`);
+					} else rows.push("", `no breakdown for ${groupByParam}`);
+				} catch { rows.push(queryRes.text.slice(0, 500)); }
+			}
+			await panel(ctx, { title: `analytics · last ${last}`, rows, hint: "--group-by model|deployment|status|agent · --last 24h|7d · esc close" });
+		},
+	});
+
+	pi.registerCommand("overview", {
+		description: "workspace overview: agents, deployments, prompts, datasets, experiments, projects, knowledge bases [section]",
+		handler: async (args, ctx) => {
+			const section = args.trim().toLowerCase();
+			const valid = new Set(["agents","deployments","prompts","datasets","experiments","projects","knowledge","evaluators","evaluator"]);
+			const want = valid.has(section) ? section : "";
+			const types: { key: string; type: string; label: string }[] = [
+				{ key: "agents", type: "agent", label: "Agents" },
+				{ key: "deployments", type: "deployment", label: "Deployments" },
+				{ key: "prompts", type: "prompt", label: "Prompts" },
+				{ key: "datasets", type: "dataset", label: "Datasets" },
+				{ key: "experiments", type: "experiment", label: "Experiments" },
+				{ key: "projects", type: "project", label: "Projects" },
+				{ key: "knowledge", type: "knowledge", label: "Knowledge Bases" },
+				{ key: "evaluators", type: "evaluator", label: "Evaluators" },
+			];
+			const needed = want ? types.filter(t => t.key === want || (want === "evaluator" && t.key === "evaluators")) : types;
+			const overviewP = deps.callTool("get_analytics_overview", {}).catch((e) => ({ text: String(e), isError: true as const }));
+			const calls = needed.map(t => deps.callTool("search_entities", { type: t.type, query: "" }).catch((e) => ({ text: String(e), isError: true as const })).then(r => ({ t, r })));
+			const [overviewRes, ...results] = await Promise.all([overviewP, ...calls]);
+			let rows: string[] = [];
+			const counts: string[] = [];
+			const byKey = new Map<string, any[]>();
+			for (const { t, r } of results as any[]) {
+				if ((r as any).isError) { counts.push(`**?** ${t.key}`); byKey.set(t.key, []); }
+				else {
+					try { const j = JSON.parse((r as any).text); const items = j.items ?? j.entities ?? j.data ?? []; byKey.set(t.key, items); counts.push(`**${items.length}** ${t.key}`); } catch { byKey.set(t.key, []); counts.push(`**?** ${t.key}`); }
+				}
+			}
+			rows.push(`# Workspace — Overview`);
+			rows.push("");
+			rows.push(counts.join(" · "));
+			rows.push("");
+			try { const o = JSON.parse((overviewRes as any).text); const ov = o.overview ?? o; if (ov.total_requests) rows.push(`Last 24h: **${ov.total_requests}** requests · **${dollars(ov.total_cost ?? 0)}** cost · **${ov.error_rate ? (ov.error_rate*100).toFixed(2)+"%" : "?"}** error rate`); } catch {}
+			rows.push("");
+			rows.push(`Manage at **my.orq.ai**`);
+			rows.push("");
+			rows.push("---");
+			for (const t of needed) {
+				const items = byKey.get(t.key) ?? [];
+				rows.push("");
+				rows.push(`### ${t.label} (${items.length})`);
+				if (!items.length) rows.push("(none)");
+				else items.slice(0, 10).forEach((it: any) => {
+					const name = it.display_name ?? it.key ?? it.name ?? it.id ?? "?";
+					const meta = [it.model ?? it.status ?? "", it.description ? String(it.description).slice(0,40) : ""].filter(Boolean).join(" · ");
+					rows.push(`- **${name}**` + (meta ? ` — ${meta}` : ""));
+				});
+				if (items.length > 10) rows.push(`… and ${items.length-10} more`);
+			}
+			await panel(ctx, { title: `overview · ${deps.workspace() ?? "this workspace"}`, rows, height: 18, hint: "/overview [section] · esc close" });
 		},
 	});
 

@@ -8,6 +8,8 @@
  * outlet route; the threads table opens a thread with `?id=`).
  */
 
+import { dollars } from "./footer.ts";
+
 /** Studio lives on `my.`, the API on `api.` or `my.`: `https://api.orq.ai` → `https://my.orq.ai`. */
 export function studioHost(server: string): string {
 	return server.replace(/\/+$/, "").replace(/^(https?:\/\/)api\./, "$1my.");
@@ -33,6 +35,32 @@ export function agentUrl(host: string, workspace: string, id: string | undefined
 /** `30b08a66f5e9…0185`: long ids shortened for one-line notices. */
 export function shortId(id: string): string {
 	return id.length > 12 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id;
+}
+
+/** One /traces list row: id, age, status, latency and cost, as /agents' trace view reads them. */
+export function traceRow(t: Record<string, any>): string {
+	const id = String(t.trace_id ?? t.context?.trace_id ?? "?");
+	const started = Date.parse(String(t.start_time ?? ""));
+	const age = Number.isFinite(started) ? ageOf(started) : String(t.start_time ?? "").slice(0, 19);
+	const status = String(t.status ?? "");
+	const error = status.toUpperCase() === "ERROR" ? "ERROR" : "";
+	return `${shortId(id).padEnd(12)} ${age.padEnd(10)} ${error.padEnd(6)} ${t.duration ?? "?"} ms${t.total_cost ? `  ${dollars(t.total_cost)}` : ""}`;
+}
+
+const ageOf = (started: number): string => {
+	const s = Math.max(0, Math.floor((Date.now() - started) / 1000));
+	if (s < 60) return `${s}s ago`;
+	if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+	if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+	return `${Math.floor(s / 86400)}d ago`;
+};
+
+/** `1h`, `6h`, `24h`, `7d`, `30d`, as the traces filter accepts them; undefined when it does not parse. */
+export function durationMs(text: string | undefined): number | undefined {
+	const match = /^(\d+)([smhd])$/.exec((text ?? "").trim());
+	if (!match) return undefined;
+	const n = Number(match[1]);
+	return n * ({ s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 })[match[2] as "s" | "m" | "h" | "d"];
 }
 
 /** One router call the session made, from its `x-orq-trace-id` response header. */
