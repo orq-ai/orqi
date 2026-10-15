@@ -48,9 +48,21 @@ export interface PluginLock {
 
 export const SKILLS_LOCK: PluginLock = lock as PluginLock;
 
-/** Upstream skill dirs we take: the two known shapes, nothing else (no dotfiles, no traversal). */
+/** Upstream skill dirs we take: every dir with a SKILL.md, except our own orqi- prefix. */
 export function vendoredNames(upstreamSkillDirs: string[]): string[] {
-	return upstreamSkillDirs.filter((name) => /^(orq-[a-z0-9-]+|evaluatorq)$/.test(name)).sort();
+	return upstreamSkillDirs
+		.filter((name) => !name.startsWith(".") && !name.startsWith("orqi-") && !name.includes("/") && name !== "..")
+		.sort();
+}
+
+function pluginSkillsSubpath(sourceDir: string): string {
+	try {
+		const j = JSON.parse(readFileSync(join(sourceDir, ".claude-plugin", "plugin.json"), "utf8"));
+		const s = typeof j?.skills === "string" ? j.skills.replace(/^\.\//, "").replace(/\/$/, "") : "skills";
+		return s && !s.includes("..") ? s : "skills";
+	} catch {
+		return "skills";
+	}
 }
 
 const liveRoot = (agentDir: string) => join(agentDir, "skills-live");
@@ -138,7 +150,8 @@ export function pluginResources(pkgDir: string, agentDir: string, reserved: Iter
 	const ours = dirsIn(bundledSkills)
 		.filter((name) => name.startsWith("orqi-"))
 		.map((name) => join(bundledSkills, name));
-	const upstream = vendoredNames(dirsIn(join(source, "skills"))).map((name) => join(source, "skills", name));
+	const skillsSub = pluginSkillsSubpath(source);
+	const upstream = vendoredNames(dirsIn(join(source, skillsSub))).map((name) => join(source, skillsSub, name));
 	const taken = new Set([...reserved, ...DROPPED_COMMANDS]);
 	const commands = markdownIn(join(source, "commands"))
 		.filter((name) => !taken.has(name.replace(/\.md$/, "")))
@@ -206,8 +219,11 @@ export async function maybeUpdateSkills(agentDir: string): Promise<void> {
 			return;
 		}
 		if (action === "install") await downloadAndSwap(root, upstream);
-	} catch {
-		// Silent by design; the header note reflects whatever landed.
+	} catch (e) {
+		try {
+			const msg = e instanceof Error ? e.message : String(e);
+			writeFileSync(join(liveRoot(agentDir), "last-error.json"), JSON.stringify({ at: new Date().toISOString(), error: msg }));
+		} catch {}
 	}
 }
 

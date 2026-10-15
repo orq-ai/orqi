@@ -33,6 +33,7 @@ export type ReconnectFn = (candidates: Credential[]) => Promise<Reconnected>;
  * plugin's own commands skip these names, and a test keeps the list honest.
  */
 export const ORQI_COMMANDS = [
+	"plugin",
 	"key",
 	"reconnect",
 	"whoami",
@@ -492,6 +493,35 @@ export function orqCommands(
 			description: "inspect orq config, auth state and endpoint reachability",
 			handler: async (_args, ctx) => {
 				report(ctx, runOrq(["doctor"]));
+				try {
+					const { DefaultPackageManager } = await import("@earendil-works/pi-coding-agent");
+					const { SettingsManager } = await import("@earendil-works/pi-coding-agent");
+					const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+					const { existsSync, readFileSync, statSync } = await import("node:fs");
+					const { join } = await import("node:path");
+					const sm = SettingsManager.create(process.cwd(), getAgentDir(), { projectTrusted: false });
+					await sm.reload();
+					const pm = new DefaultPackageManager({ cwd: process.cwd(), agentDir: getAgentDir(), settingsManager: sm });
+					const pkgs = pm.listConfiguredPackages();
+					const lines = pkgs.length ? pkgs.map((p) => `  plugin ${p.source} [${p.scope}]`).join("\n") : "  (no plugins installed)";
+					// legacy live check
+					const liveJson = join(getAgentDir(), "skills-live", "current.json");
+					let liveInfo = "";
+					if (existsSync(liveJson)) {
+						try {
+							const j = JSON.parse(readFileSync(liveJson, "utf8"));
+							liveInfo = `\n  legacy live ${j.version ?? j.sha?.slice(0, 8)} (${j.committed})`;
+						} catch {}
+					}
+					const lastCheck = (() => {
+						try {
+							return new Date(statSync(join(getAgentDir(), "skills-live", "last-check")).mtimeMs).toISOString();
+						} catch {
+							return "never";
+						}
+					})();
+					ctx.ui.notify(`Plugins:\n${lines}${liveInfo}\n  last-check ${lastCheck}`);
+				} catch {}
 			},
 		});
 
@@ -514,6 +544,37 @@ export function orqCommands(
 					ctx.ui.notify(`orqi ${VERSION} → ${latest} · run: ${currentUpdateCommand()}`);
 				} else {
 					ctx.ui.notify(`orqi ${VERSION} is already the latest version.`);
+				}
+			},
+		});
+
+		pi.registerCommand("plugin", {
+			description: "manage plugins (skills+MCP): /plugin, /plugin list, /plugin update",
+			handler: async (args, ctx) => {
+				const { DefaultPackageManager } = await import("@earendil-works/pi-coding-agent");
+				const { SettingsManager } = await import("@earendil-works/pi-coding-agent");
+				const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+				const cwd = process.cwd();
+				const agentDir2 = getAgentDir();
+				const sm = SettingsManager.create(cwd, agentDir2, { projectTrusted: false });
+				await sm.reload();
+				const pm = new DefaultPackageManager({ cwd, agentDir: agentDir2, settingsManager: sm });
+				const parts = args.trim().split(/\s+/).filter(Boolean);
+				const cmd = parts[0] ?? "list";
+				const src = parts[1];
+				try {
+					if (cmd === "list" || cmd === "") {
+						const pkgs = pm.listConfiguredPackages();
+						if (pkgs.length === 0) ctx.ui.notify("No plugins installed. Run: orqi plugin install <source>");
+						else ctx.ui.notify(pkgs.map((p) => `  ${p.source} [${p.scope}]${p.installedPath ? ` -> ${p.installedPath}` : ""}`).join("\n"));
+					} else if (cmd === "update") {
+						await pm.update(src);
+						ctx.ui.notify(src ? `Updated ${src}` : "Updated plugins");
+					} else {
+						ctx.ui.notify("Usage: /plugin [list|update [source]] — or run orqi plugin install|remove outside");
+					}
+				} catch (e) {
+					ctx.ui.notify(e instanceof Error ? e.message : String(e), "warning");
 				}
 			},
 		});

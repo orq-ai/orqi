@@ -86,6 +86,13 @@ if (oneShot === "--help" || oneShot === "-h") {
   orqi "<prompt>"      one-shot, prints the answer and exits
   orqi --version       print the version and exit
   orqi update          replace this binary with the latest release
+  orqi plugin install <source>   install plugin (skills+MCP)
+  orqi plugin list               list installed plugins
+  orqi plugin update [source]    update plugins
+  orqi plugin remove <source>    remove a plugin
+  orqi mcp list                  list MCP servers
+  orqi mcp add <name> --url <url>   add MCP server
+  orqi mcp remove <name>         remove MCP server
 
 Sign in with \`orq auth login\` or export ORQ_API_KEY.`);
 	process.exit(0);
@@ -96,6 +103,219 @@ if (sessionArg === "") {
 }
 if (oneShot === "update") {
 	process.exit(await runUpdate(process.argv.slice(3), AGENT_DIR));
+}
+if (oneShot === "plugin") {
+	const { DefaultPackageManager } = await import("@earendil-works/pi-coding-agent");
+	const { SettingsManager } = await import("@earendil-works/pi-coding-agent");
+	const args = process.argv.slice(3);
+	if (args.includes("--help") || args.includes("-h")) {
+		console.log(`orqi plugin - manage plugins (skills+MCP)
+
+  orqi plugin list                 list installed plugins
+  orqi plugin install <source>     install a plugin
+  orqi plugin update [source]      update plugins
+  orqi plugin remove <source>      remove a plugin
+
+Sources: npm:<pkg>, git:<url>, https://..., ./local/path
+Examples:
+  orqi plugin install git:github.com/orq-ai/assistant-plugins
+  orqi plugin install https://github.com/orq-ai/assistant-plugins`);
+		process.exit(0);
+	}
+	const cmd = args[0] ?? "list";
+	const source = args[1];
+	const agentDir = AGENT_DIR;
+	const cwd = process.cwd();
+	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	await settingsManager.reload();
+	const pm = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+	pm.setProgressCallback((e) => {
+		if (e.type === "start") process.stdout.write(e.message + "\n");
+	});
+	try {
+		if (cmd === "list") {
+			const pkgs = pm.listConfiguredPackages();
+			if (pkgs.length === 0) console.log("No plugins installed.\n  orqi plugin install <source>");
+			else for (const p of pkgs) console.log(`  ${p.source}${p.installedPath ? ` -> ${p.installedPath}` : ""} [${p.scope}]`);
+			// Step 10: surface legacy skills-live for migration
+			try {
+				const { existsSync, readFileSync, statSync } = await import("node:fs");
+				const { join } = await import("node:path");
+				const liveJson = join(agentDir, "skills-live", "current.json");
+				if (existsSync(liveJson)) {
+					const j = JSON.parse(readFileSync(liveJson, "utf8"));
+					const hasPkg = pkgs.some((x) => x.source.includes("assistant-plugins"));
+					if (!hasPkg)
+						console.log(
+							`  legacy live ${j.version ?? j.sha?.slice(0, 8)} (${j.committed}) — run orqi plugin install git:github.com/orq-ai/assistant-plugins to migrate`,
+						);
+					else
+						console.log(
+							`  legacy live ${j.version ?? j.sha?.slice(0, 8)} — will be ignored once plugin is installed (remove skills-live/current to clean up)`,
+						);
+				}
+				const errPath = join(agentDir, "skills-live", "last-error.json");
+				if (existsSync(errPath)) {
+					try {
+						const e = JSON.parse(readFileSync(errPath, "utf8"));
+						const age = (() => {
+							try {
+								return Math.round((Date.now() - statSync(errPath).mtimeMs) / 3600000);
+							} catch {
+								return 0;
+							}
+						})();
+						if (age < 24) console.log(`  last skills update error (${age}h ago): ${e.error}`);
+					} catch {}
+				}
+			} catch {}
+		} else if (cmd === "install" && source) {
+			await pm.installAndPersist(source);
+			console.log(`Installed ${source}`);
+			// Step 8: MCP is opt-in — surface but do not auto-merge.
+			try {
+				const { existsSync } = await import("node:fs");
+				const { join } = await import("node:path");
+				const pkgs = pm.listConfiguredPackages();
+				const hit = pkgs.find((x) => x.source === source || source.includes(x.source));
+				const root = hit?.installedPath;
+				if (
+					root &&
+					(existsSync(join(root, ".mcp.json")) ||
+						existsSync(join(root, ".claude-plugin", ".mcp.json")) ||
+						existsSync(join(root, "mcp.json")))
+				) {
+					console.log(`  note: plugin ships MCP servers (.mcp.json) — not auto-enabled. Add to ~/.orqi/agent/mcp.json to use`);
+				}
+			} catch {}
+		} else if ((cmd === "remove" || cmd === "uninstall") && source) {
+			const ok = await pm.removeAndPersist(source);
+			console.log(ok ? `Removed ${source}` : `No plugin found for ${source}`);
+			if (!ok) process.exitCode = 1;
+		} else if (cmd === "update") {
+			await pm.update(source);
+			console.log(source ? `Updated ${source}` : "Updated plugins");
+		} else {
+			console.error(`Unknown plugin command: ${args.join(" ")}\nUsage: orqi plugin install|remove|list|update [source]`);
+			process.exit(1);
+		}
+	} catch (e) {
+		console.error(e instanceof Error ? e.message : String(e));
+		process.exit(1);
+	}
+	process.exit(0);
+}
+if (oneShot === "mcp") {
+	const args = process.argv.slice(3);
+	if (args.includes("--help") || args.includes("-h") || args.length === 0) {
+		console.log(`orqi mcp - manage MCP servers
+
+  orqi mcp list                              list MCP servers
+  orqi mcp add <name> --url <url> [--header "K: V"]  add HTTP server
+  orqi mcp add <name> <command> [args...]    add stdio server
+  orqi mcp remove <name>                     remove server
+  orqi mcp login <name>                      sign in (OAuth)
+
+Examples:
+  orqi mcp add my-tools --url https://example.com/mcp
+  orqi mcp add my-stdio -- npx my-mcp-server`);
+		process.exit(0);
+	}
+	const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import("node:fs");
+	const { join } = await import("node:path");
+	const mcpPath = join(AGENT_DIR, "mcp.json");
+	const cmd = args[0];
+	try {
+		if (cmd === "list") {
+			if (!existsSync(mcpPath)) {
+				console.log("No MCP servers configured.");
+				process.exit(0);
+			}
+			const j = JSON.parse(readFileSync(mcpPath, "utf8"));
+			const servers = j.mcpServers ?? {};
+			if (Object.keys(servers).length === 0) console.log("No MCP servers configured.");
+			else
+				for (const [name, cfg] of Object.entries(servers)) {
+					const c = cfg as any;
+					const desc = c.url ? `url ${c.url}` : `cmd ${c.command}`;
+					console.log(`  ${name}: ${desc}`);
+				}
+		} else if (cmd === "add") {
+			const name = args[1];
+			if (!name) {
+				console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]");
+				process.exit(1);
+			}
+			const urlIdx = args.indexOf("--url");
+			let config: any = {};
+			if (urlIdx !== -1) {
+				const url = args[urlIdx + 1];
+				if (!url) {
+					console.error("--url needs a value");
+					process.exit(1);
+				}
+				config.url = url;
+				// collect --header repeats: --header "K: V"
+				const headers: Record<string, string> = {};
+				for (let i = 0; i < args.length; i++)
+					if (args[i] === "--header" && args[i + 1]) {
+						const h = args[i + 1];
+						const colon = h.indexOf(":");
+						if (colon > -1) headers[h.slice(0, colon).trim()] = h.slice(colon + 1).trim();
+					}
+				if (Object.keys(headers).length) config.headers = headers;
+			} else {
+				// stdio: everything after name is command (skip leading --)
+				let cmdArgs = args.slice(2);
+				if (cmdArgs[0] === "--") cmdArgs = cmdArgs.slice(1);
+				if (cmdArgs.length === 0) {
+					console.error("Usage: orqi mcp add <name> --url <url> OR orqi mcp add <name> <command> [args...]");
+					process.exit(1);
+				}
+				config.command = cmdArgs[0];
+				if (cmdArgs.length > 1) config.args = cmdArgs.slice(1);
+			}
+			let j: any = {};
+			if (existsSync(mcpPath))
+				try {
+					j = JSON.parse(readFileSync(mcpPath, "utf8"));
+				} catch {}
+			if (!j.mcpServers || typeof j.mcpServers !== "object") j.mcpServers = {};
+			const replaced = j.mcpServers[name] !== undefined;
+			j.mcpServers[name] = config;
+			mkdirSync(join(AGENT_DIR), { recursive: true });
+			writeFileSync(mcpPath, JSON.stringify(j, null, 2) + "\n");
+			console.log(`${replaced ? "Replaced" : "Added"} MCP server "${name}" in ${mcpPath}`);
+		} else if (cmd === "remove") {
+			const name = args[1];
+			if (!name) {
+				console.error("Usage: orqi mcp remove <name>");
+				process.exit(1);
+			}
+			if (!existsSync(mcpPath)) {
+				console.error(`No mcp.json at ${mcpPath}`);
+				process.exit(1);
+			}
+			const j = JSON.parse(readFileSync(mcpPath, "utf8"));
+			if (!j.mcpServers || !(name in j.mcpServers)) {
+				console.error(`No MCP server "${name}" in ${mcpPath}`);
+				process.exit(1);
+			}
+			delete j.mcpServers[name];
+			writeFileSync(mcpPath, JSON.stringify(j, null, 2) + "\n");
+			console.log(`Removed MCP server "${name}" from ${mcpPath}`);
+		} else if (cmd === "login" || cmd === "logout") {
+			console.error(`Use: orqi mcp login is via the TUI /mcp login ${args[1] ?? ""} (OAuth flow needs UI)`);
+			process.exit(1);
+		} else {
+			console.error(`Unknown mcp command: ${cmd}\nUsage: orqi mcp list|add|remove|login`);
+			process.exit(1);
+		}
+	} catch (e) {
+		console.error(e instanceof Error ? e.message : String(e));
+		process.exit(1);
+	}
+	process.exit(0);
 }
 
 /** `owner/repo` of the working directory's origin, or "" outside a repo. */
