@@ -5,7 +5,7 @@
  * has answered in are covered by tests rather than by a live workspace.
  */
 
-import { oneLine } from "./panel.ts";
+import { cells, fit, oneLine } from "./panel.ts";
 
 export interface WorkspaceEntry {
 	key: string;
@@ -48,16 +48,17 @@ export function sortWorkspaces(entries: WorkspaceEntry[]): WorkspaceEntry[] {
 /**
  * `●  orq-research   orq-research   19 members`: marker, name, key, members, aligned.
  *
- * The key is shown through `oneLine` but never rewritten on the entry: it is what
- * `orq workspace use` is given when you press enter, so it must stay exactly what
- * the CLI said. Only the picture of it is made safe.
+ * Columns are measured in display cells, not characters (`fit`), so a name in CJK
+ * or with an emoji lines up with ASCII ones, and a cut never splits a character
+ * or leaves a colour open. The key is shown through `fit` but never rewritten on
+ * the entry: it is what `orq workspace use` is given when you press enter, so it
+ * must stay exactly what the CLI said. Only the picture of it is made safe.
  */
 export function workspaceRows(entries: WorkspaceEntry[]): string[] {
-	const shown = entries.map((e) => ({ ...e, name: oneLine(e.name), key: oneLine(e.key) }));
-	const wName = Math.min(28, Math.max(0, ...shown.map((e) => e.name.length)));
-	const wKey = Math.min(28, Math.max(0, ...shown.map((e) => e.key.length)));
-	return shown.map((e) => {
+	const wName = Math.min(28, Math.max(0, ...entries.map((e) => cells(e.name))));
+	const wKey = Math.min(28, Math.max(0, ...entries.map((e) => cells(e.key))));
+	return entries.map((e) => {
 		const members = e.members === undefined ? "" : `${e.members} member${e.members === 1 ? "" : "s"}`;
-		return `${e.active ? "●" : " "}  ${e.name.slice(0, wName).padEnd(wName)}  ${e.key.slice(0, wKey).padEnd(wKey)}  ${members}`.trimEnd();
+		return `${e.active ? "●" : " "}  ${fit(e.name, wName)}  ${fit(e.key, wKey)}  ${members}`.trimEnd();
 	});
 }

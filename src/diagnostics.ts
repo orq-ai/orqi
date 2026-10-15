@@ -7,6 +7,8 @@
  * already masked by the CLI (`sk-orq-01M4Z…`) and is shown as it arrives.
  */
 
+import { oneLine } from "./panel.ts";
+
 const text = (value: unknown): string | undefined => (typeof value === "string" && value ? value : undefined);
 
 /** `key   value` rows with the labels padded to the longest, empty values left out. */
@@ -34,6 +36,15 @@ export function redactKeys(output: string): string {
 	return output.replace(/sk-orq-[A-Za-z0-9._-]{8,}/g, (key) => maskKey(key));
 }
 
+/**
+ * Rows as one notice, for where no panel can be drawn. A panel makes every row a
+ * safe line (`boxLines`); a notice goes to the terminal as it is, so each row is
+ * made one line here, the same way, before they are joined by the newlines we add.
+ */
+export function noticeText(rows: string[]): string {
+	return rows.map(oneLine).join("\n");
+}
+
 /** One line: server-supplied text (an auth error runs to several lines) collapsed to single spaces. */
 const flat = (value: string | undefined): string | undefined => (value === undefined ? undefined : value.replace(/\s+/g, " ").trim());
 
@@ -59,7 +70,7 @@ export function whoamiRows(json: string): string[] | undefined {
 	// failed check leaves it true, which is no verdict.
 	const authenticated =
 		who.authenticated === false
-			? `no: ${flat(text(who.auth_error)) ?? "the server rejected it"}`
+			? `no: ${flat(redactKeys(text(who.auth_error) ?? "")) || "the server rejected it"}`
 			: who.authenticated === true
 				? "yes"
 				: undefined;

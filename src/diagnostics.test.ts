@@ -1,7 +1,18 @@
 /** Checks for /whoami and /doctor's panels. Run with `bun test`. */
 
 import { expect, test } from "bun:test";
-import { checkRows, doctorHeader, fieldRows, maskKey, parseDoctor, redactKeys, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
+import {
+	checkRows,
+	doctorHeader,
+	fieldRows,
+	maskKey,
+	noticeText,
+	parseDoctor,
+	redactKeys,
+	sortChecks,
+	summary,
+	whoamiRows,
+} from "./diagnostics.ts";
 
 test("fieldRows pads the labels and leaves out what the CLI did not say", () => {
 	expect(
@@ -154,4 +165,32 @@ test("a multi-line auth error is one line in the whoami panel", () => {
 	)!;
 	expect(rows[0]).toBe("authenticated  no: Authorization token is invalid. docs: https://docs.orq.ai/reference");
 	expect(rows.every((row) => !row.includes("\n"))).toBe(true);
+});
+
+test("an auth error that echoes the key is redacted in the whoami panel too", () => {
+	const key = "sk-orq-eyJhbGciOiJIUzI1NiJ9.payload.signature";
+	const rows = whoamiRows(JSON.stringify({ authenticated: false, auth_error: `token ${key} is invalid` }))!;
+	expect(rows[0]).toBe("authenticated  no: token sk-orq-eyJ… is invalid");
+	expect(rows.join("")).not.toContain("signature");
+	// No error text at all still says why.
+	expect(whoamiRows(JSON.stringify({ authenticated: false, auth_error: "" }))![0]).toBe("authenticated  no: the server rejected it");
+});
+
+test("a notice is one safe line per row: where no panel is drawn, nothing reaches the terminal raw", () => {
+	const hostile = "evil\nline\x1b[2J\x1b]0;pwned\x07\x9b2J";
+	const who = whoamiRows(JSON.stringify({ authenticated: true, identity: hostile, method: "api_key" }))!;
+	// The rows themselves still carry it: cleaning happens where they are shown.
+	expect(who.join("\n")).toContain("\x1b[2J");
+	const shown = noticeText(who);
+	expect(shown).not.toContain("\x1b");
+	expect(shown).not.toMatch(/[\x80-\x9f]/);
+	// The newlines left are the ones that separate rows, one per row.
+	expect(shown.split("\n").length).toBe(who.length);
+
+	const doc = parseDoctor(
+		JSON.stringify({ auth: { user_email: hostile, status: "ok" }, checks: [{ id: "c", status: "warn", message: hostile }] }),
+	)!;
+	const out = noticeText([...doctorHeader(doc), ...checkRows(doc.checks)]);
+	expect(out).not.toContain("\x1b");
+	expect(out.split("\n").length).toBe(doctorHeader(doc).length + checkRows(doc.checks).length);
 });

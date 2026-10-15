@@ -38,11 +38,15 @@ export interface PanelSpec {
 
 /**
  * One safe line of text. Rows carry strings the server chose (a workspace name,
- * a model name, an error message), and a terminal acts on what it is sent: a
- * newline splits the row and breaks the box, `ESC[2J` clears the screen, an OSC
- * sequence retitles the window. Colour codes (SGR) are the only escapes a row
- * may carry, because the panel's own paint adds them; every other escape is
- * dropped, and any control character left (newline, tab, bell) becomes a space.
+ * a model name, an auth error), and a terminal acts on what it is sent: a
+ * newline splits the row, `ESC[2J` clears the screen, an OSC sequence retitles
+ * the window. Colour codes (SGR) are the only escapes a row may carry, because
+ * the panel's own paint adds them; every other escape is dropped.
+ *
+ * Control characters become spaces: the C0 range (newline, tab, bell) and the
+ * C1 range (0x80-0x9f), whose `0x9b` is a one-byte CSI and `0x9d` a one-byte OSC
+ * that a terminal in 8-bit mode will run. C1 is replaced, not dropped, and that
+ * is deliberate: the 7-bit form needs its introducer, so what is left is text.
  */
 export function oneLine(text: string): string {
 	return text
@@ -54,10 +58,24 @@ export function oneLine(text: string): string {
 						.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
 						.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
 						.replace(/\x1b./g, "")
-						.replace(/[\x00-\x1f\x7f]+/g, " "),
+						.replace(/[\x00-\x1f\x7f-\x9f]+/g, " "),
 		)
 		.join("");
 }
+
+/**
+ * `text` as exactly `width` display cells: padded with spaces, or cut with an
+ * ellipsis. Measured in cells, not characters, so a CJK name (two cells a
+ * character) or an emoji lines up with ASCII, a surrogate pair is never split,
+ * and a colour code costs no width and is closed after a cut. Safe as well:
+ * the text is made one line first.
+ */
+export function fit(text: string, width: number): string {
+	return truncateToWidth(oneLine(text), Math.max(0, width), "…", true);
+}
+
+/** Display width of `text` once it is safe to draw: what `fit` measures against. */
+export const cells = (text: string): number => visibleWidth(oneLine(text));
 
 /**
  * Indices of the rows that contain every word of `query`, case-insensitively.
