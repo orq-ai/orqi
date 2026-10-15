@@ -9,6 +9,7 @@
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { PI_DIST, PI_FILES } from "./pi-files.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const TREES = ["skills", "commands", "themes"];
@@ -29,6 +30,11 @@ for (const tree of TREES) {
 }
 for (const file of FILES) {
 	assets[file] = readFileSync(join(ROOT, file), "utf8");
+}
+
+// pi's own runtime files, in the layout a compiled pi expects (see pi-files.ts).
+for (const [asset, source] of Object.entries(PI_FILES)) {
+	assets[asset] = readFileSync(join(PI_DIST, source), "utf8");
 }
 
 // Content hash doubles as the unpack directory name, so a rebuilt binary

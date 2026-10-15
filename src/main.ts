@@ -110,6 +110,11 @@ async function assetDir(): Promise<string> {
 }
 
 const pkgDir = await assetDir();
+// A compiled pi reads its built-in themes (/settings) and HTML export template
+// (/export) from beside its executable, where orqi ships none: /settings died on
+// ENOENT for ~/.local/bin/theme/dark.json. They ride in the assets under pi/
+// (scripts/build.ts); from source, pi finds them in node_modules by itself.
+if (existsSync(join(pkgDir, "pi"))) process.env.PI_PACKAGE_DIR ??= join(pkgDir, "pi");
 
 // Pi owns these commands, so extension commands cannot replace their legend
 // or dispatch. Rebrand the list and replace `/bug` before InteractiveMode is
