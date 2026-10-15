@@ -122,10 +122,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   background belongs to the user: Ghostty and the One Dark family sit near `#282C34`, where the
   first dim amber measured 3.74:1 and read as washed out. Every text role in all five themes clears
   4.5:1 there, and a test enforces it. Borders are decoration and exempt.
-- **Five themes; `orq-amber` is the default.** orq-amber is one hue throughout, chosen for the
-  80s monochrome look. The cost is real and known: a failed tool call reads much like a successful
-  one, and syntax highlighting carries less information. `ORQI_THEME` picks a skin at startup:
-  `dark` keeps turquoise for success and red for errors, `teal` is teal-led, `slate` is blue-led,
+- **Five themes; `orq-dark` is the default.** It keeps the amber surface with turquoise for success
+  and red for errors, so a failed tool call reads as one. `orq-amber` (`ORQI_THEME=amber`) is one
+  hue throughout, chosen for the 80s monochrome look, at a known cost: a failed tool call reads much
+  like a successful one, and syntax highlighting carries less information. The others: `teal` is teal-led, `slate` is blue-led,
   and `signal` is colorblind-safe (pass is sky blue, fail is vermillion, so status never leans on
   red-vs-green alone). `/theme` switches mid-session.
 - **Every theme is dark, and that is deliberate.** The contrast test floor is the lightest

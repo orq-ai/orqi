@@ -89,7 +89,7 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_ROUTE_THRESHOLDS`, `ORQI_ROUTE_CLASSIFIER` | Expected-tier cut points (default `0.5,1.5`) and the classifier model (default `orq/decider-4b`, else `typesafe/jev-latest`, else the workspace's first classifier) |
 | `ORQI_TAG` | Sent as `X-ORQ-METADATA-tag` on every router call, so a workshop instructor can filter the Threads tab by it |
 | `ORQI_WORKSPACE` | Workspace key for Studio links (`/open`, `/trace`), for an API key that cannot read its own workspace's settings |
-| `ORQI_THEME` | theme at startup: `amber` (default, one-hue amber), `dark` (amber + turquoise/red status), `teal` (teal-led), `slate` (blue-led), `signal` (colorblind-safe). `/theme` switches mid-session |
+| `ORQI_THEME` | theme at startup: `dark` (default: amber + turquoise/red status), `amber` (one-hue amber), `teal` (teal-led), `slate` (blue-led), `signal` (colorblind-safe). `/theme` switches mid-session |
 | `ORQI_TERMINAL_PROGRESS` | Set to `0` to turn off the moving progress line your terminal draws while orqi works (Ghostty, WezTerm, Windows Terminal, iTerm2 3.6+; off by default on older iTerm2, which would show it as notifications) |
 | `ORQI_LOCAL_SKILLS` | Also discover skills installed on the machine (off by default; 100+ ambient skills would swamp the prompt) |
 | `ORQI_ALL_TOOLS` | Set to `1` to also expose the invocation tools that are filtered out by default ([why](ARCHITECTURE.md#tools)) |
