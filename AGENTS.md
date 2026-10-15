@@ -297,7 +297,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   recovery as `/login orq`.
 - **A fixed header sits above the transcript, inside the same layout wrap as the inspector.** The
   wrapper is `VStack(header, HStack(pi's root, inspector))`: the header says who and where
-  (workspace, agent, project, routing, connection, thread), the footer what and how much. Regular
+  (workspace, agent, project, routing, connection), the footer what and how much. Regular
   mode has no layout root, so the header becomes a widget above the editor there.
 - **The terminal title is rewritten, not set.** pi writes `π - <dir>` from a name baked into its own
   package (`APP_TITLE`), at startup and on every session change, with no setting. `brandTitle`

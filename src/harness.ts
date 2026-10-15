@@ -18,7 +18,7 @@ import {
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
-import { shortId, studioHost, threadUrl, type TraceRef } from "./trace.ts";
+import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { argSummary, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { orqGate } from "./gate.ts";
@@ -504,15 +504,12 @@ export function orqHarness(deps: HarnessDeps) {
 						.find((m) => m.id === model!.id)
 						?.name?.replace(/ \(agent\)$/, "") ?? model!.id.slice(6))
 				: undefined;
-			const thread = ctxRef?.sessionManager.getSessionId();
 			return {
 				workspace: deps.workspace() ?? resolvedWorkspace,
 				project: deps.project?.(),
 				agent,
 				routing: model?.provider === "orq" && model.id === "auto" ? "orq/auto" : undefined,
 				connected: !/not connected/.test(status),
-				teach: teachOn,
-				thread: thread ? shortId(thread) : undefined,
 			};
 		};
 
