@@ -27,7 +27,9 @@ const SKILLS = join(ROOT, "skills");
 // skills.lock exists, and src/skills.ts imports skills.lock at module load.
 // A test asserts the two regex literals stay identical.
 function vendoredNames(upstreamSkillDirs: string[]): string[] {
-	return upstreamSkillDirs.filter((name) => /^(orq-[a-z0-9-]+|evaluatorq)$/.test(name)).sort();
+	return upstreamSkillDirs
+		.filter((name) => !name.startsWith(".") && !name.startsWith("orqi-") && !name.includes("/") && name !== "..")
+		.sort();
 }
 
 const requested = process.argv[2];

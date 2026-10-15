@@ -12,7 +12,7 @@ test("skills.lock matches what is actually vendored", () => {
 	// the runtime updater compares upstream against it. A hand-copied skill that
 	// skipped `bun run vendor`, or a half-applied vendor run, shows up here.
 	const dirs = readdirSync(join(import.meta.dir, "..", "skills"), { withFileTypes: true })
-		.filter((entry) => entry.isDirectory() && /^(orq-|evaluatorq)/.test(entry.name))
+		.filter((entry) => entry.isDirectory() && !entry.name.startsWith("orqi-"))
 		.map((entry) => entry.name)
 		.sort();
 	expect(/^[0-9a-f]{40}$/.test(SKILLS_LOCK.sha)).toBe(true);
@@ -42,15 +42,18 @@ test("vendor.ts and src/skills.ts agree on what counts as an upstream skill", ()
 	// The filter is duplicated because vendor.ts must run before skills.lock
 	// exists. If they drift, vendor writes a tree the runtime would reject.
 	const script = readFileSync(join(import.meta.dir, "..", "scripts", "vendor.ts"), "utf8");
-	expect(script).toContain("/^(orq-[a-z0-9-]+|evaluatorq)$/");
+	expect(script).toContain('!name.startsWith("orqi-")');
 });
 
 test("vendoredNames keeps only real upstream skills", () => {
 	// This list decides what gets copied out of a downloaded tarball, so it is
 	// also the boundary that keeps odd entries from becoming directories.
+	// Now accepts any non-orqi skill name (plugin.json is the source of truth).
 	expect(vendoredNames(["orq-cli", "evaluatorq", "orqi-platform-guide", ".github", "..", "README.md", "tests"])).toEqual([
+		"README.md",
 		"evaluatorq",
 		"orq-cli",
+		"tests",
 	]);
 });
 
