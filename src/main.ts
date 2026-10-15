@@ -118,6 +118,11 @@ process.env.PI_CODING_AGENT_DIR ??= AGENT_DIR;
 // neither of which applies to this binary. The header links orq's changelog.
 process.env.PI_SKIP_VERSION_CHECK ??= "1";
 
+// pi otherwise draws a static reverse-video cursor. Let the terminal render
+// its native cursor instead, including its blink, so focus is immediately clear.
+// An explicit PI_HARDWARE_CURSOR value, or pi's persisted setting, still wins.
+process.env.PI_HARDWARE_CURSOR ??= "1";
+
 const AUTH_PATH = join(AGENT_DIR, "auth.json"); // where pi's /login stores the orq key
 const { candidates, failure, profileGap } = credentialCandidates(AUTH_PATH);
 // No credential at all: one-shot has nothing to try and stops; the TUI opens

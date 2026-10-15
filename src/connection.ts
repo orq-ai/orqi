@@ -54,6 +54,7 @@ export const ORQI_COMMANDS = [
 	"tools",
 	"skills",
 	"teach",
+	"tips",
 	"context",
 ] as const;
 

@@ -2,7 +2,7 @@
  * The footer: one line that says where tool calls go, which model answered,
  * what the session has cost, and how full the context is.
  *
- *   orq:acme · orq/auto → gpt-5.6-sol · ↑88.1k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▂▃▄ · 44 tools      main
+ *   orq:acme · orq/auto → gpt-5.6-sol · think high · ↑88.1k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▂▃▄ · 44 tools      main
  *
  * `footerLine` is pure (state and width in, string out) so every width band
  * and fill state is testable; `paint` carries the theme.
@@ -19,6 +19,8 @@ export interface FooterState {
 	selection?: string;
 	/** The physical model that answered last, when it differs from the selection. */
 	physical?: string;
+	/** Selected thinking effort for a chat model. Managed agents own this setting. */
+	thinking?: string;
 	input: number;
 	output: number;
 	cost: number;
@@ -97,6 +99,8 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 		const physical = state.physical && state.physical !== state.selection ? paint.dim(` → ${shortModel(state.physical)}`) : "";
 		parts.push(`${paint.text(shortModel(state.selection))}${physical}`);
 	}
+	// Keep the selected model visible at every width; effort needs the medium band.
+	if (medium && state.thinking) parts.push(paint.dim(`think ${state.thinking}`));
 	if (medium && (state.input || state.output)) parts.push(paint.dim(`↑${tokens(state.input)} ↓${tokens(state.output)}`));
 	parts.push(paint.text(dollars(state.cost)));
 	if (state.context && state.context.window > 0) {

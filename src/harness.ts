@@ -387,6 +387,9 @@ export function orqHarness(deps: HarnessDeps) {
 							workspace: headerShown ? undefined : footerData.getExtensionStatuses().get(WORKSPACE_STATUS),
 							selection: selectionName(ctxRef?.model),
 							physical: physical && physical !== ctxRef?.model?.id ? physical : undefined,
+							// Managed agents choose their own reasoning configuration; pi's
+							// local level is not sent to them.
+							thinking: isAgentModel(ctxRef?.model?.id) ? undefined : chatLevel,
 							input: totals.input + totals.cacheRead,
 							output: totals.output,
 							cost: totals.cost,
@@ -863,23 +866,29 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		// ── commands ──────────────────────────────────────────────────────────
+		const toggleTips = async (args: string, ctx: ExtensionContext) => {
+			const arg = args.trim();
+			if (arg && arg !== "on" && arg !== "off") {
+				ctx.ui.notify("usage: /tips on|off", "warning");
+				return;
+			}
+			teachOn = arg ? arg === "on" : !teachOn;
+			ctx.ui.notify(
+				teachOn
+					? `Tips on: a card follows the next relevant tool call, ${panelShown() ? "in the inspector" : "above the editor"}.`
+					: "Tips off.",
+			);
+			syncWidgets(ctx);
+			render();
+		};
+		pi.registerCommand("tips", {
+			description: "/tips on|off: show contextual orq.ai tips for the tools a run uses",
+			handler: toggleTips,
+		});
+		// Keep the original name working for existing users and session notes.
 		pi.registerCommand("teach", {
-			description: "/teach on|off: after each answer, a card in the inspector about a concept the run touched",
-			handler: async (args, ctx) => {
-				const arg = args.trim();
-				if (arg && arg !== "on" && arg !== "off") {
-					ctx.ui.notify("usage: /teach on|off", "warning");
-					return;
-				}
-				teachOn = arg ? arg === "on" : !teachOn;
-				ctx.ui.notify(
-					teachOn
-						? `Teach mode on: a card follows each answer, ${panelShown() ? "in the inspector" : "above the editor"}.`
-						: "Teach mode off.",
-				);
-				syncWidgets(ctx);
-				render();
-			},
+			description: "alias for /tips",
+			handler: toggleTips,
 		});
 
 		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
