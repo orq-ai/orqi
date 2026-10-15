@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PI_DIST, PI_FILES } from "../scripts/pi-files.ts";
+import { resolveSession, resumeHint } from "./resume.ts";
 import { headerLines, terminalProgress } from "./branding.ts";
 import { ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import { orqHarness } from "./harness.ts";
@@ -166,6 +167,31 @@ test("the terminal progress bar is on, except where OSC 9 means a notification",
 	expect(terminalProgress({ TERM_PROGRAM: "iTerm.app", TERM_PROGRAM_VERSION: "3.5.14" })).toBe(false);
 	expect(terminalProgress({ TERM_PROGRAM: "iTerm.app" })).toBe(false); // unknown version: assume old
 	expect(terminalProgress({ TERM_PROGRAM: "ghostty", ORQI_TERMINAL_PROGRESS: "0" })).toBe(false);
+});
+
+test("pi's quit hint names orqi, and nothing else is touched", () => {
+	const dim = (t: string) => `\x1b[2m${t}\x1b[22m`;
+	expect(resumeHint(`${dim("To resume this session:")} pi --session 01a1-6b7b\n`)).toBe(
+		`${dim("To resume this session:")} orqi --session 01a1-6b7b\n`,
+	);
+	expect(resumeHint("To resume this session: pi --session-dir /x --session 01")).toBe(
+		"To resume this session: orqi --session-dir /x --session 01",
+	);
+	// Any other write, including a model answer that mentions pi, passes through.
+	expect(resumeHint("run pi --session 01 yourself")).toBe("run pi --session 01 yourself");
+});
+
+test("--session resolves a path, an exact id, a prefix, and reports another directory's session", async () => {
+	const lookup = {
+		findById: (_cwd: string, id: string) => (id === "01a1-6b7b" ? "/s/exact.jsonl" : undefined),
+		list: async () => [{ id: "01a1-9999", path: "/s/prefix.jsonl" }],
+		listAll: async () => [{ id: "02b2-0000", path: "/o/other.jsonl", cwd: "/elsewhere" }],
+	};
+	expect(await resolveSession("./mine.jsonl", "/here", lookup)).toEqual({ path: "./mine.jsonl" });
+	expect(await resolveSession("01a1-6b7b", "/here", lookup)).toEqual({ path: "/s/exact.jsonl" });
+	expect(await resolveSession("01a1-99", "/here", lookup)).toEqual({ path: "/s/prefix.jsonl" });
+	expect(await resolveSession("02b2", "/here", lookup)).toEqual({ elsewhere: "/elsewhere" });
+	expect(await resolveSession("ffff", "/here", lookup)).toEqual({ missing: true });
 });
 
 test("the splash carries no update line: the notice above the editor owns it", () => {

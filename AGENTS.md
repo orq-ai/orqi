@@ -170,6 +170,13 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   otherwise a prompt, so without those two branches `orqi --version` boots a session, connects to
   the MCP server and bills a model call. `install.sh` calls `--version` to prove the binary it has
   extracted can execute, so it must stay free of credentials and network.
+- **`--session` is claimed as `argv[2]` too, and pi's quit hint is rewritten to name it.** pi ends
+  a session with "To resume this session: pi --session <id>", built from the app name baked into its
+  package, and orqi used to read `--session` as a one-shot prompt, so the hint led nowhere twice
+  over. `orqi --session <id>` now opens it (a path, an exact id, then a prefix, as pi resolves it; a
+  session from another directory is reported, not forked), and `main.ts` wraps `stdout.write` for
+  the TUI run so the hint says `orqi` (`resumeHint` in `src/resume.ts`), as `brandTitle` does for
+  the title.
 - **`update` is claimed as `argv[2]` too, for the same reason.** Without that branch, bare `orqi
   update` would boot a session and hand "update" to the model as a prompt; `orqi "update my agent"`
   still reaches the model because it is a second argv entry, not the first.
