@@ -222,6 +222,8 @@ export interface RouteState {
 	/** The door question's answer and its probability, when the classifier gave one. */
 	door?: Door;
 	doorP?: number;
+	/** No classifier answer and no keyword floor: the default rung, not a classification. */
+	fallback?: true;
 }
 
 /** The fallback floor, for when the classifier cannot answer: requests that change state never go below hard. */
@@ -271,7 +273,7 @@ export interface PolicyInput {
  * The rung for one request, and the words the route entry shows.
  * `classified` is only consulted on a user turn.
  */
-export function policy(input: PolicyInput): { tier: Tier; why?: string; arrow?: "▲" | "↑" } {
+export function policy(input: PolicyInput): { tier: Tier; why?: string; arrow?: "▲" | "↑"; fallback?: true } {
 	const { reason, state } = input;
 	if (reason === "direct") return { tier: "easy", why: "summary" };
 	if (reason === "continuation") return { tier: state?.tier ?? "medium" };
@@ -286,7 +288,9 @@ export function policy(input: PolicyInput): { tier: Tier; why?: string; arrow?: 
 		// No classifier answer: the keyword floor stands in for the door question.
 		const floor = floorOf(input.text);
 		if (floor) return { tier: "hard", why: `floor: ${floor}`, arrow: "▲" };
-		return { tier: "medium", why: input.classified && "error" in input.classified ? input.classified.error : "no classifier" };
+		// Marked, so the route line and the inspector cannot pass it off as a classification.
+		const why = input.classified && "error" in input.classified ? input.classified.error : "no classifier";
+		return { tier: "medium", why: `fallback: ${why}`, fallback: true };
 	}
 	if (input.door && input.door !== "benign") return { tier: "hard", why: `door: ${input.door}`, arrow: "▲" };
 	return { tier: tierOf(input.classified) };
@@ -457,6 +461,7 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 				...(latencyMs !== undefined ? { latencyMs } : {}),
 				...(routing.classifier && request.reason === "user" && latencyMs !== undefined ? { classifier: routing.classifier } : {}),
 				...(door ? { door: door.door, doorP: door.p } : {}),
+				...(decision.fallback ? { fallback: true as const } : {}),
 			};
 			for (const listener of listeners) listener({ ...next, reason: request.reason, arrow: decision.arrow });
 			if (routeLog) {

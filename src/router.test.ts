@@ -185,7 +185,8 @@ test("the policy table: reason × state × floor → rung", () => {
 	expect(policy({ reason: "user", text: "delete dataset x" })).toEqual({ tier: "hard", why: "floor: destructive request", arrow: "▲" });
 	expect(policy({ reason: "user", text: "hi", classified: forbidden })).toEqual({
 		tier: "medium",
-		why: "routing unavailable: API key lacks the classify permission",
+		why: "fallback: routing unavailable: API key lacks the classify permission",
+		fallback: true,
 	});
 	// continuation stays put (prompt cache)
 	expect(policy({ reason: "continuation", text: "", state: { ...medium, tier: "easy" } })).toEqual({ tier: "easy" });
@@ -239,6 +240,10 @@ test("the route line reads like the wireframe", () => {
 			classifier: "typesafe/jev-latest",
 		}),
 	).toBe("route › medium   ▁▆▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003");
+	// A fallback names itself and its reason, so it never reads as a classification.
+	expect(
+		routeLine({ tier: "medium", why: "fallback: classifier timed out after 5 s", model: "openai/gpt-5.6-terra", ...{ fallback: true } }),
+	).toBe("route › medium   fallback: classifier timed out after 5 s   → gpt-5.6-terra");
 	expect(routeLine({ tier: "hard", arrow: "▲", why: "floor: agent mutation", model: "openai/gpt-5.6-sol" })).toBe(
 		"route › hard ▲   floor: agent mutation   → gpt-5.6-sol",
 	);
