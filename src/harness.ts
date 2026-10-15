@@ -243,7 +243,7 @@ export function orqHarness(deps: HarnessDeps) {
 		let lastFooter = "";
 		let split: ContextSplit | undefined;
 		// ── teach state: the card lives in the panel, never the transcript ──
-		// On by default: the cards are the harness explaining the platform; /teach off hides them.
+		// On by default: the cards are the harness explaining the platform; /tips off hides them (shown as "tips"; "teach" is the code name and the old command).
 		let teachOn = true;
 		let card: { concept: Concept; used: string[]; step: number } | undefined;
 		const shownConcepts = new Set<string>();
@@ -449,7 +449,7 @@ export function orqHarness(deps: HarnessDeps) {
 				};
 				const found = signals(trajectory.steps, trajectory.turn);
 				const teach = teachOn
-					? [sectionLines("teach", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")]
+					? [sectionLines("tips", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")]
 					: [];
 				// Under the trajectory: what needs attention, where the context goes, what orqi holds in memory, then the lesson.
 				const sections = [
@@ -480,7 +480,7 @@ export function orqHarness(deps: HarnessDeps) {
 					? "↑↓ move · enter peek · esc"
 					: minimapSelected !== undefined
 						? "scrolled back · wheel down follows"
-						: `alt+i · /panel focus · /teach ${teachOn ? "off" : "on"}`;
+						: `alt+i · /panel focus · /tips ${teachOn ? "off" : "on"}`;
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					side(theme.fg("dim", sectionLines("trajectory", [], inner)[0]!)),

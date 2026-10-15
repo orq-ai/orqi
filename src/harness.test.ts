@@ -791,7 +791,7 @@ test("signals: a loop is the same tool with the same arguments three times in th
 });
 
 test("panel sections: a rule, an indented body, one calm line when empty", () => {
-	expect(sectionLines("teach", [], 36)).toEqual([" ─ teach ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
+	expect(sectionLines("tips", [], 36)).toEqual([" ─ tips ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
 	const split: ContextSplit = {
 		prompt: 4_440,
 		hints: 680,
@@ -985,7 +985,7 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 		"used  list_traces · get_span",
 		`docs  ${hyperlink("open", "https://docs.orq.ai/docs/observability/traces")}`,
 	]);
-	expect(cardLine(first)).toStartWith("▸ teach  trace: One request through your agent or deployment, kept as a tree of spans:");
+	expect(cardLine(first)).toStartWith("▸ tips  trace: One request through your agent or deployment, kept as a tree of spans:");
 	expect(cardLine(first)).toContain(
 		hyperlink("https://docs.orq.ai/docs/observability/traces", "https://docs.orq.ai/docs/observability/traces"),
 	);
@@ -994,7 +994,7 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(skillLines.at(-1)).toBe(`docs  ${hyperlink("open", "https://docs.orq.ai/docs/integrations/code-assistants/skills")}`);
 	expect(skillLines.every((line) => visibleWidth(line) <= 32)).toBe(true);
 	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto", teach: true, thread: "01a1…6b7b" }, 200)).toBe(
-		` orqi v${VERSION}  workspace acme · routing orq/auto · teach · thread 01a1…6b7b`,
+		` orqi v${VERSION}  workspace acme · routing orq/auto · tips · thread 01a1…6b7b`,
 	);
 });
 
