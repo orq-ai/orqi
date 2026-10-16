@@ -1253,6 +1253,31 @@ test("/bug targets a prefilled orqi issue", async () => {
 	expect(status).toContain("no bug report was sent automatically");
 });
 
+test("pi's post-error bug nudge speaks for orqi, once, and stays quiet for a refused credential", () => {
+	const said: string[] = [];
+	class FakePiMode {
+		bugReportHintShown = false;
+		declare suggestBugReport: () => void;
+		declare maybeSuggestBugReport: (message: { errorMessage?: string }) => void;
+		showStatus(message: string) {
+			said.push(message);
+		}
+	}
+	// pi's own: any error not retryable or aborted ends in suggestBugReport.
+	FakePiMode.prototype.maybeSuggestBugReport = function (this: FakePiMode) {
+		this.suggestBugReport();
+	};
+	FakePiMode.prototype.suggestBugReport = () => said.push("If this looks like a pi bug");
+	redirectPiBugCommand(FakePiMode as any);
+
+	const mode = new FakePiMode();
+	mode.maybeSuggestBugReport({ errorMessage: '401: {"message":"API key is not valid for this workspace","code":"invalid_api_key"}' });
+	expect(said).toEqual([]);
+	mode.maybeSuggestBugReport({ errorMessage: "Cannot read properties of undefined" });
+	mode.maybeSuggestBugReport({ errorMessage: "Cannot read properties of undefined" });
+	expect(said).toEqual(["If this looks like an orqi bug, /bug opens a report in the orqi repository."]);
+});
+
 test("the exit summary: who, how long, what it cost, what it changed, where to find it", () => {
 	const trajectory = new Trajectory((_provider, id) => (id.includes("terra") ? 272_000 : 1_050_000));
 	trajectory.fromMessages(session());

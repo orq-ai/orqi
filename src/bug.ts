@@ -42,13 +42,22 @@ export function openBugIssue(hint = "", opener: (url: string) => boolean = openU
 
 type PiBugMode = {
 	showStatus(message: string): void;
+	bugReportHintShown?: boolean;
 };
 
 type PiInteractiveMode = {
 	prototype: {
 		handleBugCommand?: (hint?: string) => Promise<void>;
+		suggestBugReport?: () => void;
+		maybeSuggestBugReport?: (message: { errorMessage?: string }) => void;
 	};
 };
+
+/**
+ * A refused credential is the user's to fix and orqi already says how (the pinned
+ * warning, `/login` or `/key`); a "report a bug" nudge on top reads as blame.
+ */
+const CREDENTIAL_REFUSAL = /\b(?:401|403)\b|authentication_error|invalid_api_key|not valid for this workspace/i;
 
 /**
  * Pi handles built-in slash commands before extensions receive `input`, so
@@ -63,4 +72,24 @@ export function redirectPiBugCommand(InteractiveMode: PiInteractiveMode, opener:
 			`${opened ? "Opening" : "Open"} a new orqi issue: ${url}\nReview and submit it in GitHub; no bug report was sent automatically.`,
 		);
 	};
+
+	// pi's own nudge after an error says "If this looks like a pi bug, /bug sends a
+	// report to the developers", baked with pi's name. Same once-per-session rule,
+	// orqi's words, and none at all for a refused credential. Only patched where pi
+	// still has the method, so a rename upstream leaves pi's behaviour, not a crash.
+	const proto = InteractiveMode.prototype;
+	const maybeSuggest = proto.maybeSuggestBugReport;
+	if (maybeSuggest) {
+		proto.maybeSuggestBugReport = function (this: PiBugMode, message) {
+			if (CREDENTIAL_REFUSAL.test(message.errorMessage ?? "")) return;
+			return maybeSuggest.call(this, message);
+		};
+	}
+	if (proto.suggestBugReport) {
+		proto.suggestBugReport = function (this: PiBugMode) {
+			if (this.bugReportHintShown) return;
+			this.bugReportHintShown = true;
+			this.showStatus("If this looks like an orqi bug, /bug opens a report in the orqi repository.");
+		};
+	}
 }
