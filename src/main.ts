@@ -22,10 +22,11 @@ import {
 	createMcpExtension,
 	InteractiveMode,
 	SessionManager,
+	SettingsManager,
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_SLASH_COMMANDS } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/slash-commands.js";
-import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, SESSION_SOURCE, type Credential } from "./auth.ts";
+import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, routerUrl, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { orqOAuth, refreshStoredSignIn, storedOAuthToken } from "./oauth.ts";
 import { dim, type HeaderInfo, terminalProgress, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./connection.ts";
@@ -49,6 +50,7 @@ import { createLocalFileTools } from "./local-tools.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { runUpdate } from "./update.ts";
 import { resolveSession, resumeHint } from "./resume.ts";
+import { projectTrusted } from "./trust.ts";
 
 /** The SessionManager for `--session <arg>`, or a clear exit when it names nothing here. */
 async function openSession(arg: string): Promise<SessionManager> {
@@ -455,6 +457,9 @@ async function renewSession(force = false) {
 // Every router call names the repo it came from, so a team's Threads tab can be
 // filtered by project. The remote is stripped of any credentials it embeds.
 process.env.ORQI_REPO ??= repoName();
+// The router on the host whoami resolved, for plugins that call it themselves
+// (memorq writes its notes there with ORQ_API_KEY): their own default is api.orq.ai.
+process.env.ROUTER_BASE_URL ??= routerUrl();
 const models = await createOrqModelRuntime(AGENT_DIR, credential?.token ?? candidates[0]?.token ?? "");
 const modelRuntime = models.runtime;
 // "Sign in with an account" in pi's /login: the orq CLI's browser login, so a
@@ -557,9 +562,13 @@ const commands = orqCommands(
 // State that must outlive a session sits in the factories built above
 // (orqCommands); the harness rebuilds from the branch.
 const makeServices = async () => {
+	const cwd = process.cwd();
 	const created = await createAgentSessionServices({
-		cwd: process.cwd(),
+		cwd,
 		agentDir: AGENT_DIR,
+		// pi's SDK trusts every project, so a cloned repo's .pi/extensions would run
+		// inside orqi unasked (src/trust.ts).
+		settingsManager: SettingsManager.create(cwd, AGENT_DIR, { projectTrusted: projectTrusted(cwd, AGENT_DIR) }),
 		modelRuntime,
 		resourceLoaderOptions: {
 			// The tools themselves are declared by pi's MCP; the prompt carries what their schemas leave out.
