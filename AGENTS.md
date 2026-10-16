@@ -120,7 +120,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   renames either symbol silently restores pi's wording, so recheck both after bumping pi.
 - **Colours are tuned against the lightest plausible background, not the darkest.** The terminal
   background belongs to the user: Ghostty and the One Dark family sit near `#282C34`, where the
-  first dim amber measured 3.74:1 and read as washed out. Every text role in all five themes clears
+  first dim amber measured 3.74:1 and read as washed out. Every text role in all fifteen themes (the five `orq-*` and the ten in `themes/pack`) clears
   4.5:1 there, and a test enforces it. Borders are decoration and exempt, except the
   `thinking*` colours: pi paints the input box's border with them and writes the working message
   ("thinking", a tool name) in the same colour, so they are tested as text. A 2.12:1 teal made
@@ -131,6 +131,18 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   like a successful one, and syntax highlighting carries less information. The others: `teal` is teal-led, `slate` is blue-led,
   and `signal` is colorblind-safe (pass is sky blue, fail is vermillion, so status never leans on
   red-vs-green alone). `/theme` switches mid-session.
+- **Ten more themes ride beside them, lightened, in `themes/pack/`.** `catppuccin-mocha`, `dracula`,
+  `gruvbox-dark`, `neon-afterglow`, `neon-noir`, `night-owl`, `nord`, `one-dark`, `solarized-dark`
+  and `tokyo-night` come from the `@spences10/pi-themes` package (MIT, pinned in devDependencies; its
+  licence ships in `themes/pack/LICENSE`). Upstream's palettes miss the floor on 10 to 17 text
+  colours each, mostly the greys behind comments, link URLs and tool output (`dim` is a
+  background-grade shade at 1.4 to 2.3:1). `bun run lift-themes` writes the committed copies,
+  lightening only the text roles that fail, by HSL lightness so hue survives, and writes a literal
+  over the role rather than editing a shared var, so a border drawn in the same grey is untouched.
+  The cost is a flatter grey hierarchy: `dim` and `muted` end up close. The files are generated: edit
+  `scripts/lift-themes.ts`, never the JSON. A theme dropped after review (`rose-pine`) goes in its
+  `DROPPED` list so a rerun does not bring it back. `ORQI_THEME` takes any of these names
+  (`ORQI_THEME=nord`), and a test holds them to the same contrast floor as ours.
 - **Every theme is dark, and that is deliberate.** The contrast test floor is the lightest
   plausible terminal background (`#282C34`); a light-skin palette would fail it, so no light theme
   ships. The dark ramp work is per-theme: each skin's five thinking steps and dim/faint stops are

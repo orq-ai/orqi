@@ -47,6 +47,7 @@ orqi
 | `src/footer.ts` / `src/inspector-rows.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, the inspector's trajectory rows and its signals, context and teach sections, boxed overlay panels |
 | `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows, the detail view and the inspect view; the changelog parser |
 | `scripts/build.ts` / `scripts/dist.ts` / `scripts/vendor.ts` | Embed assets; cross-compile tarballs; vendor the upstream skills |
+| `scripts/lift-themes.ts` | Writes `themes/pack/` from the pinned theme package, lightening text colours that miss the contrast floor |
 | `npm/` | npm packaging: the `@orq-ai/orqi` wrapper and its `bin/orqi.js` launcher; `stage.mjs` writes the platform packages from the release tarballs |
 
 `pluginResources` in `src/skills.ts` hands pi exactly one copy of the orq marketplace plugin, its

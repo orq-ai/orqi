@@ -13,6 +13,7 @@
       },
       "devDependencies": {
         "@biomejs/biome": "2.5.15",
+        "@spences10/pi-themes": "0.0.10",
         "@types/bun": "^1.4.2",
         "@types/node": "^26.6.5",
         "typescript": "^7.0.2",
@@ -131,6 +132,8 @@
     "@smithy/signature-v4": ["@smithy/signature-v4@5.7.4", "", { "dependencies": { "@smithy/core": "^3.35.0", "@smithy/types": "^4.19.0", "tslib": "^2.6.2" } }, "sha512-tHy0K0VtqNd5Y7Y41h0a0Lhh0L1GzC08dTWg0F7vRJWFtTENg7IZikf3wQkanYIRdb7ngoIPMTmqgUi401fEeQ=="],
 
     "@smithy/types": ["@smithy/types@4.19.0", "", { "dependencies": { "tslib": "^2.6.2" } }, "sha512-r7jh49VJxGerfAcTQA6gXcKc+98zOp/tqRwzYjgOE+iSQsP6cEU1hq2QzbuipmP68QtYdY9wKEhiCQZIzHgZ4Q=="],
+
+    "@spences10/pi-themes": ["@spences10/pi-themes@0.0.10", "", {}, "sha512-+hcnLyMIpqmnmWopzUXrTFlkjp/ZoWP8BhmWnwJBoYA1soHCBEh2Cosf+UMjAkQISC6rTRSVRmj+oAVcCUy8tw=="],
 
     "@stablelib/base64": ["@stablelib/base64@1.0.1", "", {}, "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ=="],
 

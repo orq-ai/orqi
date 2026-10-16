@@ -1,7 +1,7 @@
 /** Cross-cutting checks: themes, the header, model filtering, and the names orqi registers with pi. Run with `bun test`. */
 
 import { expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PI_DIST, PI_FILES } from "../scripts/pi-files.ts";
@@ -56,13 +56,22 @@ test("every theme's text stays legible on a light-ish dark background", () => {
 	];
 	const LIGHTEST_BG = "#282C34";
 
-	for (const file of ["orq-dark.json", "orq-amber.json", "orq-teal.json", "orq-slate.json", "orq-signal.json"]) {
-		const theme = JSON.parse(readFileSync(join(import.meta.dir, "..", "themes", file), "utf8"));
-		const resolve = (value: string) => (value?.startsWith("#") ? value : theme.vars[value]);
+	// Our own five, plus the lightened @spences10/pi-themes pack (scripts/lift-themes.ts).
+	const themesDir = join(import.meta.dir, "..", "themes");
+	const files = [
+		...["orq-dark.json", "orq-amber.json", "orq-teal.json", "orq-slate.json", "orq-signal.json"].map((f) => join(themesDir, f)),
+		...readdirSync(join(themesDir, "pack"))
+			.filter((f) => f.endsWith(".json"))
+			.map((f) => join(themesDir, "pack", f)),
+	];
+	for (const path of files) {
+		const file = path.slice(themesDir.length + 1);
+		const theme = JSON.parse(readFileSync(path, "utf8"));
+		const resolve = (value: string) => (value?.startsWith("#") ? value : theme.vars?.[value]);
 
 		// A colour naming a var that no longer exists renders as nothing at all.
 		const dangling = Object.entries(theme.colors as Record<string, string>)
-			.filter(([, v]) => typeof v === "string" && !v.startsWith("#") && !(v in theme.vars))
+			.filter(([, v]) => typeof v === "string" && v !== "" && !v.startsWith("#") && !(v in (theme.vars ?? {})))
 			.map(([role]) => `${file}:${role}`);
 		expect(dangling).toEqual([]);
 
@@ -73,6 +82,28 @@ test("every theme's text stays legible on a light-ish dark background", () => {
 			.map(({ role, ratio }) => `${file}:${role} ${ratio.toFixed(2)}`);
 		expect(unreadable).toEqual([]);
 	}
+});
+
+test("the theme pack loads in pi and shadows no theme", async () => {
+	// The pack under themes/pack is generated; it must still validate, or pi drops
+	// it at startup with a diagnostic, and it must ship its upstream licence.
+	const { validateThemeJson } = await import(join(PI_DIST, "modes/interactive/theme/theme-schema.js"));
+	const root = join(import.meta.dir, "..", "themes");
+	const pack = join(root, "pack");
+	const ours = readdirSync(root)
+		.filter((f) => f.endsWith(".json"))
+		.map((f) => f.replace(/\.json$/, ""));
+	const names = readdirSync(pack)
+		.filter((f) => f.endsWith(".json"))
+		.map((file) => {
+			const theme = JSON.parse(readFileSync(join(pack, file), "utf8"));
+			validateThemeJson(file, theme);
+			return theme.name;
+		});
+	expect(names.length).toBe(10);
+	expect(names).not.toContain("rose-pine");
+	expect(names.filter((n) => [...ours, "dark", "light", "system"].includes(n))).toEqual([]);
+	expect(existsSync(join(pack, "LICENSE"))).toBe(true);
 });
 
 test("every command AGENTS.md names exists", () => {
