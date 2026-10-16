@@ -91,6 +91,7 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_THEME` | theme at startup: `dark` (default: amber + turquoise/red status), `amber` (one-hue amber), `teal` (teal-led), `slate` (blue-led), `signal` (colorblind-safe). `/theme` switches mid-session |
 | `ORQI_TERMINAL_PROGRESS` | Set to `0` to turn off the moving progress line your terminal draws while orqi works (Ghostty, WezTerm, Windows Terminal, iTerm2 3.6+; off by default on older iTerm2, which would show it as notifications) |
 | `ORQI_LOCAL_SKILLS` | Also discover skills installed on the machine (off by default; 100+ ambient skills would swamp the prompt) |
+| `ORQI_TRUST_PROJECT` | Set to `1` to load the current project's own `.pi/` extensions and packages without a stored `/trust` decision (off by default: a cloned repo's code never runs unasked) |
 | `ORQI_ALL_TOOLS` | Set to `1` to also expose the invocation tools that are filtered out by default ([why](ARCHITECTURE.md#tools)) |
 | `ORQI_SKILLS_UPDATE` | Set to `0` to pin skills to whatever the binary shipped with, disabling the daily check |
 | `ORQI_UPDATE_CHECK` | Set to `0` to pin: no update check, no launch notice. `orqi update` still works when run directly |
