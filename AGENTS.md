@@ -116,8 +116,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   pi's `BUILTIN_SLASH_COMMANDS` (imported by a `node_modules` path: pi's export map does not expose
   it, and it is the same module instance `InteractiveMode` reads) and replaces
   `InteractiveMode.prototype.handleBugCommand` before the mode is built. `/bug` opens a prefilled
-  `orq-ai/orqi` issue for the user to submit; pi's diagnostics upload never runs. A pi upgrade that
-  renames either symbol silently restores pi's wording, so recheck both after bumping pi.
+  `orq-ai/orqi` issue for the user to submit; pi's diagnostics upload never runs. The same patch
+  rewrites pi's once-per-session nudge after an error ("If this looks like a pi bug, /bug sends a
+  report to the developers", with pi's name baked in) to say orqi, and skips it for a refused
+  credential, which is the user's to fix and already has its own pinned warning. A pi upgrade that
+  renames any of these symbols silently restores pi's wording, so recheck them after bumping pi.
 - **Colours are tuned against the lightest plausible background, not the darkest.** The terminal
   background belongs to the user: Ghostty and the One Dark family sit near `#282C34`, where the
   first dim amber measured 3.74:1 and read as washed out. Every text role in all thirteen themes (our three and the ten in `themes/pack`) clears
