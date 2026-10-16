@@ -56,10 +56,10 @@ test("every theme's text stays legible on a light-ish dark background", () => {
 	];
 	const LIGHTEST_BG = "#282C34";
 
-	// Our own five, plus the lightened @spences10/pi-themes pack (scripts/lift-themes.ts).
+	// Our own three, plus the lightened @spences10/pi-themes pack (scripts/lift-themes.ts).
 	const themesDir = join(import.meta.dir, "..", "themes");
 	const files = [
-		...["orq-dark.json", "orq-amber.json", "orq-teal.json", "orq-slate.json", "orq-signal.json"].map((f) => join(themesDir, f)),
+		...["orq-dark.json", "orq-slate.json", "orq-signal.json"].map((f) => join(themesDir, f)),
 		...readdirSync(join(themesDir, "pack"))
 			.filter((f) => f.endsWith(".json"))
 			.map((f) => join(themesDir, "pack", f)),

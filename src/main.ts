@@ -626,23 +626,25 @@ const makeServices = async () => {
 			],
 		},
 	});
-	// Five themes ship in themes/: the two amber phosphor skins — orq-amber is
-	// one hue throughout, orq-dark keeps turquoise for success and red for errors —
-	// plus three more dark skins: orq-teal (teal-led, Harbour), orq-slate
-	// (blue-led, Blueprint) and orq-signal (colorblind-safe vermillion + sky, pass
-	// is blue and fail is orange so status never leans on red-vs-green alone).
-	// All are on additionalThemePaths, so pi's own /theme picker lists them either
-	// way and a session can switch without restarting. The @spences10/pi-themes
-	// pack (THEME_PACK) rides beside them, lightened to the same contrast floor.
-	// A light theme cannot ship
-	// here: the contrast floor is checked against the lightest plausible terminal
-	// background (#282C34), which no light-skin text colour could clear.
+	// Three themes of our own ship in themes/: orq-dark (amber, turquoise for success
+	// and red for errors, so a failed tool call reads as one), orq-slate (blue-led,
+	// Blueprint) and orq-signal (colorblind-safe vermillion + sky, pass is blue and
+	// fail is orange so status never leans on red-vs-green alone). All are on
+	// additionalThemePaths, so pi's own /theme picker lists them either way and a
+	// session can switch without restarting. The @spences10/pi-themes pack
+	// (THEME_PACK) rides beside them, lightened to the same contrast floor. A light
+	// theme cannot ship here: the contrast floor is checked against the lightest
+	// plausible terminal background (#282C34), which no light-skin text colour
+	// could clear.
 	const THEMES: Record<string, string> = {
-		amber: "orq-amber",
 		dark: "orq-dark",
-		teal: "orq-teal",
 		slate: "orq-slate",
 		signal: "orq-signal",
+		// orq-amber and orq-teal were folded into these: same surface, different
+		// status colours (amber) or the same layout in another hue (teal). The old
+		// ORQI_THEME values keep working rather than silently meaning orq-dark.
+		amber: "orq-dark",
+		teal: "orq-slate",
 	};
 	// orq-dark is the default: amber with turquoise for success and red for errors,
 	// so a failed tool call reads as one. ORQI_THEME also takes a theme pack name
