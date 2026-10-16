@@ -102,7 +102,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `lastChangelogVersion`, `PI_SKIP_VERSION_CHECK`). They tell users to run `pi update`, which does
   not apply to this binary.
 - **The TUI is amber, the splash is Pulse Orange.** `#DF5325` is the brand primary, but on a black
-  terminal it sits dark and red, so both themes in `themes/` are built on an amber ramp, and
+  terminal it sits dark and red, so `orq-dark` is built on an amber ramp, and
   `docs/splash.svg` uses the same amber. The startup splash (`headerLines` in `src/branding.ts`)
   and `install.sh` print the mark in Pulse Orange, matching the orq CLI. Pulse Orange survives in
   the themes as a syntax colour.
@@ -120,17 +120,19 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   renames either symbol silently restores pi's wording, so recheck both after bumping pi.
 - **Colours are tuned against the lightest plausible background, not the darkest.** The terminal
   background belongs to the user: Ghostty and the One Dark family sit near `#282C34`, where the
-  first dim amber measured 3.74:1 and read as washed out. Every text role in all fifteen themes (the five `orq-*` and the ten in `themes/pack`) clears
+  first dim amber measured 3.74:1 and read as washed out. Every text role in all thirteen themes (our three and the ten in `themes/pack`) clears
   4.5:1 there, and a test enforces it. Borders are decoration and exempt, except the
   `thinking*` colours: pi paints the input box's border with them and writes the working message
   ("thinking", a tool name) in the same colour, so they are tested as text. A 2.12:1 teal made
   "thinking" unreadable.
-- **Five themes; `orq-dark` is the default.** It keeps the amber surface with turquoise for success
-  and red for errors, so a failed tool call reads as one. `orq-amber` (`ORQI_THEME=amber`) is one
-  hue throughout, chosen for the 80s monochrome look, at a known cost: a failed tool call reads much
-  like a successful one, and syntax highlighting carries less information. The others: `teal` is teal-led, `slate` is blue-led,
-  and `signal` is colorblind-safe (pass is sky blue, fail is vermillion, so status never leans on
-  red-vs-green alone). `/theme` switches mid-session.
+- **Three themes of our own; `orq-dark` is the default.** It keeps the amber surface with turquoise
+  for success and red for errors, so a failed tool call reads as one. `orq-slate` is blue-led, and
+  `orq-signal` is colorblind-safe (pass is sky blue, fail is vermillion, so status never leans on
+  red-vs-green alone). `/theme` switches mid-session. There used to be five: `orq-amber` was one hue
+  throughout, and a failed tool call read much like a successful one, so it added only a worse
+  `orq-dark`; `orq-teal` was `orq-slate` in another hue, with the same layout, warning and error.
+  `ORQI_THEME=amber` and `=teal` still resolve (to `orq-dark` and `orq-slate`) so a pinned setting
+  does not silently fall through to the default.
 - **Ten more themes ride beside them, lightened, in `themes/pack/`.** `catppuccin-mocha`, `dracula`,
   `gruvbox-dark`, `neon-afterglow`, `neon-noir`, `night-owl`, `nord`, `one-dark`, `solarized-dark`
   and `tokyo-night` come from the `@spences10/pi-themes` package (MIT, pinned in devDependencies; its
