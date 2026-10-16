@@ -8,7 +8,7 @@ import { PI_DIST, PI_FILES } from "../scripts/pi-files.ts";
 import { resolveSession, resumeHint } from "./resume.ts";
 import { headerLines, terminalProgress } from "./branding.ts";
 import { ORQI_COMMANDS, orqCommands } from "./connection.ts";
-import { orqHarness } from "./harness.ts";
+import { composeLayout, orqHarness } from "./harness.ts";
 import { catalogue, onlyOrq, PROVIDER_ID } from "./model.ts";
 
 const noReconnect = async () => ({ credential: { token: "", source: "" }, count: 0, added: [] });
@@ -104,6 +104,26 @@ test("the theme pack loads in pi and shadows no theme", async () => {
 	expect(names).not.toContain("rose-pine");
 	expect(names.filter((n) => [...ours, "dark", "light", "system"].includes(n))).toEqual([]);
 	expect(existsSync(join(pack, "LICENSE"))).toBe(true);
+});
+
+test("the panel sits beside the transcript and the footer keeps the full width", async () => {
+	const { VStack } = await import("@earendil-works/pi-tui");
+	const part = () => ({ render: () => [], invalidate() {} });
+	const [transcript, dock, header, panel] = [part(), part(), part(), part()];
+	const entry = (component: any, extra = {}) => ({ component, basis: "auto" as const, grow: 0, shrink: 1, minSize: 1, ...extra });
+	const piRoot = new VStack([entry(transcript, { basis: 0, grow: 1 }), entry(dock)]);
+
+	// header, then transcript + panel side by side, then pi's dock across the full width
+	const [top, body, bottom] = (composeLayout(piRoot, header, { component: panel, basis: 10, shrink: 0 }) as any).entries;
+	expect(top.component).toBe(header);
+	expect(body.component.entries.map((e: any) => e.component)).toEqual([transcript, panel]);
+	expect(bottom.component).toBe(dock);
+
+	// A pi that reshapes its root: the panel falls back to sitting beside all of it, nothing is lost.
+	const odd = part();
+	const fallback = (composeLayout(odd as any, header, { component: panel, basis: 10, shrink: 0 }) as any).entries;
+	expect(fallback.length).toBe(2);
+	expect(fallback[1].component.entries.map((e: any) => e.component)).toEqual([odd, panel]);
 });
 
 test("every command AGENTS.md names exists", () => {

@@ -210,25 +210,31 @@ test("the footer degrades by width band", () => {
 		branch: "main",
 	};
 	const wide = footerLine(state, 140);
-	expect(wide).toStartWith(" orq.ai · acme · "); // the orq.ai mark leads
-	expect(wide).toContain(
-		"orq.ai · acme · orq/auto → gpt-5.6-sol · think high · ↑88k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools",
-	);
-	expect(wide.endsWith("main ")).toBe(true);
+	expect(wide).toStartWith(" orq.ai · acme · orq/auto → gpt-5.6-sol · think high  "); // what answers, on the left
+	expect(wide).toEndWith("↑88k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools · main "); // what it costs, on the right
 	expect(wide.length).toBe(140);
+	// The meters keep their column when the model name changes length.
+	const plainModel = footerLine({ ...state, selection: "openai/gpt-5.6-terra", physical: undefined }, 140);
+	expect(plainModel.indexOf("$0.113")).toBe(wide.indexOf("$0.113"));
 	const medium = footerLine(state, 110);
 	expect(medium).toContain("31% 84k/272k");
 	expect(medium).not.toContain("▁▂▃ ·"); // sparkline dropped
 	expect(medium).not.toContain("44 tools");
 	const narrow = footerLine({ ...state, minimapHidden: true }, 96);
-	expect(narrow).toContain("ctx ▇▇▇▁▁▁▁┊ 31% · inspector alt+i");
+	expect(narrow).not.toContain("think"); // effort needs the medium band
+	expect(narrow.startsWith(" orq.ai · acme · orq/auto → gpt-5.6-sol · inspector alt+i")).toBe(true);
+	expect(narrow).toContain("$0.113 · ctx ▇▇▇▁▁▁▁┊ 31% · main");
 	expect(narrow).not.toContain("↑88k");
 	expect(narrow).not.toContain("84k/272k");
+	// Too narrow for two halves: one line, truncated, the model and cost first to survive.
+	const squeezed = footerLine(state, 70);
+	expect(visibleWidth(squeezed)).toBeLessThanOrEqual(70);
+	expect(squeezed).toContain("orq/auto → gpt-5.6-sol");
 	// Never wider than the terminal, whatever is in it.
 	expect(visibleWidth(footerLine(state, 40))).toBeLessThanOrEqual(40);
 	// Selection equal to the physical model shows once.
 	expect(footerLine({ ...state, selection: "openai/gpt-5.6-terra", physical: "openai/gpt-5.6-terra" }, 140)).toContain(
-		"· gpt-5.6-terra · think high · ",
+		"· gpt-5.6-terra · think high  ",
 	);
 });
 
@@ -710,7 +716,8 @@ test("long panel bodies scroll instead of losing their bottom", () => {
 });
 
 test("the orq.ai mark stays even without a workspace, and the title says orqi", () => {
-	expect(footerLine({ input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(" orq.ai · $0");
+	expect(footerLine({ input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(" orq.ai ");
+	expect(footerLine({ input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toEndWith(" $0 ");
 	expect(footerLine({ workspace: "orq:not connected", input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(
 		" orq.ai · not connected",
 	);
