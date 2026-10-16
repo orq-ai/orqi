@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PI_DIST, PI_FILES } from "../scripts/pi-files.ts";
-import { resolveSession, resumeHint } from "./resume.ts";
+import { resolveSession } from "./resume.ts";
 import { headerLines, terminalProgress } from "./branding.ts";
 import { ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import { composeLayout, orqHarness } from "./harness.ts";
@@ -240,16 +240,27 @@ test("the terminal progress bar is on, except where OSC 9 means a notification",
 	expect(terminalProgress({ TERM_PROGRAM: "ghostty", ORQI_TERMINAL_PROGRESS: "0" })).toBe(false);
 });
 
-test("pi's quit hint names orqi, and nothing else is touched", () => {
-	const dim = (t: string) => `\x1b[2m${t}\x1b[22m`;
-	expect(resumeHint(`${dim("To resume this session:")} pi --session 01a1-6b7b\n`)).toBe(
-		`${dim("To resume this session:")} orqi --session 01a1-6b7b\n`,
-	);
-	expect(resumeHint("To resume this session: pi --session-dir /x --session 01")).toBe(
-		"To resume this session: orqi --session-dir /x --session 01",
-	);
-	// Any other write, including a model answer that mentions pi, passes through.
-	expect(resumeHint("run pi --session 01 yourself")).toBe("run pi --session 01 yourself");
+test("pi names itself orqi and reads .orqi/, decided before it loads", () => {
+	// pi reads piConfig once, at module load, so this needs a process of its own.
+	const root = join(import.meta.dir, "..");
+	const probe = `
+		const { piPackageDir } = await import(${JSON.stringify(join(root, "src", "pi-package.ts"))});
+		process.env.PI_PACKAGE_DIR = piPackageDir(${JSON.stringify(root)}, ${JSON.stringify(root)});
+		const c = await import(${JSON.stringify(join(PI_DIST, "config.js"))});
+		const { existsSync } = await import("node:fs");
+		console.log(JSON.stringify([c.APP_NAME, c.APP_TITLE, c.CONFIG_DIR_NAME, c.ENV_AGENT_DIR, existsSync(c.getThemesDir() + "/dark.json"), existsSync(c.getExportTemplateDir())]));`;
+	const out = Bun.spawnSync(["bun", "-e", probe], { cwd: root, env: { ...process.env, PI_PACKAGE_DIR: "" } });
+	expect(JSON.parse(out.stdout.toString().trim())).toEqual(["orqi", "orqi", ".orqi", "ORQI_CODING_AGENT_DIR", true, true]);
+});
+
+test("main.ts refuses to run without boot.ts, which is what makes pi orqi", () => {
+	const root = join(import.meta.dir, "..");
+	const env = { ...process.env, ORQI_BOOT: "" };
+	const direct = Bun.spawnSync(["bun", join(root, "src", "main.ts"), "--version"], { cwd: root, env });
+	expect(direct.exitCode).toBe(2);
+	expect(direct.stderr.toString()).toContain("src/boot.ts");
+	const booted = Bun.spawnSync(["bun", join(root, "src", "boot.ts"), "--version"], { cwd: root, env });
+	expect(booted.exitCode).toBe(0);
 });
 
 test("--session resolves a path, an exact id, a prefix, and reports another directory's session", async () => {

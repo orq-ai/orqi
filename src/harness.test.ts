@@ -9,7 +9,7 @@ import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
-import { brandTitle, exitSummary, orqHarness, repoOf } from "./harness.ts";
+import { exitSummary, orqHarness, repoOf } from "./harness.ts";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
@@ -715,19 +715,12 @@ test("long panel bodies scroll instead of losing their bottom", () => {
 	expect(later[1]).toContain("line 26");
 });
 
-test("the orq.ai mark stays even without a workspace, and the title says orqi", () => {
+test("the orq.ai mark stays even without a workspace", () => {
 	expect(footerLine({ input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(" orq.ai ");
 	expect(footerLine({ input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toEndWith(" $0 ");
 	expect(footerLine({ workspace: "orq:not connected", input: 0, output: 0, cost: 0, samples: [], tools: 0 }, 80)).toStartWith(
 		" orq.ai · not connected",
 	);
-	const titles: string[] = [];
-	const tui = { terminal: { setTitle: (title: string) => titles.push(title) } };
-	brandTitle(tui, "/home/me/repo");
-	brandTitle(tui, "/home/me/repo"); // a second session does not wrap twice
-	tui.terminal.setTitle("π - repo"); // pi's own later rewrite
-	tui.terminal.setTitle("π - my session - repo");
-	expect(titles).toEqual(["orqi - repo", "orqi - repo", "orqi - repo", "orqi - my session - repo"]);
 });
 
 test("a turn recorded at $0 is repriced from the catalogue", () => {

@@ -9,6 +9,7 @@
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { orqiPiPackage } from "../src/pi-package.ts";
 import { PI_DIST, PI_FILES } from "./pi-files.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -41,6 +42,9 @@ for (const file of FILES) {
 for (const [asset, source] of Object.entries(PI_FILES)) {
 	assets[asset] = readFileSync(join(PI_DIST, source), "utf8");
 }
+// pi's package.json with orqi's piConfig: src/boot.ts points PI_PACKAGE_DIR here
+// before pi loads, so pi names itself orqi and reads the project's .orqi/.
+assets["pi/package.json"] = orqiPiPackage(readFileSync(join(PI_DIST, "..", "package.json"), "utf8"));
 
 // Content hash doubles as the unpack directory name, so a rebuilt binary
 // unpacks afresh and an unchanged one reuses what is already on disk.

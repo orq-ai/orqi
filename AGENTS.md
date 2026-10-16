@@ -195,14 +195,13 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **`--version` and `--help` are answered before anything else runs** (`src/main.ts`). `argv[2]` is
   otherwise a prompt, so without those two branches `orqi --version` boots a session, connects to
   the MCP server and bills a model call. `install.sh` calls `--version` to prove the binary it has
-  extracted can execute, so it must stay free of credentials and network.
-- **`--session` is claimed as `argv[2]` too, and pi's quit hint is rewritten to name it.** pi ends
-  a session with "To resume this session: pi --session <id>", built from the app name baked into its
-  package, and orqi used to read `--session` as a one-shot prompt, so the hint led nowhere twice
-  over. `orqi --session <id>` now opens it (a path, an exact id, then a prefix, as pi resolves it; a
-  session from another directory is reported, not forked), and `main.ts` wraps `stdout.write` for
-  the TUI run so the hint says `orqi` (`resumeHint` in `src/resume.ts`), as `brandTitle` does for
-  the title.
+  extracted can execute, so it must stay free of credentials and network, and `src/boot.ts` skips
+  unpacking the assets for both, so it writes nothing either.
+- **`--session` is claimed as `argv[2]` too, because pi's quit hint names it.** pi ends a session
+  with "To resume this session: orqi --session <id>" (its app name comes from `piConfig`, below),
+  and orqi used to read `--session` as a one-shot prompt. `orqi --session <id>` opens it (a path,
+  an exact id, then a prefix, as pi resolves it; a session from another directory is reported, not
+  forked).
 - **`update` is claimed as `argv[2]` too, for the same reason.** Without that branch, bare `orqi
   update` would boot a session and hand "update" to the model as a prompt; `orqi "update my agent"`
   still reaches the model because it is a second argv entry, not the first.
@@ -334,9 +333,6 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   wrapper is `VStack(header, HStack(content column, inspector), editor + footer)`: the header says who and where
   (workspace, agent, project, routing, connection), the footer what and how much. Regular
   mode has no layout root, so the header becomes a widget above the editor there.
-- **The terminal title is rewritten, not set.** pi writes `π - <dir>` from a name baked into its own
-  package (`APP_TITLE`), at startup and on every session change, with no setting. `brandTitle`
-  wraps the terminal's `setTitle` once (symbol-marked) and swaps the mark to `orqi`.
 - **A turn recorded at $0 is repriced from the catalogue.** A session that booted on the fallback
   model (no credential yet) holds a zero-price model object; after the first sign-in the commands
   extension re-selects the same model from the reloaded catalogue, and the trajectory reprices any
@@ -356,16 +352,33 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **The binary carries some of pi's own files, and `PI_PACKAGE_DIR` points at them.** A compiled
   pi reads its built-in themes (`/settings`) and HTML export template (`/export`) from beside its
   executable, where orqi has none: `/settings` died on ENOENT for `~/.local/bin/theme/dark.json`.
-  `scripts/pi-files.ts` lists them, `scripts/build.ts` embeds them under `pi/`, and `main.ts` sets
-  `PI_PACKAGE_DIR` to the unpacked copy. A test reads pi's exporter, so a pi upgrade that reads one
-  more template file fails before it ships.
+  `scripts/pi-files.ts` lists them, `scripts/build.ts` embeds them under `pi/`, and `src/boot.ts`
+  sets `PI_PACKAGE_DIR` to the unpacked copy. A test reads pi's exporter, so a pi upgrade that reads
+  one more template file fails before it ships.
+- **pi is white-labelled through its own `piConfig`, so the entry point is `src/boot.ts`.** pi reads
+  `package.json` from `PI_PACKAGE_DIR` and takes its app name and project dir from `piConfig` there
+  (`src/pi-package.ts`: `{ name: "orqi", configDir: ".orqi" }`). That one setting makes a project's
+  settings `.orqi/` (`.orqi/settings.json`, `.orqi/extensions`, `.orqi/SYSTEM.md`) instead of `.pi/`,
+  which a user's own pi shares, and every message built from the app name say orqi: "restart orqi",
+  the `orqi --session` quit hint, the `orqi - <dir>` terminal title. Two patches it replaced are
+  gone (`resumeHint`, `brandTitle`). pi reads the file **when it is first imported**, and `main.ts`
+  imports pi statically, so `src/boot.ts` sets `PI_PACKAGE_DIR` first and then imports `main.ts`; run
+  `bun src/boot.ts`, not `bun src/main.ts`, or pi falls back to `.pi`. From source, pi resolves
+  `theme/` and `export-html/` under `<PI_PACKAGE_DIR>/dist`, so boot writes `node_modules/.orqi-pi`
+  (the package.json and a link to pi's `dist`). The agent-dir variable follows the name:
+  `ORQI_CODING_AGENT_DIR`, not `PI_CODING_AGENT_DIR`; the fixed `PI_*` names (`PI_PACKAGE_DIR`,
+  `PI_SKIP_VERSION_CHECK`, `PI_HARDWARE_CURSOR`) do not change. Tests preload the same setup
+  (`bunfig.toml`), and one checks it in a fresh process, since pi caches the answer once loaded.
+  Two strings pi hard-codes stay patched: the untrusted-project warning's "restart pi"
+  (`rebrandTrustWarning`) and the bug nudge (`src/bug.ts`). A project that still has `.pi/` and no
+  `.orqi/` gets one startup notice saying it is ignored.
 - **A project is trusted the way pi's CLI trusts it, minus the prompt** (`src/trust.ts`). pi's SDK
-  defaults every project to trusted, so before this a cloned repo's `.pi/extensions/*.ts` ran inside
-  orqi with no question asked, as did packages its `.pi/settings.json` named. `makeServices` now
+  defaults every project to trusted, so before this a cloned repo's `.orqi/extensions/*.ts` (then
+  `.pi/`) ran inside orqi with no question asked, as did packages its `.orqi/settings.json` named. `makeServices` now
   passes a `SettingsManager` whose trust is pi's own rule: nothing there to trust, a yes already in
   `<agentDir>/trust.json` (pi's `/trust` writes it), or `ORQI_TRUST_PROJECT=1`. Packages installed
   with `orqi plugin install` are user-scoped and load either way; an untrusted project gets pi's
-  one-line warning.
+  one-line warning, in orqi's words.
 - **`ROUTER_BASE_URL` is exported for plugins.** A plugin that calls the router itself (memorq
   writes its notes there with `ORQ_API_KEY`) would otherwise default to `api.orq.ai`, and send a
   key that belongs to another host there. orqi sets it to `routerUrl()` once whoami has answered,
@@ -381,7 +394,7 @@ pipe will not do, pi needs a tty:
 ```bash
 cat > /tmp/drive.exp <<'EOF'
 log_file -noappend /tmp/tui.log
-spawn -noecho env ORQI_TUI=regular bun src/main.ts
+spawn -noecho env ORQI_TUI=regular bun src/boot.ts
 expect "orqi (aka TonyBot)"
 send "list my agents\r"
 sleep 30
