@@ -2,7 +2,7 @@
  * The footer: one line that says where tool calls go, which model answered,
  * what the session has cost, and how full the context is.
  *
- *   orq:acme · orq/auto → gpt-5.6-sol · think high · ↑88.1k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▂▃▄ · 44 tools      main
+ *   orq.ai · acme · orq/auto → gpt-5.6-sol · think high      ↑88k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools · main
  *
  * `footerLine` is pure (state and width in, string out) so every width band
  * and fill state is testable; `paint` carries the theme.
@@ -83,26 +83,34 @@ export function shortModel(id: string): string {
 }
 
 /**
- * Bands: ≥120 columns shows everything; 100–119 drops the sparkline; under
- * 100 drops the raw token counts too and keeps `ctx ▇▇▇▁▁▁▁┊ 31%`. Anything
- * still too long is truncated, never wrapped.
+ * Two halves: on the left what is answering (workspace, model, effort), on the
+ * right what it costs (tokens, dollars, context, tools, branch). Right-anchored,
+ * the meters keep their column while the model name changes length.
+ *
+ * Bands: ≥120 columns shows everything; 100–119 drops the sparkline and the
+ * tool count; under 100 drops the raw token counts too and keeps
+ * `ctx ▇▇▇▁▁▁▁┊ 31%`. When the halves cannot both fit with a gap they join into
+ * one line, truncated on the right, never wrapped.
  */
 export function footerLine(state: FooterState, width: number, paint: Paint = plain): string {
 	const wide = width >= 120;
 	const medium = width >= 100;
 	const sep = paint.dim(" · ");
-	const parts: string[] = [];
+	const left: string[] = [];
 	// The orq.ai mark leads, with the workspace beside it: "orq:acme" reads as "orq.ai · acme".
 	const workspace = state.workspace?.replace(/^orq:/, "");
-	parts.push(`${(paint.brand ?? paint.text)("orq.ai")}${workspace ? paint.dim(" · ") + paint.text(workspace) : ""}`);
+	left.push(`${(paint.brand ?? paint.text)("orq.ai")}${workspace ? paint.dim(" · ") + paint.text(workspace) : ""}`);
 	if (state.selection) {
 		const physical = state.physical && state.physical !== state.selection ? paint.dim(` → ${shortModel(state.physical)}`) : "";
-		parts.push(`${paint.text(shortModel(state.selection))}${physical}`);
+		left.push(`${paint.text(shortModel(state.selection))}${physical}`);
 	}
 	// Keep the selected model visible at every width; effort needs the medium band.
-	if (medium && state.thinking) parts.push(paint.dim(`think ${state.thinking}`));
-	if (medium && (state.input || state.output)) parts.push(paint.dim(`↑${tokens(state.input)} ↓${tokens(state.output)}`));
-	parts.push(paint.text(dollars(state.cost)));
+	if (medium && state.thinking) left.push(paint.dim(`think ${state.thinking}`));
+	if (state.minimapHidden) left.push(paint.dim("inspector alt+i"));
+
+	const right: string[] = [];
+	if (medium && (state.input || state.output)) right.push(paint.dim(`↑${tokens(state.input)} ↓${tokens(state.output)}`));
+	right.push(paint.text(dollars(state.cost)));
 	if (state.context && state.context.window > 0) {
 		const ratio = state.context.used / state.context.window;
 		const pct = `${Math.round(ratio * 100)}%`;
@@ -111,15 +119,16 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 		let ctx = `${paint.dim("ctx")} ${paintBar(bar)} ${paintBar(pct.padStart(3))}`;
 		if (medium) ctx += paint.dim(` ${tokens(state.context.used)}/${tokens(state.context.window)}`);
 		if (wide && state.samples.length > 0) ctx += ` ${paint.dim(sparkline(state.samples))}`;
-		parts.push(ctx);
+		right.push(ctx);
 	}
-	if (wide && state.tools > 0) parts.push(paint.dim(`${state.tools} tools`));
-	if (state.minimapHidden) parts.push(paint.dim("inspector alt+i"));
-	const left = ` ${parts.join(sep)}`;
-	const right = state.branch ? paint.dim(`${state.branch} `) : "";
-	const gap = width - visibleWidth(left) - visibleWidth(right);
-	if (gap >= 2) return `${left}${" ".repeat(gap)}${right}`;
-	return truncateToWidth(left, width);
+	if (wide && state.tools > 0) right.push(paint.dim(`${state.tools} tools`));
+	if (state.branch) right.push(paint.dim(state.branch));
+
+	const l = ` ${left.join(sep)}`;
+	const r = `${right.join(sep)} `;
+	const gap = width - visibleWidth(l) - visibleWidth(r);
+	if (gap >= 2) return `${l}${" ".repeat(gap)}${r}`;
+	return truncateToWidth(`${l}${sep}${r}`, width);
 }
 
 /** What the fixed header shows: who and where, as opposed to the footer's what and how much. */
