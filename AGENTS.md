@@ -297,12 +297,16 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   sections; its rows live in `inspector-rows.ts`, while `minimapView` and `attachMinimap` keep the old name. pi has no
   side-panel API, and an overlay covers the transcript's right edge, where prose wraps. In
   fullscreen the TUI has a `layoutRoot` (pi's chat viewport, `VStack[transcript, dock]`);
-  `composeLayout` in `src/harness.ts` puts the panel, a fixed 38-column entry, beside the transcript
-  only, so the transcript reflows beside it while pi's dock (editor, widgets, footer) keeps the full
-  width: a footer cut short by the panel read as broken. The cost is panel height: it ends above the
-  dock, so on a short terminal the bottom section (tips) is the first to be clipped. It reads the
-  root's `entries` (two, transcript then dock); a pi that reshapes them falls back to wrapping the
-  whole root, which works but narrows the footer. The reach is guarded: without a `layoutRoot` (regular mode, or a pi that renamed it)
+  `composeLayout` in `src/harness.ts` puts the panel, a fixed 38-column entry, beside the content
+  column: the transcript plus everything pi stacks above the editor (the working line, warnings,
+  notices), so those sit in the content box rather than stretching under the panel. Only the editor
+  and footer keep the full width: a footer cut short by the panel read as broken, and a warning
+  spanning the screen under the panel cut the panel off above it. The cost is panel height: it ends
+  above the editor, so on a short terminal the bottom section (tips) is the first to be clipped.
+  pi's root is `VStack[transcript, dock]` and the dock's `entries` are readable; the editor is the
+  one entry with `minSize: 3`. A dock without one keeps the whole dock full width, and a root that
+  is not `VStack[transcript, dock]` falls back to wrapping the whole root, which works but narrows
+  the footer. The reach is guarded: without a `layoutRoot` (regular mode, or a pi that renamed it)
   the panel falls back to a non-capturing overlay. Either way it shows by itself from 140 columns
   (`MINIMAP_MIN_COLS`); `alt+i` forces it on or off. The trajectory scrolls with the mouse wheel:
   fullscreen routes mouse events to the component under the pointer (`handleMouse`), and scrolling
@@ -327,7 +331,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (`src/onboarding.ts`): dots and the last four characters, never the key, then the same storage and
   recovery as `/login orq`.
 - **A fixed header sits above the transcript, inside the same layout wrap as the inspector.** The
-  wrapper is `VStack(header, HStack(transcript, inspector), dock)`: the header says who and where
+  wrapper is `VStack(header, HStack(content column, inspector), editor + footer)`: the header says who and where
   (workspace, agent, project, routing, connection), the footer what and how much. Regular
   mode has no layout root, so the header becomes a widget above the editor there.
 - **The terminal title is rewritten, not set.** pi writes `π - <dir>` from a name baked into its own
