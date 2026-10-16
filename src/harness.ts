@@ -5,7 +5,7 @@ import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
 import { dollars, footerLine, headerBar, hostLabel, shortModel, tokens, type Paint } from "./footer.ts";
 import {
 	contextLines,
-	memoryLines,
+	processLines,
 	sectionLines,
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
@@ -468,11 +468,11 @@ export function orqHarness(deps: HarnessDeps) {
 				const teach = teachOn
 					? [sectionLines("tips", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")]
 					: [];
-				// Under the trajectory: what needs attention, where the context goes, what orqi holds in memory, then the lesson.
+				// Under the trajectory: what needs attention, where the context goes, what orqi's process holds, then the lesson.
 				const sections = [
 					signalLines(found, inner),
 					...(split ? [contextLines(split, inner)] : []),
-					memoryLines(memory, memoryPeak, inner),
+					processLines(memory, memoryPeak, inner),
 					...teach,
 				];
 				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);

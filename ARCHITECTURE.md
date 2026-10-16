@@ -98,7 +98,7 @@ the footer's cost and pi's `/session` are real numbers rather than zero.
 The side panel is the inspector: the trajectory on top (one row per step, the mouse wheel scrolls
 it), then four sections: signals (a tool called three times with the same arguments in one turn,
 errors, irreversible calls), the context split (system prompt, tool schemas, skills index, messages, as
-characters over four, measured after each run and never in a render), memory (orqi's resident
+characters over four, measured after each run and never in a render), process (orqi's resident
 memory, sampled every 5 s off the render path: now, the last minute, the peak) and tips (on by
 default, `/tips off` hides it; `/teach` is the old name).
 `/context` opens the same split as a table with the levers that move it. On quit, an exit summary of

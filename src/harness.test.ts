@@ -13,7 +13,7 @@ import { exitSummary, orqHarness, repoOf } from "./harness.ts";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
-	memoryLines,
+	processLines,
 	minimapRow,
 	minimapRows,
 	minimapSummary,
@@ -927,17 +927,17 @@ test("panel sections: a rule, an indented body, one calm line when empty", () =>
 	expect(minimapSummary([], 2, 0.014, 1)).toBe("0 steps · turn 2 · $0.014 · ⚠ 1");
 });
 
-test("the memory section: resident memory now, the last minute scaled to the peak, and the peak", () => {
+test("the process section: resident memory now, the last minute scaled to the peak, and the peak", () => {
 	const MB = 1_048_576;
-	const rule = ` ─ memory ${"─".repeat(26)}`;
-	expect(memoryLines([], 0, 36)).toEqual([rule, "  measuring…".padEnd(36)]);
+	const rule = ` ─ process ${"─".repeat(25)}`;
+	expect(processLines([], 0, 36)).toEqual([rule, "  measuring…".padEnd(36)]);
 	const rising = [100, 120, 140, 160, 180, 200, 212, 205, 190, 184, 184, 184, 184].map((mb) => mb * MB);
-	const [head, line] = memoryLines(rising, 212 * MB, 36);
+	const [head, line] = processLines(rising, 212 * MB, 36);
 	expect(head).toBe(rule);
 	// Twelve bars: the oldest sample has scrolled out; the peak is a full block.
 	expect(line!.trimEnd()).toBe("  184 MB  ▅▆▇▇████▇▇▇▇  peak 212 MB");
 	expect(visibleWidth(line!)).toBe(36);
-	expect(memoryLines([1.2 * 1024 * MB], 1.2 * 1024 * MB, 36)[1]!.trimEnd()).toBe("  1.2 GB  █             peak 1.2 GB");
+	expect(processLines([1.2 * 1024 * MB], 1.2 * 1024 * MB, 36)[1]!.trimEnd()).toBe("  1.2 GB  █             peak 1.2 GB");
 });
 
 test("minimap rows mark a call waiting on the gate and the step a teach card is about", () => {
