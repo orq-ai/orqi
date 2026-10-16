@@ -172,9 +172,10 @@ function stageTarballs(root: string, mode = 0o755): string {
 	for (const label of DIST_LABELS) {
 		const payload = join(root, label);
 		mkdirSync(payload);
-		writeVersionBinary(join(payload, "orqi"), label);
-		chmodSync(join(payload, "orqi"), mode);
-		Bun.spawnSync(["tar", "-czf", join(tarballs, `orqi-${label}.tar.gz`), "-C", payload, "orqi"]);
+		const executable = label === "win32-x64" ? "orqi.exe" : "orqi";
+		writeVersionBinary(join(payload, executable), label);
+		chmodSync(join(payload, executable), mode);
+		Bun.spawnSync(["tar", "-czf", join(tarballs, `orqi-${label}.tar.gz`), "-C", payload, executable]);
 	}
 	return tarballs;
 }
@@ -193,13 +194,14 @@ test("npm/stage.mjs builds publishable packages from release tarballs", () => {
 	const platforms = readdirSync(out)
 		.filter((name) => name !== "orqi")
 		.sort();
-	expect(platforms).toEqual(["orqi-darwin-arm64", "orqi-darwin-x64", "orqi-linux-x64"]);
+	expect(platforms).toEqual(["orqi-darwin-arm64", "orqi-darwin-x64", "orqi-linux-arm64", "orqi-linux-x64", "orqi-win32-x64"]);
 	for (const name of platforms) {
 		const [, os, cpu] = name.split("-");
 		expect(manifest(name)).toMatchObject({ name: `@orq-ai/${name}`, version: "9.9.9", os: [os], cpu: [cpu] });
-		const binary = join(out, name, "bin", "orqi");
+		const executable = os === "win32" ? "orqi.exe" : "orqi";
+		const binary = join(out, name, "bin", executable);
 		expect(statSync(binary).mode & 0o111).not.toBe(0);
-		expect(Bun.spawnSync([binary]).stdout.toString().trim()).toBe(`${os.replace("darwin", "macos")}-${cpu}`);
+		if (os !== "win32") expect(Bun.spawnSync([binary]).stdout.toString().trim()).toBe(`${os.replace("darwin", "macos")}-${cpu}`);
 		expect(existsSync(join(out, name, "LICENSE"))).toBe(true);
 	}
 	expect(manifest("orqi").version).toBe("9.9.9");
@@ -290,7 +292,8 @@ test("installMethod tells a brew-managed binary from a plain one", () => {
 	// Any node_modules path reads as npm; whether npm may update it is
 	// updateViaNpm's call, against `npm root -g`.
 	expect(installMethod("/usr/local/lib/node_modules/@orq-ai/orqi-darwin-arm64/bin/orqi")).toBe("npm");
-	expect(installMethod("/Users/x/.bun/bin/bun")).toBe("source"); // basename isn't "orqi"
+	expect(installMethod("C:/npm/node_modules/@orq-ai/orqi-win32-x64/bin/orqi.exe")).toBe("npm");
+	expect(installMethod("/Users/x/.bun/bin/bun")).toBe("source"); // basename isn't an orqi binary
 });
 
 test("assetName covers exactly what install.sh's platform table builds tarballs for", () => {
@@ -305,14 +308,14 @@ test("assetName covers exactly what install.sh's platform table builds tarballs 
 	expect(arms.length).toBeGreaterThan(0); // the scrape still finds the table
 
 	const UNAME_TO_NODE_PLATFORM: Record<string, NodeJS.Platform> = { Darwin: "darwin", Linux: "linux" };
-	const MACHINE_TO_NODE_ARCH: Record<string, string> = { arm64: "arm64", x86_64: "x64" };
+	const MACHINE_TO_NODE_ARCH: Record<string, string> = { arm64: "arm64", aarch64: "arm64", x86_64: "x64" };
 	for (const arm of arms) {
 		const platform = UNAME_TO_NODE_PLATFORM[arm.uname];
 		const arch = MACHINE_TO_NODE_ARCH[arm.mach];
 		expect(assetName(platform, arch)).toBe(`orqi-${arm.platform}.tar.gz`);
 	}
 
-	expect(assetName("linux", "arm64")).toBeUndefined();
+	expect(assetName("linux", "arm64")).toBe("orqi-linux-arm64.tar.gz");
 	expect(assetName("win32", "x64")).toBeUndefined();
 });
 

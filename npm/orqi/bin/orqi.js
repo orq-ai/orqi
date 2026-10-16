@@ -29,7 +29,8 @@ let binaryPath;
 try {
   // Resolved through package.json so npm's own layout rules find the package,
   // wherever it hoisted it to.
-  binaryPath = path.join(path.dirname(require.resolve(`${pkg}/package.json`)), 'bin', 'orqi');
+  const executable = process.platform === 'win32' ? 'orqi.exe' : 'orqi';
+  binaryPath = path.join(path.dirname(require.resolve(`${pkg}/package.json`)), 'bin', executable);
 } catch (err) {
   if (err.code !== 'MODULE_NOT_FOUND') throw err;
   console.error(`@orq-ai/orqi: the platform package ${pkg} was not installed.`);
@@ -45,9 +46,11 @@ const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
 // a supervisor, a closing terminal) would otherwise orphan the binary. A
 // SIGINT sent to this pid alone is dropped on purpose: forwarding it would
 // deliver every terminal Ctrl-C to the binary twice.
-process.on('SIGINT', () => {});
-for (const signal of ['SIGTERM', 'SIGHUP']) {
-  process.on(signal, () => child.kill(signal));
+if (process.platform !== 'win32') {
+  process.on('SIGINT', () => {});
+  for (const signal of ['SIGTERM', 'SIGHUP']) {
+    process.on(signal, () => child.kill(signal));
+  }
 }
 
 // A missing or non-executable binary means a damaged install either way.
@@ -61,6 +64,9 @@ child.on('error', (err) => {
 // sees the same termination it would without the shim.
 child.on('exit', (code, signal) => {
   if (signal) {
+    // Windows does not provide POSIX signal semantics. Its child exit code is
+    // already authoritative, while Unix callers expect the original signal.
+    if (process.platform === 'win32') process.exit(code ?? 1);
     process.removeAllListeners(signal);
     process.kill(process.pid, signal);
     // Node survives some signals it handles itself (SIGPIPE, SIGUSR1); exit

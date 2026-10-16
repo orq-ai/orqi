@@ -18,9 +18,11 @@ const LICENSE = join(NPM_DIR, '..', 'LICENSE');
 // keeps the two in step. The launcher reads the stamped optionalDependencies,
 // so it needs no list of its own.
 const PLATFORMS = [
-  { os: 'darwin', cpu: 'arm64', label: 'macos-arm64' },
-  { os: 'darwin', cpu: 'x64', label: 'macos-x64' },
-  { os: 'linux', cpu: 'x64', label: 'linux-x64' },
+  { os: 'darwin', cpu: 'arm64', label: 'macos-arm64', executable: 'orqi' },
+  { os: 'darwin', cpu: 'x64', label: 'macos-x64', executable: 'orqi' },
+  { os: 'linux', cpu: 'x64', label: 'linux-x64', executable: 'orqi' },
+  { os: 'linux', cpu: 'arm64', label: 'linux-arm64', executable: 'orqi' },
+  { os: 'win32', cpu: 'x64', label: 'win32-x64', executable: 'orqi.exe' },
 ];
 
 const [version, tarballDir, outDir] = process.argv.slice(2);
@@ -45,21 +47,21 @@ const { homepage, repository, bugs, license } = wrapper;
 
 wrapper.version = version;
 wrapper.optionalDependencies = {};
-for (const { os, cpu, label } of PLATFORMS) {
+for (const { os, cpu, label, executable } of PLATFORMS) {
   const name = `@orq-ai/orqi-${os}-${cpu}`;
   const tarball = join(tarballDir, `orqi-${label}.tar.gz`);
   const pkgDir = join(outDir, `orqi-${os}-${cpu}`);
   mkdirSync(join(pkgDir, 'bin'), { recursive: true });
   cpSync(LICENSE, join(pkgDir, 'LICENSE'));
-  execFileSync('tar', ['-xzf', tarball, '-C', join(pkgDir, 'bin'), 'orqi']);
-  // src/update.ts identifies an npm install by a binary named exactly `orqi`
-  // under node_modules, so the name here is load-bearing.
-  if (!(statSync(join(pkgDir, 'bin', 'orqi')).mode & 0o111)) {
+  execFileSync('tar', ['-xzf', tarball, '-C', join(pkgDir, 'bin'), executable]);
+  // src/update.ts identifies npm installs by their path below node_modules.
+  // Windows uses the native executable name, while Unix keeps `orqi`.
+  if (!(statSync(join(pkgDir, 'bin', executable)).mode & 0o111)) {
     console.error(`${tarball} extracted a binary without the exec bit`);
     process.exit(1);
   }
-  // No bin entry: npm never marks bin/orqi executable on its own, which is
-  // why the exec bit above has to survive from the tarball.
+  // No bin entry: npm never restores this executable bit, so it must survive
+  // extraction from the released archive.
   write(pkgDir, {
     name,
     version,
@@ -70,7 +72,7 @@ for (const { os, cpu, label } of PLATFORMS) {
     license,
     os: [os],
     cpu: [cpu],
-    files: ['bin/orqi'],
+    files: [`bin/${executable}`],
   });
   wrapper.optionalDependencies[name] = version;
   console.log(`staged ${name}`);

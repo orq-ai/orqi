@@ -73,7 +73,7 @@ export type InstallMethod = "binary" | "homebrew" | "npm" | "source";
  */
 export function installMethod(execPath: string): InstallMethod {
 	const parts = execPath.split(sep);
-	if (parts[parts.length - 1] !== "orqi") return "source";
+	if (parts[parts.length - 1] !== "orqi" && parts[parts.length - 1] !== "orqi.exe") return "source";
 	// The caller realpaths first, so a Homebrew `bin/orqi` symlink resolves into
 	// its Cellar. The prefix alone proves nothing: ORQI_INSTALL_DIR can put a
 	// plain binary anywhere, including /opt/homebrew/bin.
@@ -82,11 +82,12 @@ export function installMethod(execPath: string): InstallMethod {
 	return "binary";
 }
 
-/** Exactly the three platforms `install.sh` builds tarballs for. */
+/** Platforms with a direct binary self-update path. Windows uses npm only. */
 export function assetName(platform: NodeJS.Platform = process.platform, arch: string = process.arch): string | undefined {
 	if (platform === "darwin" && arch === "arm64") return "orqi-macos-arm64.tar.gz";
 	if (platform === "darwin" && arch === "x64") return "orqi-macos-x64.tar.gz";
 	if (platform === "linux" && arch === "x64") return "orqi-linux-x64.tar.gz";
+	if (platform === "linux" && arch === "arm64") return "orqi-linux-arm64.tar.gz";
 	return undefined;
 }
 

@@ -30,8 +30,10 @@ Pulls the latest release binary, no clone, no Bun. With Node installed, npm work
 npm install -g @orq-ai/orqi
 ```
 
-npm installs only the binary for your platform (macOS arm64, macOS x64, linux x64). `orqi update`
-works for both: an npm install is updated through npm.
+npm installs only the binary for your platform: macOS arm64/x64, Linux
+x64/arm64, or Windows x64. On Windows, npm is the supported installer;
+`install.sh` is for macOS and Linux. `orqi update` works for both: an npm
+install is updated through npm.
 
 Both installers check the download against the `.sha256` published with each release and refuse
 to install on a mismatch. `gh attestation verify orqi-linux-x64.tar.gz -R orq-ai/orqi` proves which
