@@ -13,11 +13,11 @@ import { exitSummary, orqHarness, repoOf } from "./harness.ts";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
-	processLines,
 	minimapRow,
 	minimapRows,
 	minimapSummary,
 	peekLines,
+	processLines,
 	sectionLines,
 	signalLines,
 	type ContextSplit,

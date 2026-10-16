@@ -5,13 +5,13 @@ import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
 import { dollars, footerLine, headerBar, hostLabel, shortModel, tokens, type Paint } from "./footer.ts";
 import {
 	contextLines,
-	processLines,
 	sectionLines,
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
 	minimapRows,
 	minimapSummary,
 	peekLines,
+	processLines,
 	signalLines,
 	SPINNER,
 	type ContextSplit,
@@ -223,14 +223,14 @@ export function orqHarness(deps: HarnessDeps) {
 		let frame = 0;
 		let spinTimer: ReturnType<typeof setInterval> | undefined;
 		// Resident memory, sampled off the render path: the last twelve readings and the peak.
-		const memory: number[] = [];
-		let memoryPeak = 0;
-		let memoryTimer: ReturnType<typeof setInterval> | undefined;
-		const sampleMemory = () => {
-			const rss = process.memoryUsage.rss();
-			memory.push(rss);
-			if (memory.length > 12) memory.shift();
-			memoryPeak = Math.max(memoryPeak, rss);
+		const rss: number[] = [];
+		let rssPeak = 0;
+		let rssTimer: ReturnType<typeof setInterval> | undefined;
+		const sampleRss = () => {
+			const now = process.memoryUsage.rss();
+			rss.push(now);
+			if (rss.length > 12) rss.shift();
+			rssPeak = Math.max(rssPeak, now);
 			render();
 		};
 		let resolvedWorkspace: string | undefined;
@@ -472,7 +472,7 @@ export function orqHarness(deps: HarnessDeps) {
 				const sections = [
 					signalLines(found, inner),
 					...(split ? [contextLines(split, inner)] : []),
-					processLines(memory, memoryPeak, inner),
+					processLines(rss, rssPeak, inner),
 					...teach,
 				];
 				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
@@ -640,10 +640,10 @@ export function orqHarness(deps: HarnessDeps) {
 		// ── events ────────────────────────────────────────────────────────────
 		pi.on("session_start", (_event, ctx) => {
 			ctxRef = ctx;
-			if (ctx.mode === "tui" && !memoryTimer) {
-				sampleMemory();
-				memoryTimer = setInterval(sampleMemory, 5000);
-				memoryTimer.unref?.();
+			if (ctx.mode === "tui" && !rssTimer) {
+				sampleRss();
+				rssTimer = setInterval(sampleRss, 5000);
+				rssTimer.unref?.();
 			}
 			// Every session is a thread: /new and /fork mint a new id, /resume keeps
 			// the file's own. The provider headers read this per request.
@@ -678,8 +678,8 @@ export function orqHarness(deps: HarnessDeps) {
 			}
 			if (spinTimer) clearInterval(spinTimer);
 			spinTimer = undefined;
-			if (memoryTimer) clearInterval(memoryTimer);
-			memoryTimer = undefined;
+			if (rssTimer) clearInterval(rssTimer);
+			rssTimer = undefined;
 			releaseKeys?.();
 			releaseKeys = undefined;
 			stopDecisions?.();
