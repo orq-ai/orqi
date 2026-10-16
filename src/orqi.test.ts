@@ -253,6 +253,16 @@ test("pi names itself orqi and reads .orqi/, decided before it loads", () => {
 	expect(JSON.parse(out.stdout.toString().trim())).toEqual(["orqi", "orqi", ".orqi", "ORQI_CODING_AGENT_DIR", true, true]);
 });
 
+test("main.ts refuses to run without boot.ts, which is what makes pi orqi", () => {
+	const root = join(import.meta.dir, "..");
+	const env = { ...process.env, ORQI_BOOT: "" };
+	const direct = Bun.spawnSync(["bun", join(root, "src", "main.ts"), "--version"], { cwd: root, env });
+	expect(direct.exitCode).toBe(2);
+	expect(direct.stderr.toString()).toContain("src/boot.ts");
+	const booted = Bun.spawnSync(["bun", join(root, "src", "boot.ts"), "--version"], { cwd: root, env });
+	expect(booted.exitCode).toBe(0);
+});
+
 test("--session resolves a path, an exact id, a prefix, and reports another directory's session", async () => {
 	const lookup = {
 		findById: (_cwd: string, id: string) => (id === "01a1-6b7b" ? "/s/exact.jsonl" : undefined),

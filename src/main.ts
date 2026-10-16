@@ -65,6 +65,14 @@ async function openSession(arg: string): Promise<SessionManager> {
 }
 import { brandBuiltinCommands, redirectPiBugCommand } from "./bug.ts";
 
+// pi takes its name and project dir from the package.json src/boot.ts points it
+// at, and reads it when first imported. Loaded any other way, this process is pi:
+// `.pi/` project settings and sessions in ~/.pi/agent, beside the user's own pi.
+if (process.env.ORQI_BOOT !== "1") {
+	console.error("start orqi with src/boot.ts (bun src/boot.ts), not src/main.ts");
+	process.exit(2);
+}
+
 // `orqi --session <id>` resumes a session (the command pi's quit hint names);
 // anything else in argv[2] is a one-shot prompt.
 const sessionArg = process.argv[2] === "--session" ? (process.argv[3] ?? "") : undefined;
@@ -331,7 +339,7 @@ function repoName(): string {
 }
 
 // src/boot.ts unpacked the assets (or found the checkout) and set PI_PACKAGE_DIR
-// before pi loaded; run directly, main.ts falls back to the checkout.
+// before pi loaded.
 const pkgDir = process.env.ORQI_ASSET_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..");
 // The @spences10/pi-themes pack, lightened where its text misses the contrast
 // floor (scripts/lift-themes.ts). It lives in themes/pack so the build embeds it

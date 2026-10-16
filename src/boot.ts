@@ -17,7 +17,7 @@
  * binary to prove it executes, and that must not write anything.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,16 +31,29 @@ async function assetDir(): Promise<string> {
 	if (existsSync(join(ROOT, "src", "system-prompt.txt"))) return ROOT;
 	const { ASSETS, HASH } = await import("./assets.generated.ts");
 	const unpacked = join(AGENT_DIR, "assets", HASH);
-	if (!existsSync(unpacked)) {
-		for (const [path, content] of Object.entries(ASSETS)) {
-			const target = join(unpacked, path);
-			mkdirSync(dirname(target), { recursive: true });
-			writeFileSync(target, content);
-		}
+	if (existsSync(unpacked)) return unpacked;
+	// Unpacked beside the target, then renamed into place: the dir existing is what
+	// says "complete", so an interrupted or concurrent first run must never leave a
+	// partial tree under that name. If another process renamed first, use theirs.
+	mkdirSync(dirname(unpacked), { recursive: true });
+	const staging = mkdtempSync(`${unpacked}.partial-`);
+	for (const [path, content] of Object.entries(ASSETS)) {
+		const target = join(staging, path);
+		mkdirSync(dirname(target), { recursive: true });
+		writeFileSync(target, content);
+	}
+	try {
+		renameSync(staging, unpacked);
+	} catch {
+		rmSync(staging, { recursive: true, force: true });
+		if (!existsSync(unpacked)) throw new Error(`could not unpack orqi's assets into ${unpacked}`);
 	}
 	return unpacked;
 }
 
+// main.ts refuses to run without this: loaded directly, pi would already have
+// read its default package and run as pi, sessions in ~/.pi/agent.
+process.env.ORQI_BOOT = "1";
 if (!["--version", "-v", "--help", "-h"].includes(process.argv[2] ?? "")) {
 	const assets = await assetDir();
 	process.env.ORQI_ASSET_DIR = assets;

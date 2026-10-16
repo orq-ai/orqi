@@ -25,6 +25,11 @@ export function piPackageDir(assets: string, root: string): string {
 	const dir = join(root, "node_modules", ".orqi-pi");
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(join(dir, "package.json"), orqiPiPackage(readFileSync(join(pi, "package.json"), "utf8")));
-	if (!existsSync(join(dir, "dist"))) symlinkSync(join(pi, "dist"), join(dir, "dist"), "dir");
+	// Two orqi processes started from source at once may both get here; the loser's EEXIST is fine.
+	try {
+		symlinkSync(join(pi, "dist"), join(dir, "dist"), "dir");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+	}
 	return dir;
 }
