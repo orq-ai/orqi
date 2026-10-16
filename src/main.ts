@@ -11,7 +11,7 @@
  *   orqi --version       print the version and exit
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,8 +49,8 @@ import { orqHarness, repoOf } from "./harness.ts";
 import { createLocalFileTools } from "./local-tools.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { runUpdate } from "./update.ts";
-import { resolveSession, resumeHint } from "./resume.ts";
-import { projectTrusted } from "./trust.ts";
+import { resolveSession } from "./resume.ts";
+import { projectTrusted, rebrandTrustWarning } from "./trust.ts";
 
 /** The SessionManager for `--session <arg>`, or a clear exit when it names nothing here. */
 async function openSession(arg: string): Promise<SessionManager> {
@@ -330,51 +330,27 @@ function repoName(): string {
 	}
 }
 
-/**
- * Where skills, themes and the system prompt live.
- *
- * A compiled binary has no package directory, so `bun run build` bakes the
- * asset tree into a generated module and it is unpacked here on first run.
- * Running from source skips all that and uses the files in place.
- */
-async function assetDir(): Promise<string> {
-	const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "..");
-	if (existsSync(join(pkgDir, "src", "system-prompt.txt"))) return pkgDir;
-
-	const { ASSETS, HASH } = await import("./assets.generated.ts");
-	const unpacked = join(AGENT_DIR, "assets", HASH);
-	if (!existsSync(unpacked)) {
-		for (const [path, content] of Object.entries(ASSETS)) {
-			const target = join(unpacked, path);
-			mkdirSync(dirname(target), { recursive: true });
-			writeFileSync(target, content);
-		}
-	}
-	return unpacked;
-}
-
-const pkgDir = await assetDir();
+// src/boot.ts unpacked the assets (or found the checkout) and set PI_PACKAGE_DIR
+// before pi loaded; run directly, main.ts falls back to the checkout.
+const pkgDir = process.env.ORQI_ASSET_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..");
 // The @spences10/pi-themes pack, lightened where its text misses the contrast
 // floor (scripts/lift-themes.ts). It lives in themes/pack so the build embeds it
 // with the rest of themes/; pi's theme dir loader does not recurse, hence its own
 // additionalThemePaths entry.
 const THEME_PACK = join(pkgDir, "themes", "pack");
-// A compiled pi reads its built-in themes (/settings) and HTML export template
-// (/export) from beside its executable, where orqi ships none: /settings died on
-// ENOENT for ~/.local/bin/theme/dark.json. They ride in the assets under pi/
-// (scripts/build.ts); from source, pi finds them in node_modules by itself.
-if (existsSync(join(pkgDir, "pi"))) process.env.PI_PACKAGE_DIR ??= join(pkgDir, "pi");
 
 // Pi owns these commands, so extension commands cannot replace their legend
 // or dispatch. Rebrand the list and replace `/bug` before InteractiveMode is
 // constructed; reports go to orqi, never pi's diagnostics-upload flow.
 brandBuiltinCommands(BUILTIN_SLASH_COMMANDS);
 redirectPiBugCommand(InteractiveMode as any);
+rebrandTrustWarning(InteractiveMode as any);
 
 // pi derives every default path it is not handed (session files, /resume's
 // list, /new and /fork) from this variable, so setting it is what keeps orqi's
 // sessions out of ~/.pi/agent/sessions, where they mixed with the user's own pi.
-process.env.PI_CODING_AGENT_DIR ??= AGENT_DIR;
+// Its name follows piConfig.name (src/pi-package.ts): ORQI_, not PI_.
+process.env.ORQI_CODING_AGENT_DIR ??= AGENT_DIR;
 
 // pi's update notice points at pi.dev and tells the user to run `pi update`,
 // neither of which applies to this binary. The header links orq's changelog.
@@ -754,15 +730,6 @@ try {
 			agentDir: AGENT_DIR,
 			sessionManager: sessionArg ? await openSession(sessionArg) : SessionManager.create(process.cwd()),
 		});
-		// pi prints its resume hint with its own name after the TUI stops, from a
-		// constant baked into its package; rewrite it on the way out, as brandTitle
-		// does for the terminal title.
-		const write = process.stdout.write.bind(process.stdout);
-		process.stdout.write = ((chunk: unknown, ...rest: unknown[]) =>
-			(write as (...args: unknown[]) => boolean)(
-				typeof chunk === "string" ? resumeHint(chunk) : chunk,
-				...rest,
-			)) as typeof process.stdout.write;
 		await new InteractiveMode(runtime, {}).run();
 		await runtime.dispose();
 	}

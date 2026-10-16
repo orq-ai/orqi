@@ -1,18 +1,9 @@
 /**
- * Resuming a session: `orqi --session <id>`, and the hint pi prints on quit.
- *
- * pi ends every interactive session with "To resume this session: pi --session
- * <id>", built from the app name baked into its own package. orqi neither runs
- * as `pi` nor used to accept `--session`, so the hint led nowhere twice over.
+ * Resuming a session: `orqi --session <id>`, the command pi's quit hint names
+ * ("To resume this session: orqi --session <id>", from piConfig.name).
  */
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-
-/** pi's quit hint with orqi's name in it; any other text passes through untouched. */
-export function resumeHint(text: string): string {
-	if (!text.includes("To resume this session:")) return text;
-	return text.replace(/ pi (--session(?:-dir)? )/, " orqi $1");
-}
 
 export type ResolvedSession = { path: string } | { elsewhere: string } | { missing: true };
 

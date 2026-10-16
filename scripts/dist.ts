@@ -35,7 +35,7 @@ mkdirSync(OUT, { recursive: true });
 
 for (const { target, label, executable } of TARGETS) {
 	const binary = join(OUT, executable);
-	await $`bun build --compile --target=${target} --outfile ${binary} ${join(ROOT, "src/main.ts")}`.quiet();
+	await $`bun build --compile --target=${target} --outfile ${binary} ${join(ROOT, "src/boot.ts")}`.quiet();
 	const archive = `orqi-${label}.tar.gz`;
 	await $`tar -czf ${join(OUT, archive)} -C ${OUT} ${executable}`;
 	// The sidecar install.sh and `orqi update` verify against; release.yml uploads it with the tarball.

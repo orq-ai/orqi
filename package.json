@@ -5,15 +5,15 @@
 	"type": "module",
 	"description": "orqi - the orq.ai helper agent CLI: pi coding agent with orq MCP tools and skills built in",
 	"bin": {
-		"orqi": "./src/main.ts"
+		"orqi": "./src/boot.ts"
 	},
 	"scripts": {
-		"start": "bun src/main.ts",
+		"start": "bun src/boot.ts",
 		"typecheck": "bun run assets && tsc --noEmit",
 		"test": "bun test",
 		"assets": "bun scripts/build.ts",
 		"vendor": "bun scripts/vendor.ts",
-		"build": "bun run assets && bun build --compile --outfile orqi src/main.ts",
+		"build": "bun run assets && bun build --compile --outfile orqi src/boot.ts",
 		"dist": "bun scripts/dist.ts",
 		"format": "biome format --write",
 		"format:check": "biome format",

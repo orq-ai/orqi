@@ -24,6 +24,8 @@ orqi
 
 | File | Does |
 |---|---|
+| `src/boot.ts` | Entry point: unpacks the assets and sets `PI_PACKAGE_DIR` before pi loads, then imports `main.ts` |
+| `src/pi-package.ts` | pi's `package.json` with orqi's `piConfig` (app name `orqi`, project dir `.orqi`) |
 | `src/main.ts` | Wiring and startup order; one-shot vs `InteractiveMode` |
 | `src/auth.ts` | Credential candidates, workspace resolution, `runOrq()` |
 | `src/mcp.ts` | The `orq` server registered with pi's MCP, credential choice, result rendering, hints |

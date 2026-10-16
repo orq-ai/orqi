@@ -141,25 +141,6 @@ export function repoOf(remote: string): string {
 	return parts.length >= 2 ? parts.slice(-2).join("/") : (parts[0] ?? "");
 }
 
-const TITLE = Symbol.for("orqi.title");
-
-/**
- * The terminal title says orqi, not pi. pi writes `π - <dir>` itself at
- * startup and on session changes, from a name baked into its own package, so
- * there is no setting; the terminal's setTitle is wrapped once (marked, so a
- * new session or /reload does not wrap it again) to swap the mark.
- */
-export function brandTitle(tui: unknown, cwd = process.cwd()): void {
-	const terminal = (tui as { terminal?: { setTitle?(title: string): void; [TITLE]?: boolean } })?.terminal;
-	if (!terminal?.setTitle) return;
-	if (!terminal[TITLE]) {
-		const original = terminal.setTitle.bind(terminal);
-		terminal.setTitle = (title: string) => original(title.replace(/^π(?= |$)/, "orqi"));
-		terminal[TITLE] = true;
-	}
-	terminal.setTitle(`orqi - ${cwd.split("/").filter(Boolean).at(-1) ?? ""}`);
-}
-
 /** A short hex id is what the header falls back to without a session; Studio routes need the key. */
 const looksLikeKey = (workspace: string | undefined): workspace is string => Boolean(workspace && !/^[0-9a-f]{8}$/.test(workspace));
 
@@ -392,7 +373,6 @@ export function orqHarness(deps: HarnessDeps) {
 				attachMinimap(tui, theme, ctx);
 				const unsub = footerData.onBranchChange(() => tui.requestRender());
 				statusOf = (key) => footerData.getExtensionStatuses().get(key);
-				brandTitle(tui);
 				const paint: Paint = {
 					brand: (s) => theme.bold(theme.fg("accent", s)),
 					dim: (s) => theme.fg("dim", s),

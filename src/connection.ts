@@ -20,6 +20,7 @@ import { refreshStoredSignIn, signInExpired } from "./oauth.ts";
 import { checkNow, currentUpdateCommand, isNewer, maybeCheckUpdate, pendingUpdate, readCache, updateNotice } from "./update.ts";
 import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
+import { LEGACY_PROJECT_DIR, legacyProjectDir } from "./trust.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { checkRows, doctorHeader, noticeText, parseDoctor, redactKeys, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
 import { parseWorkspaces, sortWorkspaces, workspaceRows } from "./workspaces.ts";
@@ -406,6 +407,7 @@ export function orqCommands(
 			// workspace a tool call just hit.
 			showWorkspace(ctx);
 			if (event.reason === "startup" && ctx.hasUI) void announceUpdate(ctx);
+			if (event.reason === "startup" && ctx.hasUI && legacyProjectDir(process.cwd())) ctx.ui.notify(LEGACY_PROJECT_DIR, "warning");
 			// Pinned rather than notified: a notify scrolls away with the first
 			// answer, and the user has to see this until it is fixed. Once, not twice.
 			if (rejections.length > 0 || loginRefused) showAuth(ctx);
