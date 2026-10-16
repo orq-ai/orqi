@@ -81,20 +81,37 @@ const WORKSPACE_STATUS = "orq-workspace";
 type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: number; shrink?: number; minSize?: number };
 
 /**
- * orqi's fullscreen layout: the header on top, then the panel beside the transcript, then pi's input
- * dock (editor, widgets, footer) across the full width, so the footer is never cut short by the panel.
- * pi's root is `VStack[transcript, dock]` and its entries are readable; a pi that reshapes it falls back
- * to the panel beside the whole root, which still works but narrows the footer.
+ * orqi's fullscreen layout: the header on top, then the panel beside the content column, then the
+ * editor and footer across the full width, so the footer is never cut short by the panel.
+ *
+ * pi's root is `VStack[transcript, dock]` and the dock is `VStack[pending, status, widgets above,
+ * editor, widgets below, footer]`; all of it is readable. The content column is the transcript plus
+ * everything above the editor (the working line, warnings, notices), so those sit in the content box
+ * with the panel beside them instead of stretching under it. The editor is the dock's one entry with
+ * `minSize: 3`. A dock without one keeps the whole dock full width; a root that is not
+ * `VStack[transcript, dock]` falls back to the panel beside all of it, which narrows the footer.
  */
 export function composeLayout(inner: Component, header: Component, panel: StackEntryLike): VStack {
 	const entries = (inner as { entries?: StackEntryLike[] }).entries;
 	const [transcript, dock] = entries?.length === 2 ? entries : [];
-	const beside = transcript && dock ? transcript.component : inner;
-	const body = new HStack([{ component: beside, grow: 1, shrink: 1, basis: 0 }, panel]);
+	const dockEntries = (dock?.component as { entries?: StackEntryLike[] } | undefined)?.entries;
+	const editorAt = dockEntries?.findIndex((entry) => entry.minSize === 3) ?? -1;
+
+	let column: Component = inner;
+	const lower: StackEntryLike[] = [];
+	if (transcript && dock) {
+		if (dockEntries && editorAt > 0) {
+			column = new VStack([{ ...transcript, minSize: 1 }, ...dockEntries.slice(0, editorAt)]);
+			lower.push({ component: new VStack(dockEntries.slice(editorAt)), basis: "auto", grow: 0, shrink: 1, minSize: 1 });
+		} else {
+			column = transcript.component;
+			lower.push(dock);
+		}
+	}
 	return new VStack([
 		{ component: header, basis: 2, shrink: 0 },
-		{ component: body, grow: 1, shrink: 1, basis: 0 },
-		...(transcript && dock ? [dock] : []),
+		{ component: new HStack([{ component: column, grow: 1, shrink: 1, basis: 0 }, panel]), grow: 1, shrink: 1, basis: 0 },
+		...lower,
 	]);
 }
 

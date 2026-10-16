@@ -106,22 +106,34 @@ test("the theme pack loads in pi and shadows no theme", async () => {
 	expect(existsSync(join(pack, "LICENSE"))).toBe(true);
 });
 
-test("the panel sits beside the transcript and the footer keeps the full width", async () => {
+test("the panel sits beside the content column and the editor and footer keep the full width", async () => {
 	const { VStack } = await import("@earendil-works/pi-tui");
 	const part = () => ({ render: () => [], invalidate() {} });
-	const [transcript, dock, header, panel] = [part(), part(), part(), part()];
-	const entry = (component: any, extra = {}) => ({ component, basis: "auto" as const, grow: 0, shrink: 1, minSize: 1, ...extra });
-	const piRoot = new VStack([entry(transcript, { basis: 0, grow: 1 }), entry(dock)]);
+	const [transcript, notice, editor, footer, header, panel] = [part(), part(), part(), part(), part(), part()];
+	const entry = (component: any, extra = {}) => ({ component, basis: "auto" as const, grow: 0, shrink: 1, minSize: 0, ...extra });
+	const dock = new VStack([entry(notice), entry(editor, { minSize: 3 }), entry(footer)]);
+	const piRoot = new VStack([entry(transcript, { basis: 0, grow: 1, minSize: 1 }), entry(dock, { minSize: 1 })]);
+	const children = (stack: any) => stack.entries.map((e: any) => e.component);
+	const lay = (root: any) => (composeLayout(root, header, { component: panel, basis: 10, shrink: 0 }) as any).entries;
 
-	// header, then transcript + panel side by side, then pi's dock across the full width
-	const [top, body, bottom] = (composeLayout(piRoot, header, { component: panel, basis: 10, shrink: 0 }) as any).entries;
+	// header; then [transcript + notices] beside the panel; then editor + footer across the full width
+	const [top, body, bottom] = lay(piRoot);
 	expect(top.component).toBe(header);
-	expect(body.component.entries.map((e: any) => e.component)).toEqual([transcript, panel]);
-	expect(bottom.component).toBe(dock);
+	const [column, side] = body.component.entries.map((e: any) => e.component);
+	expect(side).toBe(panel);
+	expect(children(column)).toEqual([transcript, notice]);
+	expect(children(bottom.component)).toEqual([editor, footer]);
+
+	// A dock with no editor entry keeps the whole dock full width.
+	const plainDock = new VStack([entry(notice), entry(footer)]);
+	const noEditor = new VStack([entry(transcript, { basis: 0, grow: 1 }), entry(plainDock)]);
+	const [, body2, bottom2] = lay(noEditor);
+	expect(body2.component.entries[0].component).toBe(transcript);
+	expect(bottom2.component).toBe(plainDock);
 
 	// A pi that reshapes its root: the panel falls back to sitting beside all of it, nothing is lost.
 	const odd = part();
-	const fallback = (composeLayout(odd as any, header, { component: panel, basis: 10, shrink: 0 }) as any).entries;
+	const fallback = lay(odd);
 	expect(fallback.length).toBe(2);
 	expect(fallback[1].component.entries.map((e: any) => e.component)).toEqual([odd, panel]);
 });
