@@ -293,9 +293,13 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **The inspector reaches into pi's fullscreen layout root.** It was the minimap until it grew
   sections; its rows live in `inspector-rows.ts`, while `minimapView` and `attachMinimap` keep the old name. pi has no
   side-panel API, and an overlay covers the transcript's right edge, where prose wraps. In
-  fullscreen the TUI has a `layoutRoot` (pi's chat viewport); `attachMinimap` in `src/harness.ts`
-  wraps it in an `HStack` with the panel as a fixed 38-column entry, so the transcript reflows
-  beside it. The reach is guarded: without a `layoutRoot` (regular mode, or a pi that renamed it)
+  fullscreen the TUI has a `layoutRoot` (pi's chat viewport, `VStack[transcript, dock]`);
+  `composeLayout` in `src/harness.ts` puts the panel, a fixed 38-column entry, beside the transcript
+  only, so the transcript reflows beside it while pi's dock (editor, widgets, footer) keeps the full
+  width: a footer cut short by the panel read as broken. The cost is panel height: it ends above the
+  dock, so on a short terminal the bottom section (tips) is the first to be clipped. It reads the
+  root's `entries` (two, transcript then dock); a pi that reshapes them falls back to wrapping the
+  whole root, which works but narrows the footer. The reach is guarded: without a `layoutRoot` (regular mode, or a pi that renamed it)
   the panel falls back to a non-capturing overlay. Either way it shows by itself from 140 columns
   (`MINIMAP_MIN_COLS`); `alt+i` forces it on or off. The trajectory scrolls with the mouse wheel:
   fullscreen routes mouse events to the component under the pointer (`handleMouse`), and scrolling
@@ -320,7 +324,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (`src/onboarding.ts`): dots and the last four characters, never the key, then the same storage and
   recovery as `/login orq`.
 - **A fixed header sits above the transcript, inside the same layout wrap as the inspector.** The
-  wrapper is `VStack(header, HStack(pi's root, inspector))`: the header says who and where
+  wrapper is `VStack(header, HStack(transcript, inspector), dock)`: the header says who and where
   (workspace, agent, project, routing, connection), the footer what and how much. Regular
   mode has no layout root, so the header becomes a widget above the editor there.
 - **The terminal title is rewritten, not set.** pi writes `π - <dir>` from a name baked into its own

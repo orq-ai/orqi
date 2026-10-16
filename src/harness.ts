@@ -78,6 +78,26 @@ export function routeLine(
 
 const WORKSPACE_STATUS = "orq-workspace";
 
+type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: number; shrink?: number; minSize?: number };
+
+/**
+ * orqi's fullscreen layout: the header on top, then the panel beside the transcript, then pi's input
+ * dock (editor, widgets, footer) across the full width, so the footer is never cut short by the panel.
+ * pi's root is `VStack[transcript, dock]` and its entries are readable; a pi that reshapes it falls back
+ * to the panel beside the whole root, which still works but narrows the footer.
+ */
+export function composeLayout(inner: Component, header: Component, panel: StackEntryLike): VStack {
+	const entries = (inner as { entries?: StackEntryLike[] }).entries;
+	const [transcript, dock] = entries?.length === 2 ? entries : [];
+	const beside = transcript && dock ? transcript.component : inner;
+	const body = new HStack([{ component: beside, grow: 1, shrink: 1, basis: 0 }, panel]);
+	return new VStack([
+		{ component: header, basis: 2, shrink: 0 },
+		{ component: body, grow: 1, shrink: 1, basis: 0 },
+		...(transcript && dock ? [dock] : []),
+	]);
+}
+
 /** Marks orqi's HStack around pi's layout root, so a later session or /reload unwraps it instead of nesting. */
 const SIDE = Symbol.for("orqi.minimap.side");
 
@@ -533,9 +553,9 @@ export function orqHarness(deps: HarnessDeps) {
 
 		/**
 		 * Fullscreen: give the minimap its own columns. pi's fullscreen layout is
-		 * a layout root on the TUI, so wrapping it in an HStack puts the panel
-		 * beside the transcript, which reflows to the narrower width instead of
-		 * running underneath. pi has no public hook for this, hence the guarded
+		 * a layout root on the TUI, so composeLayout puts the panel beside the
+		 * transcript, which reflows to the narrower width instead of running
+		 * underneath, while the editor and footer keep the full width. pi has no public hook for this, hence the guarded
 		 * reach into `layoutRoot`; when it is not there (regular mode, or a pi
 		 * that renamed it) the panel falls back to an overlay.
 		 */
@@ -551,12 +571,8 @@ export function orqHarness(deps: HarnessDeps) {
 					shrink: 0,
 					visible: (viewport: { width: number }) => minimapVisible(viewport.width),
 				};
-				const body = new HStack([{ component: inner, grow: 1, shrink: 1, basis: 0 }, panelEntry]);
 				// The fixed header sits above both: who and where, while the footer says what and how much.
-				const wrapper = new VStack([
-					{ component: headerView(theme as never), basis: 2, shrink: 0 },
-					{ component: body, grow: 1, shrink: 1, basis: 0 },
-				]) as VStack & { [SIDE]?: Component };
+				const wrapper = composeLayout(inner, headerView(theme as never), panelEntry) as VStack & { [SIDE]?: Component };
 				wrapper[SIDE] = inner;
 				headerShown = true;
 				sideRoot = wrapper;
