@@ -11,7 +11,7 @@
  *   orqi --version       print the version and exit
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -352,6 +352,11 @@ async function assetDir(): Promise<string> {
 }
 
 const pkgDir = await assetDir();
+// The @spences10/pi-themes pack, lightened where its text misses the contrast
+// floor (scripts/lift-themes.ts). It lives in themes/pack so the build embeds it
+// with the rest of themes/; pi's theme dir loader does not recurse, hence its own
+// additionalThemePaths entry.
+const THEME_PACK = join(pkgDir, "themes", "pack");
 // A compiled pi reads its built-in themes (/settings) and HTML export template
 // (/export) from beside its executable, where orqi ships none: /settings died on
 // ENOENT for ~/.local/bin/theme/dark.json. They ride in the assets under pi/
@@ -573,7 +578,7 @@ const makeServices = async () => {
 			// offered twice, so pi has no collision to report at startup.
 			additionalSkillPaths: plugin.additionalSkillPaths,
 			additionalPromptTemplatePaths: plugin.additionalPromptTemplatePaths,
-			additionalThemePaths: [join(pkgDir, "themes")],
+			additionalThemePaths: [join(pkgDir, "themes"), THEME_PACK],
 			extensionFactories: [
 				// pi's own MCP client (built in for the CLI, opt-in for SDK sessions), and the orq server on it.
 				createMcpExtension(),
@@ -618,7 +623,9 @@ const makeServices = async () => {
 	// (blue-led, Blueprint) and orq-signal (colorblind-safe vermillion + sky, pass
 	// is blue and fail is orange so status never leans on red-vs-green alone).
 	// All are on additionalThemePaths, so pi's own /theme picker lists them either
-	// way and a session can switch without restarting. A light theme cannot ship
+	// way and a session can switch without restarting. The @spences10/pi-themes
+	// pack (THEME_PACK) rides beside them, lightened to the same contrast floor.
+	// A light theme cannot ship
 	// here: the contrast floor is checked against the lightest plausible terminal
 	// background (#282C34), which no light-skin text colour could clear.
 	const THEMES: Record<string, string> = {
@@ -629,8 +636,11 @@ const makeServices = async () => {
 		signal: "orq-signal",
 	};
 	// orq-dark is the default: amber with turquoise for success and red for errors,
-	// so a failed tool call reads as one. An unknown ORQI_THEME falls back to it too.
-	created.settingsManager.setTheme(THEMES[process.env.ORQI_THEME ?? "dark"] ?? "orq-dark");
+	// so a failed tool call reads as one. ORQI_THEME also takes a theme pack name
+	// (tokyo-night); anything unknown falls back to orq-dark.
+	const wanted = process.env.ORQI_THEME ?? "dark";
+	const packed = existsSync(THEME_PACK) ? readdirSync(THEME_PACK).map((f) => f.replace(/\.json$/, "")) : [];
+	created.settingsManager.setTheme(THEMES[wanted] ?? (packed.includes(wanted) ? wanted : "orq-dark"));
 	// Silence pi's own startup header - it pitches pi, and this CLI prints its own.
 	// ctrl+o still shows the full help and loaded resources on demand.
 	created.settingsManager.setQuietStartup(true);
