@@ -69,7 +69,7 @@ const absent = (value: unknown) => value === undefined || value === null;
 export function isMemorqState(data: unknown): data is MemorqState {
 	if (!isObject(data)) return false;
 	// `enabled` is not checked: a value orqi does not know (a newer memorq's) reads as on rather than losing the state.
-	const { notes, usedThisTurn, stores, review, learned, paused } = data;
+	const { notes, usedThisTurn, stores, review, paused } = data;
 	if (typeof notes !== "number" || typeof usedThisTurn !== "number" || typeof paused !== "boolean") return false;
 	if (!isObject(stores) || !["notes", "rules", "skills"].every((kind) => typeof stores[kind] === "string")) return false;
 	if (!absent(review)) {
@@ -80,7 +80,8 @@ export function isMemorqState(data: unknown): data is MemorqState {
 		if (!running && !due && !failed) return false;
 		if (!absent(review.dueInSessions) && !due) return false;
 	}
-	return absent(learned) || isLearned(learned);
+	// A malformed `learned` does not lose the state: readers check it with `isLearned` and drop it.
+	return true;
 }
 
 /** A learn as memorq reports it and as an `orqi-memory` entry stores it: a count, a trigger, when, and maybe its cost. */
@@ -98,9 +99,14 @@ export function learnPhrase(trigger: string, pct?: unknown): string {
 	return Object.hasOwn(TRIGGER, trigger) ? TRIGGER[trigger]! : `on ${printable(String(trigger))}`;
 }
 
+/** What a learn did: `learned 2`, or `nothing new` for one that wrote nothing, which `learned 0` made sound like news. */
+export function learnHead(count: number): string {
+	return count === 0 ? "nothing new" : `learned ${count}`;
+}
+
 /** `learned <count> <trigger> · <age>` in `width` cells: the trigger is what gives way, never the age. */
 function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number, now: number): string {
-	const head = `learned ${learned.count} `;
+	const head = `${learnHead(learned.count)} `;
 	const tail = ` · ${age(Math.max(0, now - learned.at))}`;
 	const trigger = learnPhrase(learned.trigger, learned.pct);
 	const room = Math.max(1, width - visibleWidth(head) - visibleWidth(tail));
@@ -149,7 +155,7 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 	if (state.usedThisTurn > 0) body.push(`using ${state.usedThisTurn} this turn${reads > 0 ? ` · read ${reads}` : ""}`);
 	else if (reads > 0) body.push(`read ${reads} this session`);
 	// The body is indented two cells by sectionLines.
-	if (state.learned) body.push(learnedLine(state.learned, width - 2, now));
+	if (isLearned(state.learned)) body.push(learnedLine(state.learned, width - 2, now));
 	if (state.paused) body.push("learning paused · /memory");
 	else if (state.enabled === "readonly") body.push("read-only · learns nothing");
 	else if (state.review?.running === true) body.push(`reviewing ${state.review.notes} notes…`);

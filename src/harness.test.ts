@@ -481,6 +481,7 @@ function harnessOn(
 		branch?: any[];
 		memorq?: "installed" | "none";
 		modelRuntime?: unknown;
+		now?: () => number;
 	} = {},
 ) {
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
@@ -524,8 +525,10 @@ function harnessOn(
 		workspace: () => undefined,
 		memorq: options.memorq ? () => options.memorq! : undefined,
 		modelRuntime: options.modelRuntime as never,
+		now: options.now,
 	})(pi as any);
 	const notices: string[] = [];
+	const widgets = new Map<string, unknown>();
 	const opened: { panel?: Panel; inspector?: { render(width: number): string[] } } = {};
 	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
 	const ctx = {
@@ -538,7 +541,7 @@ function harnessOn(
 		ui: {
 			theme: plainTheme,
 			notify: (message: string) => notices.push(message),
-			setWidget: () => {},
+			setWidget: (key: string, lines: unknown) => widgets.set(key, lines),
 			setWorkingIndicator: () => {},
 			setWorkingMessage: () => {},
 			onTerminalInput: () => () => {},
@@ -551,8 +554,10 @@ function harnessOn(
 			},
 			custom: (factory: any, options?: any) => {
 				const component = factory({ requestRender: () => {} }, plainTheme, {}, () => {});
-				if (options?.overlayOptions && typeof options.overlayOptions === "function") opened.inspector = component;
-				else opened.panel = component;
+				if (options?.overlayOptions && typeof options.overlayOptions === "function") {
+					opened.inspector = component;
+					options.onHandle?.({});
+				} else opened.panel = component;
 				return Promise.resolve();
 			},
 		},
@@ -581,7 +586,7 @@ function harnessOn(
 			.inspector!.render(38)
 			.map((line) => bare(line).slice(1, -1).trimEnd())
 			.filter((line) => /^[ ▌][^─\s] (user|assist|agent|tool|sub|route|memory) /.test(line));
-	return { commands, ctx, notices, opened, handlers, bus, start, stop, memory, read, entries, renderers, branch, rows };
+	return { commands, ctx, notices, opened, handlers, bus, start, stop, memory, read, entries, renderers, branch, rows, widgets };
 }
 
 /** The rows of a selectable panel as drawn, without the box. */
@@ -729,8 +734,11 @@ test("memorq with its commands but silent points at /doctor; ORQ_NOTES=off and a
 	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
 	const before = process.env.ORQ_NOTES;
 	try {
-		const old = harnessOn(dir, { commands: ["memory-notes"] });
+		// Past the few seconds a loaded memorq gets to answer.
+		const late = { now: Date.now() };
+		const old = harnessOn(dir, { commands: ["memory-notes"], now: () => late.now });
 		await old.start();
+		late.now += 10_000;
 		await old.commands.get("panel")!("", old.ctx);
 		expect(panelRows(old.opened.panel!)[2]).toBe("[ ] memory  · not answering · /doctor");
 		await old.stop();
@@ -1025,8 +1033,10 @@ test("a silent memorq row: commands registered points at /doctor, installed with
 			[{ memorq: "none" }, "install memorq", "orqi plugin install git:github.com/orq-ai/orq-knowledge-notes"],
 			[{}, "install memorq", "orqi plugin install git:github.com/orq-ai/orq-knowledge-notes"],
 		] as const) {
-			const h = harnessOn(dir, options as never);
+			const late = { now: Date.now() };
+			const h = harnessOn(dir, { ...options, now: () => late.now } as never);
 			await h.start();
+			late.now += 10_000; // past the grace window a loaded memorq gets
 			await h.commands.get("panel")!("", h.ctx);
 			expect(panelRows(h.opened.panel!)[2]).toBe(`[ ] memory  · ${reason}`);
 			// Space on the greyed row says what would make it available, and switches nothing.
@@ -1059,6 +1069,77 @@ test("after its session ends, the host memorq kept picks nothing and opens nothi
 		expect(await hosts[0].pickModel("openai/gpt-5")).toBeUndefined();
 		expect(opened).toBe(false);
 	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the tool-loop warning sits above the editor whenever the inspector's signals are not on screen", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-signals-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		await h.commands.get("panel")!("on", h.ctx); // the inspector is on screen
+		await h.handlers.get("message_end")!({ message: { role: "user", content: "go", timestamp: 1 } }, h.ctx);
+		const loop = async () => {
+			for (const id of ["a", "b", "c"]) {
+				await h.handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "bash", args: { command: "ls" } }, h.ctx);
+				await h.handlers.get("tool_execution_end")!({ toolCallId: id, toolName: "bash", isError: false, durationMs: 1 }, h.ctx);
+			}
+		};
+		await loop();
+		// Signals on and the panel shown: the inspector says it, no widget.
+		expect(h.widgets.get("orqi-signals")).toBeUndefined();
+		// Signals switched off in /panel: the warning comes back above the editor.
+		await h.commands.get("panel")!("", h.ctx);
+		h.opened.panel!.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(String(h.widgets.get("orqi-signals"))).toContain("tool loop: bash ×3");
+		// The panel hidden: the same.
+		h.opened.panel!.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(h.widgets.get("orqi-signals")).toBeUndefined();
+		await h.commands.get("panel")!("off", h.ctx);
+		expect(String(h.widgets.get("orqi-signals"))).toContain("alt+i for details");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a loaded memorq gets a few seconds to answer: loading, then not answering", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	let clock = 1_000_000;
+	const h = harnessOn(dir, { commands: ["memory"], now: () => clock });
+	try {
+		await h.start();
+		await h.commands.get("panel")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[2]).toBe("[x] memory  · loading…");
+		expect(h.memory()).toEqual(["loading…"]);
+		clock += 4_000;
+		expect(h.memory()).toEqual(["loading…"]);
+		clock += 2_000; // past the grace window: memorq is loaded but silent
+		expect(h.memory()).toEqual([]);
+		await h.commands.get("panel")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[2]).toBe("[ ] memory  · not answering · /doctor");
+		// An answer, however late, is drawn.
+		h.bus.emit("memorq:state", memorqState());
+		expect(h.memory()[0]).toBe("47 notes for this repo");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a state whose learn is malformed keeps the state and drops the learn", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ learned: { count: null, trigger: "ship", at: 1 } }));
+		expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+		expect(h.entries).toEqual([]);
+	} finally {
+		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -1967,6 +2048,7 @@ test("the exit summary: who, how long, what it cost, what it changed, where to f
 	trajectory.toolStart("g3", "mcp__orq__delete_skill", { key: "old" });
 	trajectory.gate("g3", "one_way", "denied");
 	trajectory.toolEnd("g3", true);
+	trajectory.memory("learned 2", "after git push", 1, { input: 0, output: 0, cacheRead: 0, cost: 0.003 });
 	const lines = exitSummary(trajectory, {
 		workspace: "acme",
 		startedAt: 0,
@@ -1974,8 +2056,9 @@ test("the exit summary: who, how long, what it cost, what it changed, where to f
 		thread: "https://my.orq.ai/acme/traces/threads?id=7c1e",
 	});
 	expect(lines).toEqual([
-		"orqi · acme · 18 min · 1 turn · $0.049",
+		"orqi · acme · 18 min · 1 turn · $0.052",
 		"  models    gpt-5.6-terra ×2  $0.045  ·  gpt-5.6-luna ×2  $0.004",
+		"  memory    1 learn  $0.003",
 		"  tools     4 calls · orq_list_traces ×1, delete_dataset ×1 (allowed), update_agent ×1, delete_skill ×1 (denied)",
 		"  changes   1 one-way  delete_dataset dataset_id=01M4  ·  1 two-way  update_agent key=qa-val-agent",
 		"  context   peak 12k of 272k · cache hit 0%",

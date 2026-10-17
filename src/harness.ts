@@ -22,6 +22,7 @@ import {
 	isLearned,
 	isMemorqState,
 	isNoteRead,
+	learnHead,
 	learnPhrase,
 	memoryLines,
 	noteRoots,
@@ -34,7 +35,7 @@ import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { MEMORQ_COMMANDS, MEMORQ_INSTALL } from "./memorq-detect.ts";
 import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
-import { argSummary, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
+import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { orqGate } from "./gate.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
@@ -61,9 +62,13 @@ export interface HarnessDeps {
 	modelRuntime?: ModelRuntime;
 	/** Whether memorq is installed as a package this session loads (src/memorq-detect.ts). */
 	memorq?: () => "installed" | "none";
+	/** The clock, for tests of memorq's grace window. */
+	now?: () => number;
 }
 
 const ROUTE_ENTRY = "orqi-route";
+/** How long a loaded memorq has to publish its first state before the section says it is not answering. */
+const MEMORQ_GRACE_MS = 5_000;
 /** A learn memorq reported, persisted so /trajectory exports it and a resume shows it. */
 const MEMORY_ENTRY = "orqi-memory";
 type Learned = NonNullable<MemorqState["learned"]>;
@@ -72,7 +77,7 @@ type Learned = NonNullable<MemorqState["learned"]>;
 function learnStep(learned: Learned) {
 	const cost = typeof learned.costUsd === "number" ? learned.costUsd : 0;
 	return {
-		label: `learned ${learned.count}`,
+		label: learnHead(learned.count),
 		detail: learnPhrase(learned.trigger, learned.pct),
 		usage: { input: 0, output: 0, cacheRead: 0, cost },
 	};
@@ -131,6 +136,8 @@ export interface InspectorSection {
 	title: string;
 	lines(width: number, frame: SectionFrame): string[];
 	unavailable?(): string | undefined;
+	/** A word for /panel's row while the section is still on: `loading…`. */
+	note?(): string | undefined;
 }
 
 /** The sections the inspector draws, in registry order: chosen in orqi.json and available. */
@@ -144,7 +151,8 @@ export function sectionRows(sections: readonly InspectorSection[], prefs: Prefs)
 	const rows = sections.map((section, i) => {
 		const reason = section.unavailable?.();
 		if (reason) disabled.add(i);
-		return `[${prefs.sections[section.id] && !reason ? "x" : " "}] ${section.title}${reason ? `  · ${reason}` : ""}`;
+		const note = reason ?? section.note?.();
+		return `[${prefs.sections[section.id] && !reason ? "x" : " "}] ${section.title}${note ? `  · ${note}` : ""}`;
 	});
 	return { rows, disabled };
 }
@@ -234,7 +242,11 @@ export function exitSummary(
 	const head = ["orqi", meta.workspace, minutes < 1 ? "<1 min" : `${minutes} min`, turns, dollars(trajectory.totals().cost)]
 		.filter(Boolean)
 		.join(" · ");
-	const rows = [...trajectory.byModel()].sort((a, b) => b[1].cost - a[1].cost);
+	const byModel = trajectory.byModel();
+	// memorq's learns get a row of their own, not a place among the models.
+	const learns = byModel.get(MEMORY_ROW);
+	byModel.delete(MEMORY_ROW);
+	const rows = [...byModel].sort((a, b) => b[1].cost - a[1].cost);
 	const tools = trajectory.steps.filter((step) => step.role === "tool");
 	const byTool = new Map<string, { n: number; verdicts: Set<string> }>();
 	for (const step of tools) {
@@ -258,6 +270,7 @@ export function exitSummary(
 		...(rows.length
 			? [row("models", rows.map(([model, usage]) => `${shortModel(model)} ×${usage.calls}  ${dollars(usage.cost)}`).join("  ·  "))]
 			: []),
+		...(learns ? [row("memory", `${learns.calls} learn${learns.calls === 1 ? "" : "s"}  ${dollars(learns.cost)}`)] : []),
 		row(
 			"tools",
 			tools.length
@@ -302,7 +315,8 @@ export function orqHarness(deps: HarnessDeps) {
 			rss.push(now);
 			if (rss.length > 12) rss.shift();
 			rssPeak = Math.max(rssPeak, now);
-			render();
+			// Sampled regardless, so the peak stays right; drawn only when someone can see it.
+			if (prefs.sections.process && panelShown()) render();
 		};
 		let resolvedWorkspace: string | undefined;
 		let workspaceAskedFor: string | undefined;
@@ -382,8 +396,14 @@ export function orqHarness(deps: HarnessDeps) {
 			}
 		};
 		/** Why the memory section cannot show, or undefined when it can. */
+		const now = deps.now ?? Date.now;
+		/** When this session asked memorq for its state: memorq reads it asynchronously, 0.3 to 2 s cold. */
+		let memorqAskedAt = 0;
+		/** A loaded memorq that has not answered yet, within the few seconds it is given. */
+		const waitingForMemorq = () => memorqLoaded && !memorqState && now() - memorqAskedAt < MEMORQ_GRACE_MS;
 		const memoryUnavailable = () => {
 			if (notesOff) return "off: ORQ_NOTES=off";
+			if (waitingForMemorq()) return undefined;
 			if (!memorqState) {
 				// Only a memorq new enough to publish its state registers commands, so with commands its silence is
 				// a failure (no python3, a broken store); an installed package with none predates the panel.
@@ -416,9 +436,10 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.events.on("memorq:state", (data) => {
 			// The bus is untyped: a payload this renderer cannot read is ignored, and the last good one stays.
 			if (!isMemorqState(data)) return;
-			memorqState = data;
+			// A malformed learn is dropped; the rest of the state still draws.
+			memorqState = isLearned(data.learned) ? data : { ...data, learned: undefined };
 			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
-			recordLearn(data.learned);
+			recordLearn(memorqState.learned);
 			render();
 		});
 		/**
@@ -624,7 +645,13 @@ export function orqHarness(deps: HarnessDeps) {
 			{ id: "signals", title: "signals", lines: (w, frame) => signalLines(frame.signals, w) },
 			// Empty until the first measure: an empty section is skipped.
 			{ id: "context", title: "context", lines: (w) => (split ? contextLines(split, w) : []) },
-			{ id: "memory", title: "memory", lines: (w) => memoryLines(memorqState, noteReads, w), unavailable: memoryUnavailable },
+			{
+				id: "memory",
+				title: "memory",
+				lines: (w) => (waitingForMemorq() ? sectionLines("memory", ["loading…"], w) : memoryLines(memorqState, noteReads, w)),
+				unavailable: memoryUnavailable,
+				note: () => (waitingForMemorq() ? "loading…" : undefined),
+			},
 			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
 			{
 				id: "tips",
@@ -864,6 +891,9 @@ export function orqHarness(deps: HarnessDeps) {
 				memorqLoaded = false;
 			}
 			notesOff = process.env.ORQ_NOTES === "off";
+			memorqAskedAt = now();
+			// Redraw when the grace window closes, so a silent memorq's section gives way to its reason.
+			if (memorqLoaded) setTimeout(render, MEMORQ_GRACE_MS + 100).unref?.();
 			roots = noteRoots();
 			realRoots = roots.map(real);
 			pi.events.emit("memorq:state?", undefined);
@@ -939,8 +969,14 @@ export function orqHarness(deps: HarnessDeps) {
 			const dim = (line: string) => ctx.ui.theme.fg("dim", line);
 			ctx.ui.setWidget(
 				"orqi-signals",
-				loop && !panelShown()
-					? [ctx.ui.theme.fg("warning", `⚠ tool loop: ${loop.tool} ×${loop.count} same args · alt+i for details`)]
+				// Above the editor whenever the inspector's signals are not on screen: panel hidden, or signals off in /panel.
+				loop && !(panelShown() && prefs.sections.signals)
+					? [
+							ctx.ui.theme.fg(
+								"warning",
+								`⚠ tool loop: ${loop.tool} ×${loop.count} same args · ${panelShown() ? "/panel shows signals" : "alt+i for details"}`,
+							),
+						]
 					: undefined,
 			);
 			const tipsOn = prefs.sections.tips;

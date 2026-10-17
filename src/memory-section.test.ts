@@ -8,6 +8,7 @@ import { minimapRow } from "./inspector-rows.ts";
 import {
 	isMemorqState,
 	isNoteRead,
+	learnHead,
 	learnPhrase,
 	memoryLines,
 	printable,
@@ -233,6 +234,31 @@ test("text that came from memorq is drawn without its escapes: an OSC 52 trigger
 	expect(printable("plain words")).toBe("plain words");
 });
 
+test("a learn that wrote nothing reads as nothing new, everywhere it is drawn, within 36 columns", () => {
+	const learns: { trigger: Trigger; pct?: number }[] = [
+		{ trigger: "ship" },
+		{ trigger: "compact" },
+		{ trigger: "checkpoint" },
+		{ trigger: "checkpoint", pct: 80 },
+		{ trigger: "idle" },
+		{ trigger: "session_end" },
+		{ trigger: "manual" },
+		{ trigger: "sweep" },
+	];
+	for (const { trigger, pct } of learns) {
+		const phrase = learnPhrase(trigger, pct);
+		const panel = memoryLines(state({ learned: { count: 0, trigger, at: NOW - 59 * MIN, pct } }), 0, 36, NOW)[2]!;
+		expect(bare(panel).trimEnd()).toBe(`  nothing new ${phrase} · 59m`);
+		expect(learnHead(0)).toBe("nothing new");
+		const trajectory = new Trajectory();
+		trajectory.memory(learnHead(0), phrase, NOW);
+		const row = bare(minimapRow(trajectory.steps[0]!, 36, true));
+		expect(visibleWidth(row)).toBe(36);
+		expect(row.trimEnd()).toBe(`▌◇ memory nothing new ${phrase}`);
+	}
+	expect(learnHead(2)).toBe("learned 2");
+});
+
 test("a state is only taken when every field the section reads has the right shape", () => {
 	const good = state({ learned: { count: 2, trigger: "ship", at: NOW }, review: { dueInSessions: 2 } });
 	expect(isMemorqState(good)).toBe(true);
@@ -242,6 +268,14 @@ test("a state is only taken when every field the section reads has the right sha
 	expect(isMemorqState(state({ review: { failed: "model timed out" } }))).toBe(true);
 	expect(isMemorqState(state({ review: { dueInSessions: 3, failed: "model timed out" } }))).toBe(true);
 	expect(isMemorqState({ ...good, enabled: "later" })).toBe(true);
+	// A malformed learn does not lose the state: the reader drops just the learn.
+	for (const learned of [
+		2,
+		{ count: "2", trigger: "ship", at: NOW },
+		{ count: 2, trigger: "ship", at: "today" },
+		{ count: null, trigger: "ship", at: NOW },
+	])
+		expect(isMemorqState({ ...good, learned })).toBe(true);
 	for (const bad of [
 		undefined,
 		null,
@@ -254,10 +288,6 @@ test("a state is only taken when every field the section reads has the right sha
 		{ ...good, review: "soon" },
 		{ ...good, review: { dueInSessions: "2" } },
 		{ ...good, review: { running: true } },
-		{ ...good, learned: 2 },
-		{ ...good, learned: { count: "2", trigger: "ship", at: NOW } },
-		{ ...good, learned: { count: 2, trigger: "ship", at: "today" } },
-		{ ...good, learned: { count: 2, trigger: 7, at: NOW } },
 		{ ...good, review: { failed: 1 } },
 		{ ...good, review: { dueInSessions: "2", failed: "x" } },
 		{ ...good, paused: "no" },
