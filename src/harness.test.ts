@@ -2008,7 +2008,8 @@ test("pi built-ins are branded as orqi", () => {
 	expect(commands).toEqual([
 		{ name: "quit", description: "Quit orqi" },
 		{ name: "bug", description: "Open a bug report in the orqi repository" },
-		{ name: "model", description: "Select a model" },
+		// /model's legend names the key orqi adds inside the selector (src/garden.ts).
+		{ name: "model", description: "Select model (opens selector UI; ctrl+g for the model garden)" },
 	]);
 });
 

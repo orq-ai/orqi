@@ -5,11 +5,13 @@ export const ORQI_ISSUES_URL = "https://github.com/orq-ai/orqi/issues/new";
 
 type BuiltinSlashCommand = { name: string; description: string };
 
-/** Rebrand the two pi-owned commands that orqi intercepts or presents. */
+/** Rebrand the pi-owned commands orqi intercepts or presents, and name the key orqi adds to one. */
 export function brandBuiltinCommands(commands: readonly BuiltinSlashCommand[]): void {
 	for (const command of commands) {
 		if (command.name === "quit") command.description = "Quit orqi";
 		if (command.name === "bug") command.description = "Open a bug report in the orqi repository";
+		// ctrl+g inside the selector is orqi's own addition (src/garden.ts).
+		if (command.name === "model") command.description = "Select model (opens selector UI; ctrl+g for the model garden)";
 	}
 }
 
