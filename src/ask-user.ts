@@ -111,7 +111,9 @@ export function askUserView(questions: AskQuestion[], theme: Theme, tui: Tui, do
 	let typing = questions[0]!.kind === "text";
 	const toggled = new Map<string, Set<string>>(questions.map((q) => [q.id, new Set()]));
 	const answers = new Map<string, AskAnswer>();
-	let cached: string[] | undefined;
+	// Typed but not submitted, per question: tab away and back keeps it.
+	const drafts = new Map<string, string>();
+	let cached: { width: number; lines: string[] } | undefined;
 
 	const editorTheme: EditorTheme = {
 		borderColor: (s) => theme.fg("accent", s),
@@ -133,11 +135,13 @@ export function askUserView(questions: AskQuestion[], theme: Theme, tui: Tui, do
 		tui?.requestRender?.();
 	};
 	const goTo = (next: number) => {
+		const left = question();
+		if (left && typing) drafts.set(left.id, editor.getText());
 		tab = next;
 		const q = question();
 		cursor = q ? recommendedIndex(q) : 0;
 		typing = q?.kind === "text";
-		editor.setText(q && answers.get(q.id)?.text !== undefined && q.kind === "text" ? answers.get(q.id)!.text! : "");
+		editor.setText(q?.kind === "text" ? drafts.get(q.id) || answers.get(q.id)?.text || "" : "");
 		refresh();
 	};
 	const finish = (cancelled: boolean) => done({ questions, answers: cancelled ? [] : [...answers.values()], cancelled });
@@ -165,6 +169,9 @@ export function askUserView(questions: AskQuestion[], theme: Theme, tui: Tui, do
 				editor.setText("");
 				return refresh();
 			}
+			// Tab still moves between questions; ←→ belong to the editor's cursor.
+			if (tabbed && matchesKey(data, Key.tab)) return goTo((tab + 1) % (questions.length + 1));
+			if (tabbed && matchesKey(data, Key.shift("tab"))) return goTo((tab + questions.length) % (questions.length + 1));
 			editor.handleInput(data);
 			return refresh();
 		}
@@ -194,7 +201,7 @@ export function askUserView(questions: AskQuestion[], theme: Theme, tui: Tui, do
 		if (!matchesKey(data, Key.enter)) return;
 		if (onCustomRow(q)) {
 			typing = true;
-			editor.setText("");
+			editor.setText(drafts.get(q.id) ?? "");
 			return refresh();
 		}
 		if (q.kind === "single") return answer({ id: q.id, optionIds: [q.options[cursor]!.id], custom: false });
@@ -204,7 +211,8 @@ export function askUserView(questions: AskQuestion[], theme: Theme, tui: Tui, do
 	}
 
 	function render(width: number): string[] {
-		if (cached) return cached;
+		// Keyed by width: a resize redraws without invalidating.
+		if (cached?.width === width) return cached.lines;
 		const w = Math.max(1, width);
 		const lines: string[] = [];
 		const wrap = (prefix: string, text: string) => {
@@ -257,16 +265,15 @@ export function askUserView(questions: AskQuestion[], theme: Theme, tui: Tui, do
 			wrap(" ", missing.length ? theme.fg("warning", `Unanswered: ${missing.join(", ")}`) : theme.fg("success", "Press enter to submit"));
 		}
 		lines.push("");
-		const help = typing
-			? q?.kind === "text"
-				? "enter submit · esc cancel"
-				: "enter submit · esc back"
-			: [tabbed ? "tab/←→ question" : "", "↑↓ move", q?.kind === "multi" ? "space toggle · enter confirm" : "enter select", "esc cancel"]
-					.filter(Boolean)
-					.join(" · ");
+		const keys = !q
+			? ["enter submit", "esc cancel"]
+			: typing
+				? ["enter submit", q.kind === "text" ? "esc cancel" : "esc back"]
+				: ["↑↓ move", q.kind === "multi" ? "space toggle · enter confirm" : "enter select", "esc cancel"];
+		const help = [tabbed ? (typing ? "tab question" : "tab/←→ question") : "", ...keys].filter(Boolean).join(" · ");
 		wrap(" ", theme.fg("dim", help));
 		lines.push(theme.fg("accent", "─".repeat(w)));
-		cached = lines;
+		cached = { width, lines };
 		return lines;
 	}
 
@@ -290,6 +297,15 @@ export function createAskUserTool() {
 		executionMode: "sequential",
 		execute: async (_id, params, signal, _onUpdate, ctx) => {
 			const questions = normalize(params as Params);
+			// Answers are keyed by id: a repeated id would leave a question no answer can reach.
+			const repeated = (ids: string[]) => new Set(ids).size !== ids.length;
+			if (repeated(questions.map((q) => q.id)) || questions.some((q) => repeated(q.options.map((o) => o.id)))) {
+				return {
+					content: [{ type: "text" as const, text: "ask_user: question ids, and option ids within a question, must be unique." }],
+					details: { questions: [], answers: [], cancelled: true },
+					isError: true,
+				};
+			}
 			if (ctx.mode !== "tui") {
 				// No questions in details: renderResult then shows the reason, not "Dismissed".
 				return {

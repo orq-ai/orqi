@@ -159,3 +159,32 @@ test("view is drivable on its own", () => {
 	view.handleInput(ENTER);
 	expect(out?.answers[0]?.optionIds).toEqual(["agents"]);
 });
+
+test("tab leaves a text question mid-answer and keeps the draft", () => {
+	let out: AskUserDetails | undefined;
+	const goal = { id: "goal", prompt: "Goal?" };
+	const view = askUserView(normalize({ questions: [goal, scope] }), theme, tui, (r) => (out = r));
+	for (const key of ["h", "i", "\t"]) view.handleInput(key);
+	expect(view.render(80).join("\n")).toContain("Where first?");
+	view.handleInput("\x1b[Z"); // shift+tab back
+	view.handleInput(ENTER);
+	expect(view.render(80).join("\n")).toContain("Where first?");
+	view.handleInput(ENTER); // the recommended pick
+	expect(view.render(80).join("\n")).toContain("enter submit · esc cancel");
+	view.handleInput(ENTER);
+	expect(out?.answers.find((a) => a.id === "goal")?.text).toBe("hi");
+});
+
+test("the frame is redrawn when the width changes", () => {
+	const view = askUserView(normalize({ questions: [scope] }), theme, tui, () => {});
+	expect(view.render(80)[0]).toHaveLength(80);
+	expect(view.render(40)[0]).toHaveLength(40);
+});
+
+test("repeated ids are refused before a dialog opens", async () => {
+	const { result } = await ask([scope, { ...scope, label: "Again" }], []);
+	expect(result.isError).toBe(true);
+	expect(result.content[0].text).toContain("must be unique");
+	const twice = { ...scope, options: [scope.options[0], scope.options[0]] };
+	expect((await ask([twice], [])).result.isError).toBe(true);
+});
