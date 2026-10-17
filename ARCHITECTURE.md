@@ -46,6 +46,10 @@ orqi
 | `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
+| `src/prefs.ts` | `<agentDir>/orqi.json`: which inspector sections show, read forgivingly and written whole |
+| `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
+| `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
+| `src/model-picker.ts` | The model picker orqi offers memorq: pi's `/model` selector over the workspace's chat models only |
 | `src/router.ts` | `orq/auto` and the `orq-decisions` classifier provider: pool, policy, Decisions API adapter, route log |
 | `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
 | `src/footer.ts` / `src/inspector-rows.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, the inspector's trajectory rows and its signals, context and teach sections, boxed overlay panels |
@@ -96,11 +100,25 @@ the same steps. Prices come from the workspace catalogue (`million_tokens_*` in 
 the footer's cost and pi's `/session` are real numbers rather than zero.
 
 The side panel is the inspector: the trajectory on top (one row per step, the mouse wheel scrolls
-it), then four sections: signals (a tool called three times with the same arguments in one turn,
-errors, irreversible calls), the context split (system prompt, tool schemas, skills index, messages, as
-characters over four, measured after each run and never in a render), memory (orqi's resident
-memory, sampled every 5 s off the render path: now, the last minute, the peak) and tips (on by
-default, `/tips off` hides it; `/teach` is the old name).
+it), then up to five sections, in this order: signals (a tool called three times with the same
+arguments in one turn, errors, irreversible calls), the context split (system prompt, tool schemas,
+skills index, messages, as characters over four, measured after each run and never in a render),
+memory (what memorq last published, below), process (orqi's resident memory, sampled every 5 s off
+the render path: now, the last minute, the peak) and tips (`/tips off` hides it; `/teach` is the old
+name). Each section is an `InspectorSection` in `src/harness.ts`; bare `/panel` lists them with a
+checkbox each, and the choice lives in `<agentDir>/orqi.json` (`src/prefs.ts`). Process starts off;
+the rest start on. A section that cannot show (an installed memorq that is silent or too old) is
+greyed in the list with the reason, and space on it says what to do; with no memorq at all the memory
+section is not listed.
+
+Memory comes from memorq, a separate pi package (orq-ai/orq-knowledge-notes) that orqi neither
+carries nor installs. The two extensions share only pi's
+in-process event bus: memorq publishes `memorq:state` (notes, notes used this turn, the last learn,
+the next review, the folders it writes to) and asks `memorq:host?`; orqi answers with `memorq:host`
+(the panel row and the model picker) and asks `memorq:state?` at session start. The bus has no replay
+and memorq loads before orqi's own extension, so neither side relies on an event sent before it was
+listening. Each learn becomes an `orqi-memory` session entry and a trajectory step, priced in `/cost`
+under its own row, replayed on resume and exported by `/trajectory`.
 `/context` opens the same split as a table with the levers that move it. On quit, an exit summary of
 the session prints above pi's resume hint.
 

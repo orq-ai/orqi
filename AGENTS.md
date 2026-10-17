@@ -187,7 +187,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
   runs when the classifier errors, 403s, times out, or the workspace has no classifier. A response
   without a door answer has no opinion; the router does not invent one.
-- **Teach lives in the inspector (the side panel), never the transcript.** Users see it as "tips" (`/tips`; `/teach` stays an alias), the code keeps the name `teach`. Cards are not session
+- **Teach lives in the inspector (the side panel), never the transcript.** Users see it as "tips" (`/tips`; `/teach` stays an alias, and either one's choice is saved in `orqi.json`, below), the code keeps the name `teach`. Cards are not session
   entries, so `/trajectory` exports only the conversation and a resume shows no lessons. When the
   panel is hidden (under 140 columns unless `alt+i` forces it, in fullscreen or as the regular-mode
   overlay) the card and a tool-loop warning fall back to one widget line above the editor, for the
@@ -379,8 +379,53 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   extension re-selects the same model from the reloaded catalogue, and the trajectory reprices any
   zero-cost usage it already recorded.
 - **The inspector toggles on `alt+i`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle, and pi
-  binds no `alt+i`. Focus for ↑↓/enter is raw input intercepted with `onTerminalInput` only while
-  `/panel focus` is on, so the editor never loses the keyboard otherwise.
+  binds no `alt+i`. `/panel on|off` does the same from the editor; bare `/panel` opens the section
+  list instead (it used to toggle, so the hints that said `/panel` now say `alt+i`). Focus for
+  ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/panel focus` is on, so the
+  editor never loses the keyboard otherwise.
+- **Inspector sections are a registry, and the choice lives in `<agentDir>/orqi.json`.** Each section
+  (signals, context, memory, process, tips, in that order: tips last, because a short terminal clips
+  the panel from the bottom) is an `InspectorSection` whose `lines()` is a pure renderer over state
+  already measured. Which ones draw is orqi's own small file (`src/prefs.ts`), not pi's
+  `settings.json` (pi's SettingsManager has no setter for a key it does not know) and not the
+  project's `.orqi/` (per repository, and read only when the project is trusted). Process starts
+  off, so the RAM readout an upgrade used to show is gone until `/panel` turns it on. The file is
+  read forgivingly (missing, unreadable or odd means the defaults; unknown ids are ignored) and each
+  toggle rereads it and changes only its own id, so two orqi windows keep each other's choices.
+- **orqi does not carry memorq, and only mentions memory once memorq is there.** memorq
+  (orq-ai/orq-knowledge-notes, a pi package) ships on its own schedule and is not something every orqi
+  user can install, so orqi never tells anyone to install it: with no memorq, `/panel` has no memory
+  row and `/doctor` no memorq or python3 row. `src/memorq-detect.ts` tells the cases apart without
+  asking memorq: its commands are registered (only a memorq new enough to publish its state registers
+  any, so silence after a few seconds' grace is a failure: `not answering · /doctor`), a package whose
+  source is memorq is in the trust-aware settings pi loads from (but registered nothing, so it
+  predates the panel: `update memorq`), or neither (nothing is shown). With memorq there, `/doctor`
+  adds a memorq row and a python3 row (memorq runs on it); on macOS it never runs Apple's
+  `/usr/bin/python3` stub, which opens an install dialog, and asks `xcode-select -p` instead.
+- **The memorq contract is request-driven, because pi's event bus has no replay.** memorq, a package
+  extension, loads before orqi's inline one, so either side may emit before the other listens. orqi
+  subscribes to `memorq:state` and `memorq:host?` at load (not in `session_start`), asks
+  `memorq:state?` and offers `memorq:host` at its own session start, and answers every `memorq:host?`.
+  A payload that fails `isMemorqState` is ignored and the last good one stays drawn; any text from
+  memorq that orqi draws goes through `printable()`. The types are a hand copy of memorq's
+  `integrations/pi/state.ts`, and a test assigns memorq's to orqi's both ways: re-copy them when
+  memorq changes its payload. The host's `pickModel` and `panel.set` never throw back into memorq,
+  and once orqi's session has ended its host opens nothing.
+- **A note read counts wherever memorq keeps it.** memorq's state names only the folder each kind is
+  written to, and a kind written to the repository is still read from the machine store, so
+  `isNoteRead` also knows memorq's machine roots (`ORQ_NOTES_HOME`, else `~/.memorq`, plus the
+  legacy `~/.orq/knowledge`). Store folders are resolved through symlinks when a state arrives, the
+  read file after the read finishes, never in a render. A subagent's read counts too.
+- **A learn is recorded once.** memorq republishes the same `learned` on every change and answers
+  every `memorq:state?`, and a resume replays the `orqi-memory` entries, so each learn is keyed by
+  `at|trigger|count`, seeded from the branch at session start; a learn published before that waits
+  for it. orqi sees only the last learn of a session, so several that land while it is not
+  listening collapse to the last one on resume.
+- **The model picker memorq gets is pi's own `/model` selector.** `src/model-picker.ts` builds pi's
+  exported `ModelSelectorComponent` over a proxy of the model runtime that lists only the
+  workspace's chat models (`getModels`, `getAvailableSnapshot`, `getAvailable`), so neither of the
+  selector's scopes offers an agent, a classifier or `orq/auto`. After bumping pi, recheck which
+  runtime methods `model-selector.js` reads: the test's runtime fake throws on any other.
 - **The ATIF export is `/trajectory`, not `/export trajectory`.** `/export` is a pi built-in (HTML),
   and pi drops colliding extension commands; the collision test now covers the harness too.
 - **Agents are models, and agent mode empties the prompt and the tool set.** A managed agent is

@@ -36,9 +36,20 @@ import { refreshStoredSignIn, signInExpired } from "./oauth.ts";
 import { checkNow, currentUpdateCommand, isNewer, maybeCheckUpdate, pendingUpdate, readCache, updateNotice } from "./update.ts";
 import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
-import { LEGACY_PROJECT_DIR, legacyProjectDir } from "./trust.ts";
+import { LEGACY_PROJECT_DIR, legacyProjectDir, projectTrusted } from "./trust.ts";
+import { MEMORQ_COMMANDS, memorqChecks, memorqInstalled, type MemorqPresence } from "./memorq-detect.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
-import { checkRows, doctorHeader, noticeText, parseDoctor, redactKeys, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
+import {
+	checkRows,
+	doctorHeader,
+	noticeText,
+	parseDoctor,
+	python3Check,
+	redactKeys,
+	sortChecks,
+	summary,
+	whoamiRows,
+} from "./diagnostics.ts";
 import { parseWorkspaces, sortWorkspaces, workspaceRows } from "./workspaces.ts";
 
 /**
@@ -691,19 +702,35 @@ export function orqCommands(
 			},
 		});
 
+		/** memorq loaded (its commands are registered), installed as a package pi loads here, or neither. */
+		const memorqPresence = async (): Promise<MemorqPresence> => {
+			try {
+				if (pi.getCommands().some((command) => MEMORQ_COMMANDS.includes(command.name))) return "loaded";
+				// The agent dir orqi was handed, as main.ts builds the session's settings from it.
+				const { SettingsManager } = await import("@earendil-works/pi-coding-agent");
+				const cwd = process.cwd();
+				const settings = SettingsManager.create(cwd, agentDir, { projectTrusted: projectTrusted(cwd, agentDir) });
+				return memorqInstalled(settings) ? "installed" : "none";
+			} catch {
+				return "none";
+			}
+		};
 		pi.registerCommand("doctor", {
 			description: "inspect orq config, auth state and endpoint reachability: problems first",
 			handler: async (_args, ctx) => {
 				const answer = runOrq(["doctor", "-o", "json"]);
 				const doctor = answer.ok ? parseDoctor(answer.stdout) : undefined;
+				// Memory is opt-in: whether memorq is here decides its rows, and python3's, which it writes with.
+				const memorq = memorqChecks(await memorqPresence(), () => python3Check());
 				if (doctor && doctor.checks.length > 0) {
-					const checks = sortChecks(doctor.checks);
+					const checks = sortChecks([...doctor.checks, ...memorq]);
 					const rows = [...doctorHeader(doctor), "", ...checkRows(checks)];
 					// One call, not two: with no panel to draw the same rows are the notice.
 					const spec = { title: "doctor", badge: summary(checks), rows, height: 24, hint: "↑↓ scroll · esc close · full text: orq doctor" };
 					if (!(await showPanel(ctx, spec))) ctx.ui.notify(noticeText([`doctor · ${summary(checks)}`, ...rows]));
 				} else {
 					report(ctx, { ...answer, stdout: redactKeys(answer.stdout), stderr: redactKeys(answer.stderr) });
+					ctx.ui.notify(checkRows(memorq).join("\n"), memorq.every((check) => check.status === "pass") ? "info" : "warning");
 				}
 				try {
 					const { DefaultPackageManager } = await import("@earendil-works/pi-coding-agent");

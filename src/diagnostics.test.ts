@@ -8,6 +8,7 @@ import {
 	maskKey,
 	noticeText,
 	parseDoctor,
+	python3Check,
 	redactKeys,
 	sortChecks,
 	summary,
@@ -193,4 +194,51 @@ test("a notice is one safe line per row: where no panel is drawn, nothing reache
 	const out = noticeText([...doctorHeader(doc), ...checkRows(doc.checks)]);
 	expect(out).not.toContain("\x1b");
 	expect(out.split("\n").length).toBe(doctorHeader(doc).length + checkRows(doc.checks).length);
+});
+
+test("doctor's python3 row: the version when it runs, how to get it when it does not, and too old for memorq", () => {
+	const ran =
+		(stdout: string, stderr = "", exitCode = 0) =>
+		() => ({ exitCode, stdout, stderr });
+	const linux = (run: Parameters<typeof python3Check>[0]) => python3Check(run, () => "/usr/bin/python3", "linux");
+	expect(linux(ran("Python 3.12.4\n"))).toEqual({ id: "python3", status: "pass", message: "python3 3.12.4" });
+	// Python 2 and some 3.x builds print the version on stderr.
+	expect(linux(ran("", "Python 3.9.6\n"))).toEqual({ id: "python3", status: "pass", message: "python3 3.9.6" });
+	const missing = {
+		id: "python3",
+		status: "fail",
+		message: "python3 not found; memory notes need it: install python3 (brew install python3 on macOS)",
+	};
+	expect(
+		linux(() => {
+			throw new Error("ENOENT");
+		}),
+	).toEqual(missing);
+	expect(linux(ran("", "not found", 127))).toEqual(missing);
+	expect(linux(ran("Python 3.8.10\n"))).toEqual({
+		id: "python3",
+		status: "fail",
+		message: "python3 3.8.10 is too old; memory notes need 3.9 or newer",
+	});
+});
+
+test("on macOS, Apple's python3 stub is reported without running it: running it opens an install dialog", () => {
+	const calls: string[][] = [];
+	const run = (failing: boolean) => (cmd: string[]) => {
+		calls.push(cmd);
+		if (cmd[0] === "xcode-select") return { exitCode: failing ? 2 : 0, stdout: "", stderr: "" };
+		return { exitCode: 0, stdout: "Python 3.9.6\n", stderr: "" };
+	};
+	expect(python3Check(run(true), () => "/usr/bin/python3", "darwin")).toEqual({
+		id: "python3",
+		status: "fail",
+		message: "python3 is Apple's stub; install the command line tools or brew install python3",
+	});
+	expect(calls).toEqual([["xcode-select", "-p"]]);
+	// With the command line tools, /usr/bin/python3 is a real Python.
+	expect(python3Check(run(false), () => "/usr/bin/python3", "darwin").status).toBe("pass");
+	// Homebrew's python3 is never the stub.
+	calls.length = 0;
+	expect(python3Check(run(true), () => "/opt/homebrew/bin/python3", "darwin").status).toBe("pass");
+	expect(calls).toEqual([["python3", "--version"]]);
 });

@@ -1,25 +1,41 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { isAgentModel } from "./agents.ts";
 import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
 import { dollars, footerLine, headerBar, hostLabel, shortModel, tokens, type Paint } from "./footer.ts";
 import {
 	contextLines,
-	memoryLines,
 	sectionLines,
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
 	minimapRows,
 	minimapSummary,
 	peekLines,
+	processLines,
 	signalLines,
 	SPINNER,
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
+import {
+	isLearned,
+	isMemorqState,
+	isNoteRead,
+	learnHead,
+	learnPhrase,
+	memoryLines,
+	noteRoots,
+	readPath,
+	type MemorqHost,
+	type MemorqState,
+} from "./memory-section.ts";
+import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
+import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
+import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
-import { argSummary, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
+import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { orqGate } from "./gate.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
@@ -42,9 +58,36 @@ export interface HarnessDeps {
 	project?: () => string | undefined;
 	/** `orq/auto`: its pool and decision feed. */
 	routing?: Routing;
+	/** pi's model runtime (orq models only), for the picker orqi offers memorq; the session ctx has only the registry. */
+	modelRuntime?: ModelRuntime;
+	/** Whether memorq is installed as a package this session loads (src/memorq-detect.ts). */
+	memorq?: () => "installed" | "none";
+	/** The clock, for tests of memorq's grace window. */
+	now?: () => number;
 }
 
 const ROUTE_ENTRY = "orqi-route";
+/** How long a loaded memorq has to publish its first state before the section says it is not answering. */
+const MEMORQ_GRACE_MS = 5_000;
+/** A learn memorq reported, persisted so /trajectory exports it and a resume shows it. */
+const MEMORY_ENTRY = "orqi-memory";
+type Learned = NonNullable<MemorqState["learned"]>;
+
+/** A learn as a trajectory step: `learned 2` · `after git push`, its cost the session's. */
+function learnStep(learned: Learned) {
+	const cost = typeof learned.costUsd === "number" ? learned.costUsd : 0;
+	return {
+		label: learnHead(learned.count),
+		detail: learnPhrase(learned.trigger, learned.pct),
+		usage: { input: 0, output: 0, cacheRead: 0, cost },
+	};
+}
+
+/** The orqi-memory entry in the transcript: `learned 2 after git push · $0.140`. */
+export function learnLine(learned: Learned): string {
+	const step = learnStep(learned);
+	return `${step.label} ${step.detail}${typeof learned.costUsd === "number" ? ` · ${dollars(learned.costUsd)}` : ""}`;
+}
 const ROUTE_WIDGET = "orqi-route";
 const BARS = "▁▂▃▄▅▆▇█";
 
@@ -77,6 +120,52 @@ export function routeLine(
 }
 
 const WORKSPACE_STATUS = "orq-workspace";
+
+/** What one inspector frame has already worked out, handed to every section it draws. */
+export interface SectionFrame {
+	signals: ReturnType<typeof signals>;
+}
+
+/**
+ * One section of the inspector under the trajectory. `lines` is a pure renderer
+ * over state already measured; `unavailable` names why it cannot show (memorq
+ * not installed), which greys its row in /panel.
+ */
+export interface InspectorSection {
+	id: SectionId;
+	title: string;
+	lines(width: number, frame: SectionFrame): string[];
+	unavailable?(): string | undefined;
+	/** A word for /panel's row while the section is still on: `loading…`. */
+	note?(): string | undefined;
+	/** Left out of /panel's list and never drawn: memory, with no memorq anywhere. */
+	hidden?(): boolean;
+}
+
+/** The sections the inspector draws, in registry order: chosen in orqi.json and available. */
+export function sectionsToDraw(sections: readonly InspectorSection[], prefs: Prefs): InspectorSection[] {
+	return sections.filter((section) => !section.hidden?.() && prefs.sections[section.id] && !section.unavailable?.());
+}
+
+/**
+ * /panel's rows, one per section that is not hidden: `[x] context`, or `[ ] memory  · update memorq`,
+ * greyed, for one that cannot show. `ids[i]` is the section on row `i`.
+ */
+export function sectionRows(
+	sections: readonly InspectorSection[],
+	prefs: Prefs,
+): { rows: string[]; disabled: Set<number>; ids: SectionId[] } {
+	const disabled = new Set<number>();
+	const listed = sections.filter((section) => !section.hidden?.());
+	const ids = listed.map((section) => section.id);
+	const rows = listed.map((section, i) => {
+		const reason = section.unavailable?.();
+		if (reason) disabled.add(i);
+		const note = reason ?? section.note?.();
+		return `[${prefs.sections[section.id] && !reason ? "x" : " "}] ${section.title}${note ? `  · ${note}` : ""}`;
+	});
+	return { rows, disabled, ids };
+}
 
 type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: number; shrink?: number; minSize?: number };
 
@@ -163,7 +252,11 @@ export function exitSummary(
 	const head = ["orqi", meta.workspace, minutes < 1 ? "<1 min" : `${minutes} min`, turns, dollars(trajectory.totals().cost)]
 		.filter(Boolean)
 		.join(" · ");
-	const rows = [...trajectory.byModel()].sort((a, b) => b[1].cost - a[1].cost);
+	const byModel = trajectory.byModel();
+	// memorq's learns get a row of their own, not a place among the models.
+	const learns = byModel.get(MEMORY_ROW);
+	byModel.delete(MEMORY_ROW);
+	const rows = [...byModel].sort((a, b) => b[1].cost - a[1].cost);
 	const tools = trajectory.steps.filter((step) => step.role === "tool");
 	const byTool = new Map<string, { n: number; verdicts: Set<string> }>();
 	for (const step of tools) {
@@ -187,6 +280,7 @@ export function exitSummary(
 		...(rows.length
 			? [row("models", rows.map(([model, usage]) => `${shortModel(model)} ×${usage.calls}  ${dollars(usage.cost)}`).join("  ·  "))]
 			: []),
+		...(learns ? [row("memory", `${learns.calls} learn${learns.calls === 1 ? "" : "s"}  ${dollars(learns.cost)}`)] : []),
 		row(
 			"tools",
 			tools.length
@@ -223,15 +317,16 @@ export function orqHarness(deps: HarnessDeps) {
 		let frame = 0;
 		let spinTimer: ReturnType<typeof setInterval> | undefined;
 		// Resident memory, sampled off the render path: the last twelve readings and the peak.
-		const memory: number[] = [];
-		let memoryPeak = 0;
-		let memoryTimer: ReturnType<typeof setInterval> | undefined;
-		const sampleMemory = () => {
-			const rss = process.memoryUsage.rss();
-			memory.push(rss);
-			if (memory.length > 12) memory.shift();
-			memoryPeak = Math.max(memoryPeak, rss);
-			render();
+		const rss: number[] = [];
+		let rssPeak = 0;
+		let rssTimer: ReturnType<typeof setInterval> | undefined;
+		const sampleRss = () => {
+			const now = process.memoryUsage.rss();
+			rss.push(now);
+			if (rss.length > 12) rss.shift();
+			rssPeak = Math.max(rssPeak, now);
+			// Sampled regardless, so the peak stays right; drawn only when someone can see it.
+			if (prefs.sections.process && panelShown()) render();
 		};
 		let resolvedWorkspace: string | undefined;
 		let workspaceAskedFor: string | undefined;
@@ -260,9 +355,142 @@ export function orqHarness(deps: HarnessDeps) {
 		let statusOf: (key: string) => string | undefined = () => undefined;
 		let lastFooter = "";
 		let split: ContextSplit | undefined;
+		// Which inspector sections show: orqi.json in the agent dir, read once per session (makeServices builds
+		// this extension again for /new, /resume and /fork) and written whole on every toggle.
+		const prefs = readPrefs(deps.agentDir);
+		/**
+		 * Switch one section and save it. The file is read again and only this id changed, so a second
+		 * orqi window's choices since this one started are kept rather than overwritten, and come back
+		 * into this one. Never from a render: it reads and writes the file.
+		 */
+		const setSection = (ctx: ExtensionContext | undefined, id: SectionId, value: boolean) => {
+			prefs.sections[id] = value;
+			try {
+				const fresh = readPrefs(deps.agentDir);
+				fresh.sections[id] = value;
+				writePrefs(deps.agentDir, fresh);
+				Object.assign(prefs.sections, fresh.sections);
+			} catch (error) {
+				// memorq calls this through panel.set, possibly after this session closed: a stale ctx throws on use.
+				try {
+					ctx?.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
+				} catch {
+					// The choice still applies in memory; only the notice is lost.
+				}
+			}
+		};
+		// ── memory: what memorq last published on the bus, and the notes the model opened ──
+		// Subscribed at load, not at session_start: memorq, a path extension, loads first and may publish
+		// before orqi's session_start runs; pi drops these subscriptions with this instance.
+		let memorqState: MemorqState | undefined;
+		/** This instance's session has shut down: what memorq still holds of it must not touch its ctx. */
+		let sessionEnded = false;
+		/** The same three folders with symlinks resolved, worked out when a state arrives. */
+		let realStores: MemorqState["stores"] | undefined;
+		// Read at session start, never in a render: whether a memorq that registers commands is loaded,
+		// whether ORQ_NOTES=off turned it off, and the machine roots a note can be read from.
+		let memorqLoaded = false;
+		let notesOff = false;
+		let roots = noteRoots();
+		let realRoots = roots;
+		let noteReads = 0;
+		/** `read` paths by tool call: tool_execution_end carries no args. */
+		const readPaths = new Map<string, string>();
+		/** A path with its symlinks resolved, or the path itself when it cannot be (missing, or empty). */
+		const real = (path: string) => {
+			if (!path) return path;
+			try {
+				return realpathSync(path);
+			} catch {
+				return path;
+			}
+		};
+		/** Why the memory section cannot show, or undefined when it can. */
+		const now = deps.now ?? Date.now;
+		/** When this session asked memorq for its state: memorq reads it asynchronously, 0.3 to 2 s cold. */
+		let memorqAskedAt = 0;
+		/** A loaded memorq that has not answered yet, within the few seconds it is given. */
+		const waitingForMemorq = () => memorqLoaded && !memorqState && now() - memorqAskedAt < MEMORQ_GRACE_MS;
+		/**
+		 * No memorq anywhere: not answering, not loaded, not installed. orqi then says nothing about memory at
+		 * all, since memorq is not something every orqi user can install.
+		 */
+		const memorqAbsent = () => !memorqState && !memorqLoaded && deps.memorq?.() !== "installed";
+		const memoryUnavailable = () => {
+			if (notesOff) return "off: ORQ_NOTES=off";
+			if (waitingForMemorq()) return undefined;
+			if (!memorqState) {
+				// Only a memorq new enough to publish its state registers commands, so with commands its silence is
+				// a failure (no python3, a broken store); an installed package with none predates the panel.
+				return memorqLoaded ? "not answering · /doctor" : "update memorq";
+			}
+			return memorqState.enabled === "off" ? "off · /memory" : undefined;
+		};
+		/**
+		 * The learns already in the trajectory, by `at|trigger|count`. A learn is recorded once: memorq
+		 * republishes the same `learned` on every change and answers each `memorq:state?`, and a resume
+		 * replays the entries; a different learn that arrives out of order is still recorded.
+		 */
+		const learnsSeen = new Set<string>();
+		const learnKey = (learned: Learned) => `${learned.at}|${learned.trigger}|${learned.count}`;
+		/** Set once session_start has rebuilt the trajectory: a learn published before that waits for it. */
+		let branchLoaded = false;
+		const recordLearn = (learned: Learned | undefined) => {
+			if (!branchLoaded || !learned || learnsSeen.has(learnKey(learned))) return;
+			learnsSeen.add(learnKey(learned));
+			const step = learnStep(learned);
+			trajectory.memory(step.label, step.detail, learned.at, step.usage);
+			try {
+				// The whole learn as memorq sent it, so fields it adds later ride along.
+				pi.appendEntry(MEMORY_ENTRY, { ...learned });
+			} catch {
+				// A stale handle after /new: the step is in the trajectory regardless.
+			}
+		};
+		pi.events.on("memorq:state", (data) => {
+			// The bus is untyped: a payload this renderer cannot read is ignored, and the last good one stays.
+			if (!isMemorqState(data)) return;
+			// A malformed learn is dropped; the rest of the state still draws.
+			memorqState = isLearned(data.learned) ? data : { ...data, learned: undefined };
+			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
+			recordLearn(memorqState.learned);
+			render();
+		});
+		/**
+		 * What orqi offers memorq, so its /memory screen can show "Show in side panel" and pick the
+		 * model it writes with from the workspace. Answered on `memorq:host?` (memorq asks at its own
+		 * session_start, which runs before orqi's) and offered again at orqi's session_start.
+		 */
+		const host: MemorqHost = {
+			panel: {
+				shown: () => prefs.sections.memory,
+				set: (shown) => {
+					setSection(ctxRef, "memory", shown);
+					render();
+				},
+			},
+			// memorq keeps this object; once this session has ended its ctx is stale, and the next session offers a new host.
+			pickModel: (current) =>
+				ctxRef && deps.modelRuntime && !sessionEnded
+					? pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current)
+					: Promise.resolve(undefined),
+		};
+		pi.events.on("memorq:host?", () => pi.events.emit("memorq:host", host));
+		/** A finished `read` that opened a note, by its own path or, through a symlink, by the real one. Subagents' count too. */
+		const countNoteRead = (toolCallId: string, isError: boolean, cwd: string) => {
+			const path = readPaths.get(toolCallId);
+			readPaths.delete(toolCallId);
+			if (!path || isError || !memorqState) return;
+			const hit =
+				isNoteRead(path, memorqState.stores, roots, cwd) ||
+				isNoteRead(real(readPath(path, cwd)), realStores ?? memorqState.stores, realRoots, cwd);
+			if (!hit) return;
+			noteReads++;
+			render();
+		};
 		// ── teach state: the card lives in the panel, never the transcript ──
-		// On by default: the cards are the harness explaining the platform; /tips off hides them (shown as "tips"; "teach" is the code name and the old command).
-		let teachOn = true;
+		// On by default (prefs.sections.tips): the cards are the harness explaining the platform; /tips off hides them
+		// (shown as "tips"; "teach" is the code name and the old command).
 		let card: { concept: Concept; used: string[]; step: number } | undefined;
 		const shownConcepts = new Set<string>();
 		/** The last step id a previous run reached: steering advances `turn` more than once per run. */
@@ -426,6 +654,26 @@ export function orqHarness(deps: HarnessDeps) {
 		};
 
 		// ── the inspector ─────────────────────────────────────────────────────
+		/** The sections under the trajectory, in `SECTIONS` order (src/prefs.ts); orqi.json says which are drawn. */
+		const sections: InspectorSection[] = [
+			{ id: "signals", title: "signals", lines: (w, frame) => signalLines(frame.signals, w) },
+			// Empty until the first measure: an empty section is skipped.
+			{ id: "context", title: "context", lines: (w) => (split ? contextLines(split, w) : []) },
+			{
+				id: "memory",
+				title: "memory",
+				lines: (w) => (waitingForMemorq() ? sectionLines("memory", ["loading…"], w) : memoryLines(memorqState, noteReads, w)),
+				unavailable: memoryUnavailable,
+				note: () => (waitingForMemorq() ? "loading…" : undefined),
+				hidden: memorqAbsent,
+			},
+			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
+			{
+				id: "tips",
+				title: "tips",
+				lines: (w) => sectionLines("tips", card ? cardLines(card, w - 2) : [], w, "a card follows the next answer"),
+			},
+		];
 		/**
 		 * The side panel, called the inspector on screen: a box as tall as the
 		 * screen, the trajectory (one row per step, `minimapRows`) on top and the
@@ -465,30 +713,32 @@ export function orqHarness(deps: HarnessDeps) {
 					error: (text: string) => theme.fg("error", text),
 				};
 				const found = signals(trajectory.steps, trajectory.turn);
-				const teach = teachOn
-					? [sectionLines("tips", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")]
-					: [];
-				// Under the trajectory: what needs attention, where the context goes, what orqi holds in memory, then the lesson.
-				const sections = [
-					signalLines(found, inner),
-					...(split ? [contextLines(split, inner)] : []),
-					memoryLines(memory, memoryPeak, inner),
-					...teach,
-				];
-				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
+				// Under the trajectory: what needs attention, where the context goes, what memory knows,
+				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
+				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
+					const lines = section.lines(inner, { signals: found });
+					return lines.length ? [{ id: section.id, lines }] : [];
+				});
+				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				const height = Math.max(3, (process.stdout.rows ?? 30) - 6 - below);
-				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, teachOn ? card?.step : undefined);
+				const rows = minimapRows(
+					trajectory.steps,
+					inner,
+					height,
+					minimapSelected,
+					frame,
+					rowPaint,
+					prefs.sections.tips ? card?.step : undefined,
+				);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
-				const paintSection = (lines: string[]) => [
+				const paintSection = ({ id, lines }: { id: SectionId; lines: string[] }) => [
 					blank,
 					side(theme.fg("dim", lines[0]!)),
 					...lines
 						.slice(1)
 						.map((line, i) =>
-							side(
-								theme.fg(line.trimStart().startsWith("⚠") ? "warning" : lines === teach[0] && i === 0 && card ? "accent" : "muted", line),
-							),
+							side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : id === "tips" && i === 0 && card ? "accent" : "muted", line)),
 						),
 				];
 				const title = " inspector ";
@@ -497,13 +747,13 @@ export function orqHarness(deps: HarnessDeps) {
 					? "↑↓ move · enter peek · esc"
 					: minimapSelected !== undefined
 						? "scrolled back · wheel down follows"
-						: `alt+i · /panel focus · /tips ${teachOn ? "off" : "on"}`;
+						: `alt+i · /panel focus · /tips ${prefs.sections.tips ? "off" : "on"}`;
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					side(theme.fg("dim", sectionLines("trajectory", [], inner)[0]!)),
 					...rows.map(side),
 					...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
-					...sections.flatMap(paintSection),
+					...drawn.flatMap(paintSection),
 					side(theme.fg("dim", fit(minimapSummary(trajectory.steps, trajectory.turn, trajectory.totals().cost, found.loop ? 1 : 0)))),
 					side(theme.fg("dim", fit(hint))),
 					theme.fg("border", `└${"─".repeat(inner)}┘`),
@@ -640,16 +890,35 @@ export function orqHarness(deps: HarnessDeps) {
 		// ── events ────────────────────────────────────────────────────────────
 		pi.on("session_start", (_event, ctx) => {
 			ctxRef = ctx;
-			if (ctx.mode === "tui" && !memoryTimer) {
-				sampleMemory();
-				memoryTimer = setInterval(sampleMemory, 5000);
-				memoryTimer.unref?.();
+			if (ctx.mode === "tui" && !rssTimer) {
+				sampleRss();
+				rssTimer = setInterval(sampleRss, 5000);
+				rssTimer.unref?.();
 			}
 			// Every session is a thread: /new and /fork mint a new id, /resume keeps
 			// the file's own. The provider headers read this per request.
 			process.env.ORQI_THREAD_ID = ctx.sessionManager.getSessionId();
 			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
+			// The bus has no replay: ask memorq for its state now, in case it published before this instance listened.
+			try {
+				memorqLoaded = pi.getCommands().some((command) => MEMORQ_COMMANDS.includes(command.name));
+			} catch {
+				memorqLoaded = false;
+			}
+			notesOff = process.env.ORQ_NOTES === "off";
+			memorqAskedAt = now();
+			// Redraw when the grace window closes, so a silent memorq's section gives way to its reason.
+			if (memorqLoaded) setTimeout(render, MEMORQ_GRACE_MS + 100).unref?.();
+			roots = noteRoots();
+			realRoots = roots.map(real);
+			pi.events.emit("memorq:state?", undefined);
+			pi.events.emit("memorq:host", host);
 			trajectory.fromMessages(branchMessages(ctx));
+			// Learns already on this branch are not recorded again; one memorq published before now is.
+			for (const entry of ctx.sessionManager.getBranch())
+				if (entry.type === "custom" && entry.customType === MEMORY_ENTRY && isLearned(entry.data)) learnsSeen.add(learnKey(entry.data));
+			branchLoaded = true;
+			recordLearn(memorqState?.learned);
 			traces.length = 0;
 			measure(ctx);
 			syncAgent(ctx);
@@ -664,6 +933,7 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 		// This handle dies with its session: stop everything that would outlive it.
 		pi.on("session_shutdown", (event, ctx) => {
+			sessionEnded = true;
 			// On quit pi has left the alternate screen by now and prints "To resume" next,
 			// so these lines land just above it. Never studio() here: it fetches.
 			if (event.reason === "quit" && ctx.mode === "tui" && trajectory.turn > 0) {
@@ -678,8 +948,8 @@ export function orqHarness(deps: HarnessDeps) {
 			}
 			if (spinTimer) clearInterval(spinTimer);
 			spinTimer = undefined;
-			if (memoryTimer) clearInterval(memoryTimer);
-			memoryTimer = undefined;
+			if (rssTimer) clearInterval(rssTimer);
+			rssTimer = undefined;
 			releaseKeys?.();
 			releaseKeys = undefined;
 			stopDecisions?.();
@@ -689,11 +959,13 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("message_end", (event) => trajectory.message(event.message as any));
 		pi.on("turn_start", (_event, ctx) => ctx.ui.setWorkingMessage(isAgentModel(ctx.model?.id) ? `${ctx.model!.id.slice(6)}` : "thinking"));
 		pi.on("tool_execution_start", (event, ctx) => {
+			if (event.toolName === "read" && typeof event.args?.path === "string") readPaths.set(event.toolCallId, event.args.path);
 			if (event.parentToolCallId) return;
 			trajectory.toolStart(event.toolCallId, event.toolName, event.args ?? {});
 			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : shortTool(event.toolName));
 		});
 		pi.on("tool_execution_end", (event, ctx) => {
+			countNoteRead(event.toolCallId, event.isError, ctx.cwd);
 			if (event.parentToolCallId) return;
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
 			syncWidgets(ctx);
@@ -712,12 +984,19 @@ export function orqHarness(deps: HarnessDeps) {
 			const dim = (line: string) => ctx.ui.theme.fg("dim", line);
 			ctx.ui.setWidget(
 				"orqi-signals",
-				loop && !panelShown()
-					? [ctx.ui.theme.fg("warning", `⚠ tool loop: ${loop.tool} ×${loop.count} same args · /panel for details`)]
+				// Above the editor whenever the inspector's signals are not on screen: panel hidden, or signals off in /panel.
+				loop && !(panelShown() && prefs.sections.signals)
+					? [
+							ctx.ui.theme.fg(
+								"warning",
+								`⚠ tool loop: ${loop.tool} ×${loop.count} same args · ${panelShown() ? "/panel shows signals" : "alt+i for details"}`,
+							),
+						]
 					: undefined,
 			);
-			if (teachLine !== undefined || !teachOn || panelShown())
-				ctx.ui.setWidget("orqi-teach", teachLine && teachOn && !panelShown() ? [dim(teachLine)] : undefined);
+			const tipsOn = prefs.sections.tips;
+			if (teachLine !== undefined || !tipsOn || panelShown())
+				ctx.ui.setWidget("orqi-teach", teachLine && tipsOn && !panelShown() ? [dim(teachLine)] : undefined);
 		};
 
 		// The one-way gate. Registered here so its verdicts reach the trajectory;
@@ -748,7 +1027,7 @@ export function orqHarness(deps: HarnessDeps) {
 			const run = trajectory.steps.filter((step) => step.id > runFrom);
 			runFrom = trajectory.steps.at(-1)?.id ?? runFrom;
 			let teachLine = "";
-			if (teachOn && ctx.mode === "tui") {
+			if (prefs.sections.tips && ctx.mode === "tui") {
 				const picked = pickCard(run, shownConcepts);
 				if (picked) card = { concept: picked.concept, used: picked.used, step: picked.step.id };
 				if (picked) teachLine = cardLine(card!);
@@ -799,6 +1078,15 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// ── routing ───────────────────────────────────────────────────────────
 		let routeShown = true;
+		pi.registerEntryRenderer<Learned>(MEMORY_ENTRY, (entry, _options, theme) => {
+			// A render never throws: an entry that cannot be drawn draws nothing.
+			try {
+				if (!isLearned(entry.data)) return undefined;
+				return new Text(theme.fg("dim", learnLine(entry.data)), 1, 0);
+			} catch {
+				return undefined;
+			}
+		});
 		pi.registerEntryRenderer<Decision>(ROUTE_ENTRY, (entry, _options, theme) => {
 			if (!routeShown || !entry.data) return undefined;
 			return new Text(theme.fg("dim", routeLine(entry.data)), 1, 0);
@@ -925,9 +1213,9 @@ export function orqHarness(deps: HarnessDeps) {
 				ctx.ui.notify("usage: /tips on|off", "warning");
 				return;
 			}
-			teachOn = arg ? arg === "on" : !teachOn;
+			setSection(ctx, "tips", arg ? arg === "on" : !prefs.sections.tips);
 			ctx.ui.notify(
-				teachOn
+				prefs.sections.tips
 					? `Tips on: a card follows the next relevant tool call, ${panelShown() ? "in the inspector" : "above the editor"}.`
 					: "Tips off.",
 			);
@@ -946,14 +1234,73 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
 
+		/** What to do about a greyed memory row: the update, or where to look. */
+		const memoryHelp = (row: string) =>
+			row.endsWith("update memorq")
+				? "This memorq is too old for the side panel. Update it with /plugin update, then restart orqi."
+				: row.includes("ORQ_NOTES=off")
+					? "Memory is off for this shell: ORQ_NOTES=off. Unset it and restart orqi."
+					: row.includes("/doctor")
+						? "memorq is loaded but has not answered. /doctor checks python3, which it needs."
+						: "memorq turned memory off. /memory turns it back on.";
+		/** /panel's list: one row per section, space switches the selected one and saves the choice. */
+		const showSections = (ctx: ExtensionContext) => {
+			let live: Panel | undefined;
+			const spec = (): PanelSpec => {
+				const { rows, disabled, ids } = sectionRows(sections, prefs);
+				return {
+					title: "side panel",
+					rows,
+					selectable: true,
+					filterable: false,
+					disabled,
+					keys: {
+						space: (i) => {
+							const id = ids[i];
+							// A greyed row cannot be switched: say what would make it available instead.
+							if (id === "memory" && disabled.has(i)) ctx.ui.notify(memoryHelp(rows[i] ?? ""));
+							if (!id || disabled.has(i)) return false;
+							setSection(ctx, id, !prefs.sections[id]);
+							syncWidgets(ctx);
+							render();
+							live?.update(spec());
+							return false;
+						},
+					},
+					hint: "↑↓ · space toggle · esc",
+				};
+			};
+			return panel(
+				ctx,
+				() => spec(),
+				44,
+				(p) => {
+					live = p;
+				},
+			);
+		};
+
 		pi.registerCommand("panel", {
-			description: "the inspector: /panel toggles it, /panel focus moves through the trajectory with ↑↓ and enter",
+			description:
+				"the inspector's sections: /panel picks which show, /panel on|off shows or hides it (alt+i), /panel focus moves through the trajectory with ↑↓ and enter",
 			handler: async (args, ctx) => {
-				if (args.trim() === "focus") {
+				const arg = args.trim();
+				if (arg === "focus") {
 					focusMinimap(ctx);
 					return;
 				}
-				toggleMinimap();
+				if (arg === "on" || arg === "off") {
+					minimapForced = arg === "on";
+					if (!minimapForced && minimapFocused) blurMinimap();
+					syncWidgets(ctx);
+					render();
+					return;
+				}
+				if (arg) {
+					ctx.ui.notify("usage: /panel (pick sections) · /panel on|off · /panel focus", "warning");
+					return;
+				}
+				await showSections(ctx);
 			},
 		});
 
@@ -981,6 +1328,10 @@ function branchMessages(ctx: ExtensionContext): any[] {
 					timestamp: Date.parse(entry.timestamp ?? "") || undefined,
 				},
 			];
+		}
+		if (entry.type === "custom" && entry.customType === MEMORY_ENTRY && isLearned(entry.data)) {
+			const step = learnStep(entry.data);
+			return [{ role: "memory", ...step, timestamp: entry.data.at }];
 		}
 		return [];
 	});

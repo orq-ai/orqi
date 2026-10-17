@@ -9,7 +9,7 @@ import { contextUsed, type ContextSplit } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
 import { bareName, hintsSection, TOOL_HINTS, TOOL_PREFIX } from "./mcp.ts";
 import { cells, fit, oneLine } from "./panel.ts";
-import type { Step, StepUsage } from "./trajectory.ts";
+import { MEMORY_ROW, type Step, type StepUsage } from "./trajectory.ts";
 
 /** `orq/auto`, not `auto`: the virtual model's id alone reads like nothing. */
 export const selectionName = (model: { provider: string; id: string } | undefined) =>
@@ -51,7 +51,8 @@ export function costLines(rows: Map<string, StepUsage & { calls: number }>, turn
 	}
 	if (rows.size === 0) lines.push("no model calls yet");
 	if (top?.cost && total > 0) {
-		const always = repriced(rows, top.cost);
+		// Memory's learn cost does not depend on the session's chat model.
+		const always = repriced(rows, top.cost) + (rows.get(MEMORY_ROW)?.cost ?? 0);
 		const delta = always > 0 ? Math.round(((total - always) / always) * 100) : 0;
 		lines.push(
 			rule,

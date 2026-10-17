@@ -18,8 +18,15 @@ export const MINIMAP_WIDTH = 38;
 export const MINIMAP_MIN_COLS = 140;
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-const GLYPH: Record<Step["role"], string> = { user: "›", assistant: "▌", tool: "⚙", subagent: "⇢", route: "»" };
-const ROLE: Record<Step["role"], string> = { user: "user", assistant: "assist", tool: "tool", subagent: "sub", route: "route" };
+const GLYPH: Record<Step["role"], string> = { user: "›", assistant: "▌", tool: "⚙", subagent: "⇢", route: "»", memory: "◇" };
+const ROLE: Record<Step["role"], string> = {
+	user: "user",
+	assistant: "assist",
+	tool: "tool",
+	subagent: "sub",
+	route: "route",
+	memory: "memory",
+};
 
 export interface RowPaint {
 	bright(text: string): string;
@@ -59,6 +66,7 @@ export function minimapRow(step: Step, width: number, current: boolean, frame = 
 			break;
 		}
 		case "route":
+		case "memory":
 			body = `${step.label} ${step.detail}`;
 			break;
 		default:
@@ -197,17 +205,18 @@ const megabytes = (bytes: number) => {
 
 /**
  *   184 MB  ▅▆▇▇████▇▇▇▇  peak 212 MB
- * orqi's resident memory now, the last twelve samples scaled to the peak (a
- * leak reads as a climb), and the peak since the session started.
+ * The process section: orqi's resident memory now, the last twelve samples
+ * scaled to the peak (a leak reads as a climb), and the peak since the session
+ * started.
  */
-export function memoryLines(samples: number[], peak: number, width: number): string[] {
+export function processLines(samples: number[], peak: number, width: number): string[] {
 	const now = samples.at(-1);
-	if (now === undefined) return sectionLines("memory", [], width, "measuring…");
+	if (now === undefined) return sectionLines("process", [], width, "measuring…");
 	const bars = samples
 		.slice(-12)
 		.map((rss) => SPARK[Math.min(SPARK.length - 1, Math.floor((rss / Math.max(1, peak)) * SPARK.length))])
 		.join("");
-	return sectionLines("memory", [`${megabytes(now).padEnd(7)} ${bars.padEnd(12)}  peak ${megabytes(peak)}`], width);
+	return sectionLines("process", [`${megabytes(now).padEnd(7)} ${bars.padEnd(12)}  peak ${megabytes(peak)}`], width);
 }
 
 /** The peek view for one step: its header line and full content, wrapped by the caller. */

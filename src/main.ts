@@ -57,6 +57,7 @@ import {
 	type Reconnected,
 	type Rejection,
 } from "./mcp.ts";
+import { memorqInstalled } from "./memorq-detect.ts";
 import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, repointOrqModels, talkable } from "./model.ts";
 import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
@@ -631,14 +632,19 @@ const commands = orqCommands(
 // handles from then on (the footer's first frame after /new crashed on it).
 // State that must outlive a session sits in the factories built above
 // (orqCommands); the harness rebuilds from the branch.
+/** Whether memorq is installed as a package pi will load this session. Set per session by makeServices. */
+let memorqPackage = false;
 const makeServices = async () => {
 	const cwd = process.cwd();
+	// pi's SDK trusts every project, so a cloned repo's .orqi/extensions would run
+	// inside orqi unasked (src/trust.ts). The same trust-aware settings say whether
+	// memorq is installed: their packages are exactly the ones pi will load.
+	const settingsManager = SettingsManager.create(cwd, AGENT_DIR, { projectTrusted: projectTrusted(cwd, AGENT_DIR) });
+	memorqPackage = memorqInstalled(settingsManager);
 	const created = await createAgentSessionServices({
 		cwd,
 		agentDir: AGENT_DIR,
-		// pi's SDK trusts every project, so a cloned repo's .pi/extensions would run
-		// inside orqi unasked (src/trust.ts).
-		settingsManager: SettingsManager.create(cwd, AGENT_DIR, { projectTrusted: projectTrusted(cwd, AGENT_DIR) }),
+		settingsManager,
 		modelRuntime,
 		resourceLoaderOptions: {
 			// The tools themselves are declared by pi's MCP; the prompt carries what their schemas leave out.
@@ -661,6 +667,8 @@ const makeServices = async () => {
 				orqHarness({
 					agentDir: AGENT_DIR,
 					catalogue: () => models.catalogue,
+					modelRuntime,
+					memorq: () => (memorqPackage ? "installed" : "none"),
 					// MCP tools arrive after their connection completes; local tools,
 					// ask_user and subagent are registered synchronously through `customTools`.
 					toolCount: () => localFileTools.length + 2 + mcp.toolNames().length,
