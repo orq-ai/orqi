@@ -7,6 +7,7 @@ import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
 import { dollars, footerLine, headerBar, hostLabel, shortModel, tokens, type Paint } from "./footer.ts";
 import {
 	contextLines,
+	contextUsed,
 	sectionLines,
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
@@ -476,6 +477,12 @@ export function orqHarness(deps: HarnessDeps) {
 				ctxRef && deps.modelRuntime && !sessionEnded
 					? pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current)
 					: Promise.resolve(undefined),
+			// Pi cannot calculate a percentage for router or agent models whose window it does not know; orqi's
+			// own measure has the catalogue window and the same visible-context accounting.
+			contextPercent: () => {
+				if (!split || split.window <= 0) return undefined;
+				return (contextUsed(split) / split.window) * 100;
+			},
 		};
 		pi.events.on("memorq:host?", () => pi.events.emit("memorq:host", host));
 		/** A finished `read` that opened a note, by its own path or, through a symlink, by the real one. Subagents' count too. */
@@ -1005,15 +1012,24 @@ export function orqHarness(deps: HarnessDeps) {
 		// pi's own MCP handler only waits for the server, so a block here still wins.
 		// A one-way dialog needs the keys /panel focus would otherwise swallow, so
 		// focus is released the moment the gate starts waiting.
-		const gate = orqGate({
-			gate: (toolCallId, door, verdict) => {
-				if (verdict === "waiting" && minimapFocused) {
-					blurMinimap();
-					render();
-				}
-				trajectory.gate(toolCallId, door, verdict);
+		const gate = orqGate(
+			{
+				gate: (toolCallId, door, verdict) => {
+					if (verdict === "waiting" && minimapFocused) {
+						blurMinimap();
+						render();
+					}
+					trajectory.gate(toolCallId, door, verdict);
+				},
 			},
-		});
+			() => {
+				try {
+					pi.events.emit("memorq:trigger", { event: "decision" });
+				} catch {
+					// A stale Pi handle after session replacement cannot notify memorq; the gate verdict still stands.
+				}
+			},
+		);
 		pi.on("tool_call", (event, ctx) => {
 			// ask_user's dialog needs the same keys, for the same reason.
 			if (event.toolName === "ask_user" && minimapFocused) {

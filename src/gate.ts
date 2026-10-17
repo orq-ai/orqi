@@ -45,7 +45,10 @@ export const DENY = "Deny";
  * The `tool_call` handler and the per-turn memo. `endTurn` runs on
  * `agent_end`: "allow for this turn" never outlives the answer it was given for.
  */
-export function orqGate(trajectory: { gate(toolCallId: string, door: Door, gate?: Step["gate"]): void }) {
+export function orqGate(
+	trajectory: { gate(toolCallId: string, door: Door, gate?: Step["gate"]): void },
+	onDecision: () => void = () => {},
+) {
 	let turnAllowed = false;
 	return {
 		endTurn: () => {
@@ -82,9 +85,11 @@ export function orqGate(trajectory: { gate(toolCallId: string, door: Door, gate?
 			if (choice === ALLOW_ONCE || choice === ALLOW_TURN) {
 				if (choice === ALLOW_TURN) turnAllowed = true;
 				trajectory.gate(event.toolCallId, door, "allowed");
+				onDecision();
 				return undefined;
 			}
 			trajectory.gate(event.toolCallId, door, "denied");
+			onDecision();
 			return { block: true, reason: `The user refused this one-way call (${tool}). Ask before trying again.` };
 		},
 	};

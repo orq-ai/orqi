@@ -14,7 +14,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { sectionLines } from "./inspector-rows.ts";
 
 /** A learn record's event, as memorq exports it. Another value (a newer memorq's) still draws, as `on <event>`. */
-export type Trigger = "compact" | "checkpoint" | "ship" | "idle" | "session_end" | "manual" | "sweep";
+export type Trigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
 
 export interface MemorqState {
 	/** memorq's own version, so orqi can tell "old memorq" from "none". */
@@ -42,6 +42,8 @@ export interface MemorqState {
 export interface MemorqHost {
 	panel: { shown(): boolean; set(shown: boolean): void };
 	pickModel(current: string): Promise<string | undefined>;
+	/** The percentage orqi measures from its own context split, when Pi cannot identify the model window. */
+	contextPercent?(): number | undefined;
 }
 
 const KINDS = new Set(["notes", "rules", "skills"]);
@@ -53,6 +55,7 @@ const TRIGGER: Record<string, string> = {
 	// `at <pct>% context` when memorq sends the threshold (learnPhrase).
 	checkpoint: "at checkpoint",
 	idle: "while idle",
+	decision: "after decision",
 	session_end: "at session end",
 	manual: "on request",
 	sweep: "from past work",
