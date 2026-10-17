@@ -661,6 +661,7 @@ const makeServices = async () => {
 				orqHarness({
 					agentDir: AGENT_DIR,
 					catalogue: () => models.catalogue,
+					modelRuntime,
 					// MCP tools arrive after their connection completes; local tools,
 					// ask_user and subagent are registered synchronously through `customTools`.
 					toolCount: () => localFileTools.length + 2 + mcp.toolNames().length,

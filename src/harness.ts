@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { isAgentModel } from "./agents.ts";
@@ -18,7 +18,18 @@ import {
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
-import { isLearned, isMemorqState, isNoteRead, learnPhrase, memoryLines, noteRoots, readPath, type MemorqState } from "./memory-section.ts";
+import {
+	isLearned,
+	isMemorqState,
+	isNoteRead,
+	learnPhrase,
+	memoryLines,
+	noteRoots,
+	readPath,
+	type MemorqHost,
+	type MemorqState,
+} from "./memory-section.ts";
+import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
@@ -45,6 +56,8 @@ export interface HarnessDeps {
 	project?: () => string | undefined;
 	/** `orq/auto`: its pool and decision feed. */
 	routing?: Routing;
+	/** pi's model runtime (orq models only), for the picker orqi offers memorq; the session ctx has only the registry. */
+	modelRuntime?: ModelRuntime;
 }
 
 const ROUTE_ENTRY = "orqi-route";
@@ -57,7 +70,7 @@ function learnStep(learned: Learned) {
 	const cost = typeof learned.costUsd === "number" ? learned.costUsd : 0;
 	return {
 		label: `learned ${learned.count}`,
-		detail: learnPhrase(learned.trigger),
+		detail: learnPhrase(learned.trigger, learned.pct),
 		usage: { input: 0, output: 0, cacheRead: 0, cost },
 	};
 }
@@ -323,7 +336,7 @@ export function orqHarness(deps: HarnessDeps) {
 		 * orqi window's choices since this one started are kept rather than overwritten, and come back
 		 * into this one. Never from a render: it reads and writes the file.
 		 */
-		const setSection = (ctx: ExtensionContext, id: SectionId, value: boolean) => {
+		const setSection = (ctx: ExtensionContext | undefined, id: SectionId, value: boolean) => {
 			prefs.sections[id] = value;
 			try {
 				const fresh = readPrefs(deps.agentDir);
@@ -331,7 +344,7 @@ export function orqHarness(deps: HarnessDeps) {
 				writePrefs(deps.agentDir, fresh);
 				Object.assign(prefs.sections, fresh.sections);
 			} catch (error) {
-				ctx.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
+				ctx?.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
 			}
 		};
 		// ── memory: what memorq last published on the bus, and the notes the model opened ──
@@ -391,6 +404,23 @@ export function orqHarness(deps: HarnessDeps) {
 			recordLearn(data.learned);
 			render();
 		});
+		/**
+		 * What orqi offers memorq, so its /memory screen can show "Show in side panel" and pick the
+		 * model it writes with from the workspace. Answered on `memorq:host?` (memorq asks at its own
+		 * session_start, which runs before orqi's) and offered again at orqi's session_start.
+		 */
+		const host: MemorqHost = {
+			panel: {
+				shown: () => prefs.sections.memory,
+				set: (shown) => {
+					setSection(ctxRef, "memory", shown);
+					render();
+				},
+			},
+			pickModel: (current) =>
+				ctxRef && deps.modelRuntime ? pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current) : Promise.resolve(undefined),
+		};
+		pi.events.on("memorq:host?", () => pi.events.emit("memorq:host", host));
 		/** A finished `read` that opened a note, by its own path or, through a symlink, by the real one. Subagents' count too. */
 		const countNoteRead = (toolCallId: string, isError: boolean, cwd: string) => {
 			const path = readPaths.get(toolCallId);
@@ -817,6 +847,7 @@ export function orqHarness(deps: HarnessDeps) {
 			roots = noteRoots();
 			realRoots = roots.map(real);
 			pi.events.emit("memorq:state?", undefined);
+			pi.events.emit("memorq:host", host);
 			trajectory.fromMessages(branchMessages(ctx));
 			// Learns already on this branch are not recorded again; one memorq published before now is.
 			for (const step of trajectory.steps) if (step.role === "memory") lastLearnAt = Math.max(lastLearnAt, step.ts);

@@ -923,6 +923,33 @@ test("/trajectory exports a learn as a system step, as it does a route", () => {
 	expect(peekLines(trajectory.steps[1]!).title).toBe("step 2 · memory learned 2");
 });
 
+test("orqi answers memorq:host? with its panel row and the model picker, and offers them at session start", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-host-"));
+	const h = harnessOn(dir);
+	const hosts: any[] = [];
+	h.bus.on("memorq:host", (host) => hosts.push(host));
+	try {
+		// memorq asks at its own session_start, which runs before orqi's.
+		h.bus.emit("memorq:host?", undefined);
+		expect(hosts).toHaveLength(1);
+		await h.start();
+		expect(hosts).toHaveLength(2);
+		const host = hosts[1];
+		expect(Object.keys(host).sort()).toEqual(["panel", "pickModel"]);
+		expect(host.panel.shown()).toBe(true);
+		host.panel.set(false);
+		expect(host.panel.shown()).toBe(false);
+		expect(readPrefs(dir).sections.memory).toBe(false);
+		await h.commands.get("panel")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[2]).toBe("[ ] memory  · install memorq");
+		// No model runtime handed to this harness: the picker opens nothing and memorq writes nothing.
+		expect(await host.pickModel("openai/gpt-5")).toBeUndefined();
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("/reload and /new: the next instance asks again and draws the fresh state", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
 	const bus = fakeBus();

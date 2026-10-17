@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isMemorqState, isNoteRead, memoryLines, type MemorqState } from "./memory-section.ts";
+import { isMemorqState, isNoteRead, learnPhrase, memoryLines, type MemorqState, type Trigger } from "./memory-section.ts";
 
 const MIN = 60_000;
 const NOW = Date.parse("2026-10-17T12:00:00Z");
@@ -64,7 +64,7 @@ test("the full session: used this turn, read, learned after a git push, the next
 
 test("every trigger reads as words, and the age as m, h or d", () => {
 	const learned = (trigger: string, ago: number) =>
-		body(memoryLines(state({ learned: { count: 2, trigger, at: NOW - ago } }), 0, 60, NOW))[1];
+		body(memoryLines(state({ learned: { count: 2, trigger: trigger as Trigger, at: NOW - ago } }), 0, 60, NOW))[1];
 	expect(learned("compact", 5 * MIN)).toBe("  learned 2 after compaction · 5m");
 	expect(learned("checkpoint", 2 * 60 * MIN)).toBe("  learned 2 as context filled · 2h");
 	expect(learned("idle", 24 * 60 * MIN)).toBe("  learned 2 while idle · 1d");
@@ -76,15 +76,55 @@ test("every trigger reads as words, and the age as m, h or d", () => {
 	expect(learned("prompt", MIN)).toBe("  learned 2 on prompt · 1m");
 });
 
-test("a failed review is accepted but not drawn yet, and an unknown enabled reads as on", () => {
-	expect(body(memoryLines(state({ review: { failed: "boom" } }), 0, 36, NOW))).toEqual(["  47 notes for this repo"]);
-	expect(body(memoryLines(state({ review: { dueInSessions: 2, failed: "boom" } }), 0, 36, NOW))[1]).toBe(
-		"  next memory review in 2 sessions",
-	);
+test("a failed review alone still draws, and an unknown enabled reads as on", () => {
+	expect(body(memoryLines(state({ review: { failed: "boom" } }), 0, 36, NOW))).toEqual([
+		"  47 notes for this repo",
+		"  last review failed",
+	]);
 	expect(body(memoryLines(state({ enabled: "later" as never }), 0, 36, NOW))).toEqual(["  47 notes for this repo"]);
 	// A review only reads as running when it says so.
 	expect(body(memoryLines(state({ review: { running: false, dueInSessions: 1 } as never }), 0, 36, NOW))[1]).toBe(
 		"  next memory review in 1 session",
+	);
+});
+
+test("a checkpoint learn names its threshold when memorq sends it; a failed review says so", () => {
+	const learned = (pct?: number) =>
+		body(memoryLines(state({ learned: { count: 2, trigger: "checkpoint", at: NOW - 3 * MIN, pct } }), 0, 36, NOW))[1];
+	expect(learned(80)).toBe("  learned 2 at 80% context · 3m");
+	expect(learned()).toBe("  learned 2 as context filled · 3m");
+	expect(learnPhrase("checkpoint", 65)).toBe("at 65% context");
+	expect(learnPhrase("ship", 65)).toBe("after git push");
+	expect(body(memoryLines(state({ review: { dueInSessions: 2, failed: "model timed out" } }), 0, 36, NOW))[1]).toBe("  last review failed");
+	// A review running now says so, whatever the last one did.
+	expect(body(memoryLines(state({ review: { running: true, notes: 47, failed: "x" } }), 0, 36, NOW))[1]).toBe("  reviewing 47 notes…");
+});
+
+test("memorq's own types, as it exports them, are states orqi accepts", () => {
+	// Verbatim from orq-knowledge-notes integrations/pi/state.ts (Plan 2, 63c481d).
+	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "session_end" | "manual" | "sweep";
+	interface ProducerState {
+		version: string;
+		notes: number;
+		usedThisTurn: number;
+		learned?: { count: number; trigger: ProducerTrigger; at: number; costUsd?: number; pct?: number };
+		review?: ({ dueInSessions: number } | { running: true; notes: number }) & { failed?: string };
+		stores: { notes: string; rules: string; skills: string };
+		paused: boolean;
+		enabled: "on" | "readonly" | "off";
+	}
+	const produced: ProducerState[] = [
+		{ ...state(), learned: { count: 1, trigger: "manual", at: NOW, pct: 80 }, review: { dueInSessions: 0, failed: "boom" } },
+		{ ...state(), learned: { count: 3, trigger: "sweep", at: NOW, costUsd: 0.2 }, review: { running: true, notes: 47 } },
+	];
+	for (const p of produced) {
+		const accepted: MemorqState = p; // a compile error here means the shapes drifted
+		expect(isMemorqState(accepted)).toBe(true);
+	}
+	// A pct that is not a number is ignored, not fatal.
+	expect(isMemorqState(state({ learned: { count: 1, trigger: "checkpoint", at: NOW, pct: "80" as never } }))).toBe(true);
+	expect(body(memoryLines(state({ learned: { count: 1, trigger: "checkpoint", at: NOW, pct: "80" as never } }), 0, 36, NOW))[1]).toBe(
+		"  learned 1 as context filled · now",
 	);
 });
 
@@ -118,14 +158,20 @@ test("a long learned line cuts the trigger, never the age", () => {
 		"from-a-harness-with-a-very-long-event-name",
 	];
 	for (const trigger of triggers) {
-		const line = memoryLines(state({ learned: { count: 12, trigger, at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
+		// A newer memorq's event orqi has no words for is still drawn: the type is memorq's, the data may be newer.
+		const line = memoryLines(state({ learned: { count: 12, trigger: trigger as Trigger, at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
 		expect(visibleWidth(line)).toBe(36);
 		expect(line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toEndWith(" · 59m");
 	}
 	// The commonest trigger, a git push, fits whole even with a two-digit count.
 	const ship = memoryLines(state({ learned: { count: 12, trigger: "ship", at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
 	expect(ship.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toBe("  learned 12 after git push · 59m");
-	const cut = memoryLines(state({ learned: { count: 12, trigger: "from-another-harness", at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
+	const cut = memoryLines(
+		state({ learned: { count: 12, trigger: "from-another-harness" as Trigger, at: NOW - 59 * MIN } }),
+		0,
+		36,
+		NOW,
+	)[2]!;
 	expect(cut.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toBe("  learned 12 on from-another-… · 59m");
 });
 

@@ -13,8 +13,8 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { sectionLines } from "./inspector-rows.ts";
 
-/** A learn record's event: `ship`, `compact`, `checkpoint`, `idle`, `session_end`, `manual`, `sweep`, or a harness's own. */
-export type Trigger = string;
+/** A learn record's event, as memorq exports it. Another value (a newer memorq's) still draws, as `on <event>`. */
+export type Trigger = "compact" | "checkpoint" | "ship" | "idle" | "session_end" | "manual" | "sweep";
 
 export interface MemorqState {
 	/** memorq's own version, so orqi can tell "old memorq" from "none". */
@@ -23,12 +23,14 @@ export interface MemorqState {
 	notes: number;
 	/** Index lines and ranked notes in this turn's prompt. */
 	usedThisTurn: number;
-	learned?: { count: number; trigger: Trigger; at: number; costUsd?: number };
+	/** `pct`: the context threshold a checkpoint learn fired at. */
+	learned?: { count: number; trigger: Trigger; at: number; costUsd?: number; pct?: number };
 	/**
-	 * Absent when no review can run: the review is off, the repo paused, or under ten notes. `failed`
-	 * (the last review's error) is not drawn yet; it is accepted so a memorq that sends it is not refused.
+	 * Absent when no review can run: the review is off, the repo paused, or under ten notes. `failed` is
+	 * the last review's error. memorq sends `({dueInSessions} | {running, notes}) & {failed?}`; this is
+	 * the same shape written so `running === true` narrows it, and a `failed` alone is tolerated too.
 	 */
-	review?: { running: true; notes: number } | { running?: undefined; dueInSessions?: number; failed?: string };
+	review?: { running: true; notes: number; failed?: string } | { running?: undefined; dueInSessions?: number; failed?: string };
 	/** The folder each kind is written to; empty strings outside a git repository. */
 	stores: { notes: string; rules: string; skills: string };
 	paused: boolean;
@@ -85,19 +87,21 @@ export function isLearned(data: unknown): data is NonNullable<MemorqState["learn
 	return isObject(data) && typeof data.count === "number" && typeof data.at === "number" && typeof data.trigger === "string";
 }
 
-/** The trigger as words: `after last git push`, `while idle`, `on <event>` for one orqi has no words for. */
-function triggerPhrase(trigger: Trigger): string {
+/**
+ * The trigger as words: `after git push`, `while idle`, `at 80% context` for a checkpoint whose threshold
+ * memorq sent, `on <event>` for an event orqi has no words for. Shared by the panel line, the trajectory
+ * step and the transcript entry.
+ */
+export function learnPhrase(trigger: string, pct?: unknown): string {
+	if (trigger === "checkpoint" && typeof pct === "number") return `at ${pct}% context`;
 	return Object.hasOwn(TRIGGER, trigger) ? TRIGGER[trigger]! : `on ${trigger}`;
 }
-
-/** The trigger as words, for a learn that stands on its own: a trajectory step, an entry, the panel line. */
-export const learnPhrase = triggerPhrase;
 
 /** `learned <count> <trigger> · <age>` in `width` cells: the trigger is what gives way, never the age. */
 function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number, now: number): string {
 	const head = `learned ${learned.count} `;
 	const tail = ` · ${age(Math.max(0, now - learned.at))}`;
-	const trigger = triggerPhrase(learned.trigger);
+	const trigger = learnPhrase(learned.trigger, learned.pct);
 	const room = Math.max(1, width - visibleWidth(head) - visibleWidth(tail));
 	return `${head}${truncateToWidth(trigger, room, "…")}${tail}`;
 }
@@ -132,6 +136,7 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 	if (state.paused) body.push("learning paused · /memory");
 	else if (state.enabled === "readonly") body.push("read-only · learns nothing");
 	else if (state.review?.running === true) body.push(`reviewing ${state.review.notes} notes…`);
+	else if (typeof state.review?.failed === "string") body.push("last review failed");
 	else if (typeof state.review?.dueInSessions === "number")
 		body.push(
 			state.review.dueInSessions > 0
