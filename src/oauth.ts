@@ -13,6 +13,7 @@
 
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { orqEnv } from "./auth.ts";
 
 export interface DeviceLogin {
 	url?: string;
@@ -137,7 +138,7 @@ export function signInExpired(authPath: string, now = Date.now()): boolean {
 /** Run the orq CLI, streaming its output; the abort signal kills it. */
 function runCli(args: string[], onOutput: (chunk: string) => void, signal?: AbortSignal): Promise<number> {
 	return new Promise((resolve) => {
-		const child = spawn("orq", args, { stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn("orq", args, { stdio: ["ignore", "pipe", "pipe"], env: orqEnv() });
 		child.stdout.on("data", (data) => onOutput(String(data)));
 		child.stderr.on("data", (data) => onOutput(String(data)));
 		const abort = () => child.kill();

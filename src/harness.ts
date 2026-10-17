@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { isAgentModel } from "./agents.ts";
-import { apiBaseUrl, runOrq } from "./auth.ts";
-import { dollars, footerLine, headerBar, shortModel, tokens, type Paint } from "./footer.ts";
+import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
+import { dollars, footerLine, headerBar, hostLabel, shortModel, tokens, type Paint } from "./footer.ts";
 import {
 	contextLines,
 	memoryLines,
@@ -523,6 +523,7 @@ export function orqHarness(deps: HarnessDeps) {
 				: undefined;
 			return {
 				workspace: deps.workspace() ?? resolvedWorkspace,
+				server: hostLabel(apiBaseUrl(), DEFAULT_SERVER),
 				project: deps.project?.(),
 				agent,
 				routing: model?.provider === "orq" && model.id === "auto" ? "orq/auto" : undefined,

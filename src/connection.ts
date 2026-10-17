@@ -13,7 +13,23 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { credentialCandidates, LOGIN_HINT, loginKey, runOrq, SESSION_SOURCE, WHOAMI_ARGS, type Credential } from "./auth.ts";
+import {
+	apiBaseUrl,
+	credentialCandidates,
+	exportedServer,
+	LOGIN_HINT,
+	loginKey,
+	normalizeServer,
+	OFFICIAL_SERVERS,
+	orqEnv,
+	profileServerOf,
+	runOrq,
+	SESSION_SOURCE,
+	staged,
+	stageServer,
+	WHOAMI_ARGS,
+	type Credential,
+} from "./auth.ts";
 import { headerLines, type HeaderInfo, VERSION } from "./branding.ts";
 import { CredentialsRejected, firstLine, type Reconnected, type Rejection } from "./mcp.ts";
 import { refreshStoredSignIn, signInExpired } from "./oauth.ts";
@@ -42,6 +58,7 @@ export const ORQI_COMMANDS = [
 	"reconnect",
 	"whoami",
 	"workspace",
+	"server",
 	"doctor",
 	"update",
 	"panel",
@@ -162,6 +179,10 @@ export interface Boot {
 	welcome?: boolean;
 	/** The tools connected, but the stored /login key (which the model prefers) was refused. */
 	loginRefused?: boolean;
+	/** Said once at startup: what the boot printed would be lost behind the fullscreen TUI. */
+	notice?: string;
+	/** Injectable for tests: `/server` runs the CLI through this. */
+	runOrq?: typeof runOrq;
 }
 
 export function orqCommands(
@@ -337,7 +358,7 @@ export function orqCommands(
 		}
 		if (choice === "browser") {
 			ctx.ui.setWidget(AUTH_WIDGET, ["waiting for the browser sign-in… (finish it in the browser; /reconnect if this stalls)"]);
-			const proc = Bun.spawn(["orq", "auth", "login", "--no-input"], { stdout: "pipe", stderr: "pipe" });
+			const proc = Bun.spawn(["orq", "auth", "login", "--no-input"], { stdout: "pipe", stderr: "pipe", env: orqEnv() });
 			let shown = false;
 			const watch = async (stream: ReadableStream<Uint8Array>) => {
 				for await (const chunk of stream) {
@@ -408,6 +429,7 @@ export function orqCommands(
 			showWorkspace(ctx);
 			if (event.reason === "startup" && ctx.hasUI) void announceUpdate(ctx);
 			if (event.reason === "startup" && ctx.hasUI && legacyProjectDir(process.cwd())) ctx.ui.notify(LEGACY_PROJECT_DIR, "warning");
+			if (event.reason === "startup" && ctx.hasUI && boot.notice) ctx.ui.notify(boot.notice, "warning");
 			// Pinned rather than notified: a notify scrolls away with the first
 			// answer, and the user has to see this until it is fixed. Once, not twice.
 			if (rejections.length > 0 || loginRefused) showAuth(ctx);
@@ -557,6 +579,83 @@ export function orqCommands(
 				}
 				// After the panel is gone: a switch reconnects the tools and may pin a warning.
 				if (chosen) await switchTo(chosen);
+			},
+		});
+
+		// pi's /settings has no slot an extension can add to, so the host is its own
+		// command. The CLI stores it (`orq server use`, the key `orq setup --server`
+		// writes). orq's own hosts are saved at once; any other only once a credential
+		// is accepted there and it answers as orq, and a refusal puts the previous host
+		// back, so the session is never split across two hosts.
+		const cli = boot.runOrq ?? runOrq;
+		const host = (server: string) => server.replace(/^https?:\/\//, "");
+		const exportedNote = () =>
+			exportedServer() ? ` ORQ_SERVER=${exportedServer()} is exported in your shell, so the next launch uses that again.` : "";
+		const switchServer = async (ctx: Parameters<typeof report>[0] & { ui: Ui }, server: string) => {
+			const pinned = profileServerOf(cli(["server", "current", "-o", "json"]).stdout);
+			if (pinned) {
+				ctx.ui.notify(`the orq profile in force pins ${pinned}; unset ORQ_PROFILE to switch host`, "warning");
+				return;
+			}
+			// A retry already running would be joined, and report on the old host.
+			await inFlight?.catch(() => undefined);
+			const previous = process.env.ORQ_SERVER;
+			const restore = () => {
+				if (previous === undefined) delete process.env.ORQ_SERVER;
+				else process.env.ORQ_SERVER = previous;
+			};
+			process.env.ORQ_SERVER = server;
+			if (OFFICIAL_SERVERS.includes(server)) {
+				if (!report(ctx, cli(["server", "use", "--", server]))) return restore();
+			} else stageServer(server);
+			const outcome = await recover(pi, ctx, (all) => all);
+			if (staged() === server) {
+				// Nothing accepted there, or it did not answer as orq: back where it was.
+				stageServer(undefined);
+				restore();
+				await recover(pi, ctx, (all) => all);
+				ctx.ui.notify(`${server} is not saved; still on ${host(apiBaseUrl())}. ${outcome ?? ""}`.trim(), "warning");
+				return;
+			}
+			if (outcome) ctx.ui.notify(`${outcome}${exportedNote()}`, rejections.length ? "warning" : "info");
+		};
+		pi.registerCommand("server", {
+			description: "pick the orq host (my.orq.ai, staging), or /server <url> for another; /server clear forgets it",
+			handler: async (args, ctx) => {
+				const typed = args.trim();
+				if (typed === "clear") {
+					if (!report(ctx, cli(["server", "clear"]))) return;
+					delete process.env.ORQ_SERVER;
+					const outcome = await recover(pi, ctx, (all) => all);
+					if (outcome) ctx.ui.notify(`${outcome}${exportedNote()}`, rejections.length ? "warning" : "info");
+					return;
+				}
+				if (typed) {
+					const chosen = normalizeServer(typed);
+					if ("error" in chosen) ctx.ui.notify(chosen.error, "error");
+					else await switchServer(ctx, chosen.server);
+					return;
+				}
+				const inUse = apiBaseUrl().replace(/\/+$/, "");
+				const hosts = [...new Set([...OFFICIAL_SERVERS, inUse])];
+				const rows = hosts.map(
+					(server) => `${server === inUse ? "●" : " "} ${host(server)}${OFFICIAL_SERVERS.includes(server) ? "" : "  (custom)"}`,
+				);
+				let picked: string | undefined;
+				const shown = await showPanel(ctx, {
+					title: "orq host",
+					rows,
+					selectable: true,
+					hint: "↑↓ move · enter switch · esc close · /server <url> for another host",
+					keys: {
+						enter: (i: number) => {
+							if (hosts[i] !== inUse) picked = hosts[i];
+							return true;
+						},
+					},
+				});
+				if (!shown) ctx.ui.notify(noticeText([...rows, "/server <url> switches"]));
+				else if (picked) await switchServer(ctx, picked);
 			},
 		});
 

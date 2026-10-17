@@ -7,8 +7,9 @@
  *
  *   orqi                 interactive TUI
  *   orqi "<prompt>"      one-shot, prints the answer and exits
-  orqi --session <id>  resume a session (id, id prefix or .jsonl path)
+ *   orqi --session <id>  resume a session (id, id prefix or .jsonl path)
  *   orqi --version       print the version and exit
+ *   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -26,7 +27,22 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_SLASH_COMMANDS } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/slash-commands.js";
-import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, routerUrl, SESSION_SOURCE, type Credential } from "./auth.ts";
+import {
+	credentialCandidates,
+	LOGIN_HINT_ONESHOT,
+	projectForCredential,
+	routerUrl,
+	OFFICIAL_SERVERS,
+	profileServerOf,
+	runOrq,
+	saveServer,
+	SESSION_SOURCE,
+	stageServer,
+	staged,
+	takeServerFlag,
+	verifyOrqHost,
+	type Credential,
+} from "./auth.ts";
 import { orqOAuth, refreshStoredSignIn, storedOAuthToken } from "./oauth.ts";
 import { dim, type HeaderInfo, terminalProgress, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./connection.ts";
@@ -41,7 +57,7 @@ import {
 	type Reconnected,
 	type Rejection,
 } from "./mcp.ts";
-import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, talkable } from "./model.ts";
+import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, repointOrqModels, talkable } from "./model.ts";
 import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
@@ -73,6 +89,17 @@ if (process.env.ORQI_BOOT !== "1") {
 	process.exit(2);
 }
 
+// `--server <url>` is taken out wherever it sits, then set as ORQ_SERVER, so
+// whoami, `orq auth login` and every URL built from apiBaseUrl() follow it for
+// this run. It is saved as the CLI's default only once a credential is accepted.
+const serverFlag = takeServerFlag(process.argv);
+if (serverFlag.error) {
+	console.error(serverFlag.error);
+	process.exit(2);
+}
+process.argv = serverFlag.argv;
+if (serverFlag.server) process.env.ORQ_SERVER = serverFlag.server;
+
 // `orqi --session <id>` resumes a session (the command pi's quit hint names);
 // anything else in argv[2] is a one-shot prompt.
 const sessionArg = process.argv[2] === "--session" ? (process.argv[3] ?? "") : undefined;
@@ -96,6 +123,7 @@ if (oneShot === "--help" || oneShot === "-h") {
   orqi                 interactive TUI
   orqi "<prompt>"      one-shot, prints the answer and exits
   orqi --version       print the version and exit
+  orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
   orqi update          replace this binary with the latest release
   orqi plugin install <source>   install plugin (skills+MCP)
   orqi plugin list               list installed plugins
@@ -399,6 +427,27 @@ try {
 		bootNote = `orq did not answer the credential check (${firstLine(error)}); trying ${credential?.source ?? "nothing"}`;
 	}
 }
+// `--server` is remembered the way `orq setup --server` remembers it. orq's own
+// hosts are saved at once; any other once a credential is accepted there and it
+// answers as orq, so a typo'd or lookalike host is never saved. A profile that
+// carries its own server outranks ORQ_SERVER, so then the flag does nothing.
+let serverNote: string | undefined;
+if (serverFlag.server) {
+	const pinned = profileServerOf(runOrq(["server", "current", "-o", "json"]).stdout);
+	if (pinned) serverNote = `--server ${serverFlag.server} is not used: the orq profile in force pins ${pinned}`;
+	else if (OFFICIAL_SERVERS.includes(serverFlag.server)) serverNote = saveServer(serverFlag.server);
+	// A stall is no verdict on the host either: kept for the next accepted sign-in.
+	else if (credential && !bootNote) {
+		const why = await verifyOrqHost(serverFlag.server, credential.token);
+		serverNote = why ? `${serverFlag.server} is not saved: ${why}` : saveServer(serverFlag.server);
+	} else {
+		stageServer(serverFlag.server);
+		serverNote = `${serverFlag.server} is not saved as the orq host yet: ${credential ? "orq did not answer; /reconnect tries again" : "nothing was accepted there"}`;
+	}
+}
+// Said where it can be seen: stderr would vanish behind the fullscreen TUI,
+// so the session shows it as a notice; one-shot prints it before exiting.
+if (serverNote && oneShot) console.error(serverNote);
 // Nothing accepted (no candidate, or every one refused): the TUI opens on the
 // sign-in invitation and the welcome; one-shot says why and stops.
 const welcome = !credential;
@@ -448,8 +497,11 @@ async function renewSession(force = false) {
 process.env.ORQI_REPO ??= repoName();
 // The router on the host whoami resolved, for plugins that call it themselves
 // (memorq writes its notes there with ORQ_API_KEY): their own default is api.orq.ai.
+const routerOwned = !process.env.ROUTER_BASE_URL;
 process.env.ROUTER_BASE_URL ??= routerUrl();
 const models = await createOrqModelRuntime(AGENT_DIR, credential?.token ?? candidates[0]?.token ?? "");
+// The router URL models.json was written with: /server moves it.
+let modelsRouter = routerUrl();
 const modelRuntime = models.runtime;
 // "Sign in with an account" in pi's /login: the orq CLI's browser login, so a
 // key never has to be pasted. Its token is the login session's (via whoami).
@@ -506,21 +558,41 @@ const plugin = pluginResources(pkgDir, AGENT_DIR, ORQI_COMMANDS);
 // rejection warning came back.
 const commands = orqCommands(
 	async (next: Credential[]) => {
-		const result: Reconnected = { credential: await pickCredential(next), added: [] };
+		const credential = await pickCredential(next);
+		// A host other than orq's own (`--server`, `/server`) must answer as orq before
+		// anything moves onto it; refused here, /server puts the previous host back.
+		const host = staged();
+		const why = host && (await verifyOrqHost(host, credential.token));
+		if (why) throw new CredentialsRejected([{ source: host!, reason: why }]);
+		const result: Reconnected = { credential, added: [] };
+		if (host) {
+			stageServer(undefined);
+			result.note = saveServer(host);
+		}
 		const previous = process.env.ORQ_API_KEY;
 		// The model runtime and pi's MCP both read $ORQ_API_KEY: move both, then reconnect the server.
 		process.env.ORQ_API_KEY = result.credential.token;
 		activeCredential = result.credential;
 		mcp.refresh();
+		// `/server` moves the host under the same process: follow it, unless the user set their own.
+		if (routerOwned) process.env.ROUTER_BASE_URL = routerUrl();
 		// Reload the models when the boot had nothing that worked (they are the
 		// fallback) or the credential changed: what one key sees, its workspace's
 		// models and its agents, another may not, and /login or /workspace kept
 		// the old key's list until a restart.
 		const changed = previous !== result.credential.token;
-		if ((models.note || changed) && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
+		// models.json carries the router URL: a key valid on both hosts must not keep the old one.
+		const moved = modelsRouter !== routerUrl();
+		if ((models.note || changed || moved) && (await refreshOrqModels(AGENT_DIR, result.credential.token, models).catch(() => false))) {
+			routing.refresh(models.catalogue);
+			result.modelsReloaded = true;
+		} else if (moved) {
+			// The catalogue did not answer: the old list, on the new host.
+			await repointOrqModels(AGENT_DIR, models);
 			routing.refresh(models.catalogue);
 			result.modelsReloaded = true;
 		}
+		modelsRouter = routerUrl();
 		header.workspace = result.credential.workspace;
 		header.project = await projectForCredential(result.credential.token);
 		header.status = statusLine("orq MCP", result.note);
@@ -538,6 +610,7 @@ const commands = orqCommands(
 		candidates,
 		welcome,
 		loginRefused: Boolean(loginRefused),
+		notice: serverNote,
 	},
 	// Session-token renewal: one whoami per expiry window, shared by the input
 	// hook and the slash commands' direct MCP calls.

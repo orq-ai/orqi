@@ -205,6 +205,27 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **`update` is claimed as `argv[2]` too, for the same reason.** Without that branch, bare `orqi
   update` would boot a session and hand "update" to the model as a prompt; `orqi "update my agent"`
   still reaches the model because it is a second argv entry, not the first.
+- **`--server <url>` only sets `ORQ_SERVER`; saving it is the CLI's `orq server use`.** orqi never
+  overrides `apiBaseUrl()` with it: the CLI weighs the variable and whoami reports the answer, so
+  the host and the session file orqi reads stay the CLI's. It is taken out of argv anywhere before a
+  `--`, never from `update`/`plugin`/`mcp` arguments, and given twice is an error (the second would
+  be left in argv[2] as a prompt). orq's own hosts (`OFFICIAL_SERVERS`) are saved at once; any other
+  is staged and saved only after a credential is accepted there and `verifyOrqHost` gets a 2xx
+  project list, because the credential check passes a parked domain's 404 and `orq server use`
+  writes the default every later `orq` uses. Input goes through `normalizeServer` first:
+  `orq server use` takes an index or flags, and `/server --help`, `0` and `list` were each saved
+  as a host. In a session it is `/server`, because pi's `/settings` is a closed list with no slot for
+  an extension. A custom host that fails puts the previous `ORQ_SERVER` back and reconnects there,
+  so the session is never split across two hosts with the old key going to the new one. A profile
+  with its own server outranks `ORQ_SERVER`, so both refuse while one is in force. `reconnect`
+  re-points `ROUTER_BASE_URL` and rewrites models.json whenever the router URL moved, even with the
+  same token or a catalogue that did not answer. Every `orq` spawn passes `env: orqEnv()`: Bun's
+  `spawnSync` and `Bun.spawn` hand a child the launch environment, not `process.env` as changed
+  since. `orqEnv()` is the launch environment plus the current `ORQ_SERVER` only, never all of
+  `process.env`: orqi moves `ORQ_API_KEY` onto the winning candidate, and a CLI handed that would
+  report every credential as `ORQ_API_KEY`. Not done: on a switch every candidate is tried against
+  the new host, so a custom host that passes the check has seen every key orqi holds; the stored
+  `/login` key carries no host to filter by.
 - **The update swaps by `renameSync`, never by extracting the tarball over the running binary.**
   GNU tar truncates a file it is overwriting rather than unlinking it first, so `tar -xzf` onto a
   busy executable is `ETXTBSY` on Linux; bsdtar on macOS unlinks first and succeeds. Both

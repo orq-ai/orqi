@@ -329,6 +329,12 @@ export async function refreshOrqModels(agentDir: string, token: string, models: 
 	}
 }
 
+/** Rewrite models.json for the current router URL with the list already loaded, after a host switch. */
+export async function repointOrqModels(agentDir: string, models: OrqModels): Promise<void> {
+	writeModelsJson(agentDir, models.catalogue);
+	await models.runtime.refresh();
+}
+
 /** The configured default if the workspace has it, else the first enabled model. */
 export function pickModel(models: OrqModels, id = DEFAULT_MODEL) {
 	// `orq/auto` is the virtual model: provider `orq`, id `auto`.
