@@ -132,7 +132,16 @@ test("a host is read as the base URL the CLI stores, and anything else is refuse
 	expect(normalizeServer(" https://acme.example.com/ ")).toEqual({ server: "https://acme.example.com" });
 	expect(normalizeServer("http://localhost:8080")).toEqual({ server: "http://localhost:8080" });
 	// Each of these was saved as the CLI's default by `orq server use` before.
-	for (const typed of ["--help", "-h", "0", "list", "list my agents", "", "https://acme.example.com?x=1"])
+	for (const typed of [
+		"--help",
+		"-h",
+		"0",
+		"list",
+		"list my agents",
+		"",
+		"https://acme.example.com?x=1",
+		"https://:secret@acme.example.com",
+	])
 		expect("error" in normalizeServer(typed)).toBe(true);
 	expect(normalizeServer("http://acme.example.com")).toEqual({
 		error: "http://acme.example.com: an orq host needs https (http only on localhost)",

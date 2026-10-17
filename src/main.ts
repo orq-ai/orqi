@@ -565,10 +565,6 @@ const commands = orqCommands(
 		const why = host && (await verifyOrqHost(host, credential.token));
 		if (why) throw new CredentialsRejected([{ source: host!, reason: why }]);
 		const result: Reconnected = { credential, added: [] };
-		if (host) {
-			stageServer(undefined);
-			result.note = saveServer(host);
-		}
 		const previous = process.env.ORQ_API_KEY;
 		// The model runtime and pi's MCP both read $ORQ_API_KEY: move both, then reconnect the server.
 		process.env.ORQ_API_KEY = result.credential.token;
@@ -593,6 +589,11 @@ const commands = orqCommands(
 			result.modelsReloaded = true;
 		}
 		modelsRouter = routerUrl();
+		// Saved last: a step above that throws leaves it staged, so /server puts the previous host back.
+		if (host) {
+			stageServer(undefined);
+			result.note = saveServer(host);
+		}
 		header.workspace = result.credential.workspace;
 		header.project = await projectForCredential(result.credential.token);
 		header.status = statusLine("orq MCP", result.note);

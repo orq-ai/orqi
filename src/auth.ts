@@ -66,7 +66,7 @@ export function normalizeServer(input: string): { server: string } | { error: st
 	const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
 	// Checked as typed: the parser reads `0` (the CLI's index for a host) as https://0.0.0.0.
 	const typedHost = raw.replace(/^[a-z]+:\/\//i, "").split(/[/:]/)[0] ?? "";
-	if (url.search || url.hash || url.username || (!local && !typedHost.includes("."))) return bad;
+	if (url.search || url.hash || url.username || url.password || (!local && !typedHost.includes("."))) return bad;
 	if (url.protocol !== "https:" && !(local && url.protocol === "http:"))
 		return { error: `${raw}: an orq host needs https (http only on localhost)` };
 	return { server: `${url.origin}${url.pathname.replace(/\/+$/, "")}` };
