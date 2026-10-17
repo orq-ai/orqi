@@ -1,7 +1,7 @@
 /** Checks for the teaching harness: trajectory, footer, minimap, export, links, agents. */
 
 import { expect, test } from "bun:test";
-import { VERSION } from "./branding.ts";
+import { startupTheme, VERSION } from "./branding.ts";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -1303,4 +1303,19 @@ test("the exit summary: who, how long, what it cost, what it changed, where to f
 		"  changes   none",
 		"  thread    7c1e",
 	]);
+});
+
+test("the /theme pick survives a restart; ORQI_THEME only overrides one run", () => {
+	const known = ["orq-dark", "orq-slate", "orq-signal", "nord", "tokyo-night", "dark", "light", "system"];
+	expect(startupTheme(undefined, "nord", known)).toBe("nord"); // the saved pick, kept
+	expect(startupTheme(undefined, undefined, known)).toBe("orq-dark"); // nothing saved yet
+	expect(startupTheme(undefined, "dark", known)).toBe("dark"); // pi's own dark, picked in /theme
+	expect(startupTheme(undefined, "light/dark", known)).toBe("light/dark");
+	expect(startupTheme(undefined, "orq-amber", known)).toBe("orq-dark"); // folded themes
+	expect(startupTheme(undefined, "orq-teal", known)).toBe("orq-slate");
+	expect(startupTheme(undefined, "some-plugin-theme", known)).toBe("orq-dark");
+	expect(startupTheme("tokyo-night", "nord", known)).toBe("tokyo-night"); // env wins for the run
+	expect(startupTheme("dark", "nord", known)).toBe("orq-dark"); // short names are orqi's
+	expect(startupTheme("teal", undefined, known)).toBe("orq-slate");
+	expect(startupTheme("nope", "nord", known)).toBe("orq-dark");
 });
