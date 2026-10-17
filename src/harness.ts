@@ -344,7 +344,12 @@ export function orqHarness(deps: HarnessDeps) {
 				writePrefs(deps.agentDir, fresh);
 				Object.assign(prefs.sections, fresh.sections);
 			} catch (error) {
-				ctx?.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
+				// memorq calls this through panel.set, possibly after this session closed: a stale ctx throws on use.
+				try {
+					ctx?.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
+				} catch {
+					// The choice still applies in memory; only the notice is lost.
+				}
 			}
 		};
 		// ── memory: what memorq last published on the bus, and the notes the model opened ──

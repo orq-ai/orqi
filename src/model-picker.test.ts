@@ -22,7 +22,12 @@ const held = [
 	{ provider: "orq", id: "agent/support-triage", name: "support-triage (agent)" },
 	{ provider: "orq", id: "auto", name: "orq/auto" },
 ];
-const runtime: any = {
+/**
+ * pi's runtime, cut to the methods the picker and pi's selector are known to read. Any other read
+ * throws, so a pi upgrade whose selector reads models through a new method (one the chat-only filter
+ * does not cover, and that could list agents) fails here instead of in a user's /memory.
+ */
+const allowed = {
 	getAvailableSnapshot: () => held,
 	getAvailable: async () => held,
 	getModels: () => held,
@@ -30,6 +35,12 @@ const runtime: any = {
 	getError: () => undefined,
 	refresh: async () => ({ errors: new Map() }),
 };
+const runtime: any = new Proxy(allowed, {
+	get(target, key) {
+		if (typeof key === "string" && !Object.hasOwn(target, key)) throw new Error(`the model picker read runtime.${key}`);
+		return Reflect.get(target, key);
+	},
+});
 
 /** A TUI ctx whose `custom` builds the component and lets the test drive it like a user. */
 function ctxWith(drive: (component: any) => void, mode = "tui") {

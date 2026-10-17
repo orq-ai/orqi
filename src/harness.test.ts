@@ -985,6 +985,28 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 	}
 });
 
+test("memorq's panel switch never throws back into memorq, even from a closed session that cannot save", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-host-"));
+	// A regular file where the agent dir should be: the save fails.
+	const blocked = join(dir, "not-a-dir");
+	writeFileSync(blocked, "");
+	const h = harnessOn(blocked);
+	const hosts: any[] = [];
+	h.bus.on("memorq:host", (host) => hosts.push(host));
+	try {
+		await h.start();
+		// The session is gone: its ctx throws on use, as a stale pi handle does.
+		h.ctx.ui.notify = () => {
+			throw new Error("stale extension context");
+		};
+		expect(() => hosts[0].panel.set(false)).not.toThrow();
+		expect(hosts[0].panel.shown()).toBe(false);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("/reload and /new: the next instance asks again and draws the fresh state", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
 	const bus = fakeBus();
