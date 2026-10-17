@@ -733,7 +733,14 @@ export function orqHarness(deps: HarnessDeps) {
 				trajectory.gate(toolCallId, door, verdict);
 			},
 		});
-		pi.on("tool_call", (event, ctx) => gate.onToolCall(event, ctx));
+		pi.on("tool_call", (event, ctx) => {
+			// ask_user's dialog needs the same keys, for the same reason.
+			if (event.toolName === "ask_user" && minimapFocused) {
+				blurMinimap();
+				render();
+			}
+			return gate.onToolCall(event, ctx);
+		});
 		pi.on("agent_end", (_event, ctx) => {
 			gate.endTurn();
 			ctx.ui.setWorkingMessage();

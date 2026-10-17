@@ -257,7 +257,11 @@ export class Trajectory {
 					role: subagent ? "subagent" : "tool",
 					label: subagent ? String(block.arguments?.agent ?? "subagent") : shortTool(block.name ?? "tool"),
 					toolName: block.name,
-					detail: subagent ? oneLine(String(block.arguments?.task ?? "")) : argSummary(block.arguments),
+					detail: subagent
+						? oneLine(String(block.arguments?.task ?? ""))
+						: block.name === "ask_user"
+							? oneLine(String((block.arguments as { questions?: { prompt?: string }[] } | undefined)?.questions?.[0]?.prompt ?? ""))
+							: argSummary(block.arguments),
 					status: "running",
 					ts: message.timestamp ?? Date.now(),
 					toolCallId: block.id,

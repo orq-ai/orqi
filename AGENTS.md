@@ -303,6 +303,16 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **The version has one source**: `package.json`, read by `src/branding.ts` and inlined at compile
   time. On a releasable merge to `main`, `release.yml` writes the resolved version into that file,
   commits it to `main`, then tags that exact commit; the release still fails if tag and version disagree.
+- **`ask_user` is pi's `questionnaire` example, adapted, not a package.** The example in pi's
+  `examples/extensions/` already had the dialog (options, "Type something", a tab bar for several
+  questions); orqi adds multi-select, free-text questions and a recommended option, which starts
+  the cursor and is never picked for the user. The answer lives in the tool result's `details`, not
+  an `appendEntry` record: pi persists call and result, so `/resume` redraws both through
+  `renderResult` and opens no second dialog. One-shot returns an error rather than a default
+  answer, because a default is consent nobody gave. Esc cancels the whole call (on the "Type
+  something" editor it backs out to the list), and the model is told to proceed in prose. An
+  answer never stands in for the one-way gate: a `delete_*` still opens its own dialog. Subagents
+  do not get the tool.
 - **Subagents reach the orq tools through the parent's `executeTool`.** pi connects the server in
   the parent session; a subagent's child session gets proxies (same names, same schemas) that run
   each call through `ctx.executeTool`, so no second MCP handshake and the parent's hooks apply.

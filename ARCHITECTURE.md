@@ -10,6 +10,7 @@ orqi
 ├── pi agent session (@earendil-works/pi-coding-agent)
 │   ├── built-in tools           read / bash / edit / write
 │   ├── mcp__orq__* tools        pi's native MCP, server `orq`   src/mcp.ts
+│   ├── ask_user tool            question dialog for the model    src/ask-user.ts
 │   ├── subagent tool            recursive in-process sessions   src/subagent.ts
 │   ├── skills                   bundled skills/                 (additionalSkillPaths)
 │   ├── system prompt            src/system-prompt.txt
@@ -30,6 +31,7 @@ orqi
 | `src/auth.ts` | Credential candidates, workspace resolution, `runOrq()` |
 | `src/mcp.ts` | The `orq` server registered with pi's MCP, credential choice, result rendering, hints |
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
+| `src/ask-user.ts` | `ask_user`: the model's question dialog (single, multi, free text), answered into the tool result |
 | `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
 | `src/connection.ts` | The connection half of the pi extension (a command goes here only if it is about the connection; the rest are `harness.ts`'s): startup header entry, the not-connected warning and reconnect, the first-run welcome, plus `/key /whoami /workspace /server /reconnect /doctor /update` |
 | `src/workspaces.ts` | `/workspace`'s list: the CLI's `workspace list -o json` as aligned rows, the active workspace first |
@@ -74,6 +76,10 @@ Results render as a one-line summary (`23 items · 6.0 KB`) with `ctrl+o` expand
 pretty-printed JSON, because the server answers with a single unbroken line. The model always
 receives the full payload. Subagents call the tools through the parent session's `executeTool`;
 slash commands, which pi gives no way to run tools, make one short direct call.
+
+Beside them, `ask_user` (`src/ask-user.ts`) lets the model ask the user a question in a dialog and
+wait: single or multi select with an optional recommended pick, or free text. The answer is the
+tool result, so the session holds both and `/resume` redraws them.
 
 ## Seeing what the platform does
 
