@@ -480,7 +480,7 @@ export function orqHarness(deps: HarnessDeps) {
 			// Pi cannot calculate a percentage for router or agent models whose window it does not know; orqi's
 			// own measure has the catalogue window and the same visible-context accounting.
 			contextPercent: () => {
-				if (!split || split.window <= 0) return undefined;
+				if (sessionEnded || !split || split.window <= 0) return undefined;
 				return (contextUsed(split) / split.window) * 100;
 			},
 		};

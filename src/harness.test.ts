@@ -1022,6 +1022,29 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 	}
 });
 
+test("a closed session's memorq host never returns its old context percentage", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-host-stale-context-"));
+	const h = harnessOn(dir);
+	const hosts: any[] = [];
+	let stopped = false;
+	h.bus.on("memorq:host", (host) => hosts.push(host));
+	try {
+		await h.start();
+		(h.ctx as any).model = { id: "openai/gpt-5", contextWindow: 1_000 };
+		(h.ctx as any).getContextUsage = () => ({ tokens: 100, contextWindow: 1_000 });
+		await h.handlers.get("agent_end")!({}, h.ctx);
+		h.bus.emit("memorq:host?", undefined);
+		const host = hosts.at(-1)!;
+		expect(host.contextPercent()).toBe(10);
+		await h.stop();
+		stopped = true;
+		expect(host.contextPercent()).toBeUndefined();
+	} finally {
+		if (!stopped) await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("memorq's panel switch never throws back into memorq, even from a closed session that cannot save", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-host-"));
 	// A regular file where the agent dir should be: the save fails.
