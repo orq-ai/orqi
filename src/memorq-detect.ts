@@ -12,10 +12,10 @@ import type { Check } from "./diagnostics.ts";
 /** A package entry as pi's settings hold it: a source string, or an object with a `source`. */
 type PackageEntry = string | { source?: unknown };
 
-/** memorq by its source: the repository's name, or a path or URL whose last segment is `memorq`, pinned or not. */
+/** memorq by its source: a path, URL or package whose last segment is the repository's name or `memorq`, pinned or not. */
 export function isMemorqSource(entry: PackageEntry): boolean {
 	const source = typeof entry === "string" ? entry : entry?.source;
-	return typeof source === "string" && /orq-knowledge-notes|(^|[/\\:])memorq(\.git)?\/?([@#][^/]*)?$/.test(source);
+	return typeof source === "string" && /(^|[/\\:])(orq-knowledge-notes|memorq)(\.git)?\/?([@#][^/]*)?$/.test(source);
 }
 
 /**

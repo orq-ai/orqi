@@ -51,7 +51,7 @@ export function costLines(rows: Map<string, StepUsage & { calls: number }>, turn
 	}
 	if (rows.size === 0) lines.push("no model calls yet");
 	if (top?.cost && total > 0) {
-		// What the learns spent stays whichever chat model the session used.
+		// Memory's learn cost does not depend on the session's chat model.
 		const always = repriced(rows, top.cost) + (rows.get(MEMORY_ROW)?.cost ?? 0);
 		const delta = always > 0 ? Math.round(((total - always) / always) * 100) : 0;
 		lines.push(

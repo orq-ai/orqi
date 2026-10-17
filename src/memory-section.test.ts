@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { minimapRow } from "./inspector-rows.ts";
 import {
+	isLearned,
 	isMemorqState,
 	isNoteRead,
 	learnHead,
@@ -257,6 +258,23 @@ test("a learn that wrote nothing reads as nothing new, everywhere it is drawn, w
 		expect(row.trimEnd()).toBe(`▌◇ memory nothing new ${phrase}`);
 	}
 	expect(learnHead(2)).toBe("learned 2");
+});
+
+test("counts must be whole and not negative, and a learn's time finite: nonsense numbers are refused", () => {
+	const good = state();
+	for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5])
+		for (const field of ["notes", "usedThisTurn"]) expect(isMemorqState({ ...good, [field]: bad })).toBe(false);
+	for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0.5]) {
+		expect(isMemorqState({ ...good, review: { dueInSessions: bad } })).toBe(false);
+		expect(isMemorqState({ ...good, review: { running: true, notes: bad } })).toBe(false);
+		// A learn with a nonsense count is dropped, not the state.
+		expect(isLearned({ count: bad, trigger: "ship", at: NOW })).toBe(false);
+	}
+	for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -5])
+		expect(isLearned({ count: 1, trigger: "ship", at: bad })).toBe(false);
+	expect(isLearned({ count: 0, trigger: "ship", at: 0 })).toBe(true);
+	expect(isMemorqState({ ...good, learned: { count: Number.NaN, trigger: "ship", at: NOW } })).toBe(true);
+	expect(body(memoryLines(state({ learned: { count: -3, trigger: "ship", at: NOW } }), 0, 36, NOW))).toEqual(["  47 notes for this repo"]);
 });
 
 test("a state is only taken when every field the section reads has the right shape", () => {

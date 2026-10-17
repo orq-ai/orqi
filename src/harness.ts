@@ -915,7 +915,7 @@ export function orqHarness(deps: HarnessDeps) {
 			pi.events.emit("memorq:host", host);
 			trajectory.fromMessages(branchMessages(ctx));
 			// Learns already on this branch are not recorded again; one memorq published before now is.
-			for (const entry of ctx.sessionManager.getBranch() as any[])
+			for (const entry of ctx.sessionManager.getBranch())
 				if (entry.type === "custom" && entry.customType === MEMORY_ENTRY && isLearned(entry.data)) learnsSeen.add(learnKey(entry.data));
 			branchLoaded = true;
 			recordLearn(memorqState?.learned);

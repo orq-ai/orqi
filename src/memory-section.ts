@@ -60,6 +60,10 @@ const TRIGGER: Record<string, string> = {
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const absent = (value: unknown) => value === undefined || value === null;
+/** A count: a whole number, not negative (so not NaN or Infinity either). */
+const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
+/** A moment in epoch milliseconds: finite and not negative. */
+const isInstant = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 /**
  * Whether a `memorq:state` payload has every field the section reads, in the
@@ -70,12 +74,13 @@ export function isMemorqState(data: unknown): data is MemorqState {
 	if (!isObject(data)) return false;
 	// `enabled` is not checked: a value orqi does not know (a newer memorq's) reads as on rather than losing the state.
 	const { notes, usedThisTurn, stores, review, paused } = data;
-	if (typeof notes !== "number" || typeof usedThisTurn !== "number" || typeof paused !== "boolean") return false;
+	if (!isCount(notes) || !isCount(usedThisTurn) || typeof paused !== "boolean") return false;
 	if (!isObject(stores) || !["notes", "rules", "skills"].every((kind) => typeof stores[kind] === "string")) return false;
 	if (!absent(review)) {
 		if (!isObject(review)) return false;
-		const running = review.running === true && typeof review.notes === "number";
-		const due = typeof review.dueInSessions === "number";
+		if (review.running === true && !isCount(review.notes)) return false;
+		const running = review.running === true;
+		const due = isCount(review.dueInSessions);
 		const failed = typeof review.failed === "string";
 		if (!running && !due && !failed) return false;
 		if (!absent(review.dueInSessions) && !due) return false;
@@ -86,7 +91,7 @@ export function isMemorqState(data: unknown): data is MemorqState {
 
 /** A learn as memorq reports it and as an `orqi-memory` entry stores it: a count, a trigger, when, and maybe its cost. */
 export function isLearned(data: unknown): data is NonNullable<MemorqState["learned"]> {
-	return isObject(data) && typeof data.count === "number" && typeof data.at === "number" && typeof data.trigger === "string";
+	return isObject(data) && isCount(data.count) && isInstant(data.at) && typeof data.trigger === "string";
 }
 
 /**
