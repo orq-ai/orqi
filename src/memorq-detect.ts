@@ -1,16 +1,13 @@
 /**
  * Whether memorq (orq-ai/orq-knowledge-notes), the pi package behind the
- * inspector's memory section, is installed. orqi does not carry it: the user
- * installs it as a plugin, and orqi reads pi's package settings to tell "not
- * installed" from "installed but silent" (too old to publish its state, or
- * failing). A memorq loaded some other way (an extensions folder) shows itself
+ * inspector's memory section, is installed. orqi does not carry it, and does
+ * not tell users to install it; it reads pi's package settings to tell "not
+ * installed" (say nothing about memory) from "installed but silent" (too old
+ * to publish its state, or failing). A memorq loaded some other way (an extensions folder) shows itself
  * by registering its commands or answering on the bus, which the harness sees.
  */
 
 import type { Check } from "./diagnostics.ts";
-
-/** What memorq's README gives for orqi. */
-export const MEMORQ_INSTALL = "orqi plugin install git:github.com/orq-ai/orq-knowledge-notes";
 
 /** A package entry as pi's settings hold it: a source string, or an object with a `source`. */
 type PackageEntry = string | { source?: unknown };
@@ -36,11 +33,11 @@ export const MEMORQ_COMMANDS: readonly string[] = ["memory", "memory-notes"];
 export type MemorqPresence = "loaded" | "installed" | "none";
 
 /**
- * /doctor's memorq rows. Memory is opt-in, so with no memorq there is one row naming the install command
- * and no python3 row (a red python3 would be noise); with one, python3 matters, since memorq writes with it.
+ * /doctor's memorq rows. With no memorq there are none: memory is opt-in, memorq is not something every orqi
+ * user can install, and a red python3 would be noise. With one, python3 matters, since memorq runs on it.
  */
 export function memorqChecks(presence: MemorqPresence, python3: () => Check): Check[] {
-	if (presence === "none") return [{ id: "memorq", status: "info", message: `memorq not installed; for memory notes: ${MEMORQ_INSTALL}` }];
+	if (presence === "none") return [];
 	const memorq: Check =
 		presence === "loaded"
 			? { id: "memorq", status: "pass", message: "memorq loaded" }

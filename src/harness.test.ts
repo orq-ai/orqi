@@ -607,17 +607,27 @@ test("/panel lists the sections with their state and space toggles and persists"
 		const { commands, ctx, opened } = harnessOn(dir);
 		await commands.get("panel")!("", ctx);
 		const panel = opened.panel!;
-		expect(panelRows(panel)).toEqual(["[x] signals", "[x] context", "[ ] memory  · install memorq", "[ ] process", "[x] tips"]);
+		// No memorq anywhere: the list says nothing about memory.
+		expect(panelRows(panel)).toEqual(["[x] signals", "[x] context", "[ ] process", "[x] tips"]);
 		panel.handleInput("\x1b[B"); // down to context
 		panel.handleInput(" ");
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(panelRows(panel)[1]).toBe("[ ] context");
 		expect(readPrefs(dir).sections.context).toBe(false);
-		// The unavailable memory row cannot be switched, by space or anything else.
+		// Space on the row below switches process, the row it shows, not the hidden memory section.
 		panel.handleInput("\x1b[B");
 		panel.handleInput(" ");
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(panelRows(panel)[2]).toBe("[ ] memory  · install memorq");
+		expect(panelRows(panel)[2]).toBe("[x] process");
+		expect(readPrefs(dir).sections).toMatchObject({ memory: true, process: true });
+		// An installed memorq that cannot show: its row is greyed and cannot be switched.
+		const installed = harnessOn(dir, { memorq: "installed" });
+		await installed.commands.get("panel")!("", installed.ctx);
+		expect(panelRows(installed.opened.panel!)[2]).toBe("[ ] memory  · update memorq");
+		installed.opened.panel!.handleInput("\x1b[B");
+		installed.opened.panel!.handleInput("\x1b[B");
+		installed.opened.panel!.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(readPrefs(dir).sections.memory).toBe(true);
 		// The next session (what /new, /resume and a restart build) reads the choice back.
 		const next = harnessOn(dir);
@@ -648,7 +658,7 @@ test("orqi.json with unknown ids and garbage values: the harness starts on the d
 		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { bogus: true, tips: "nah", process: true }, extra: [1] }));
 		const { commands, ctx, opened } = harnessOn(dir);
 		await commands.get("panel")!("", ctx);
-		expect(panelRows(opened.panel!)).toEqual(["[x] signals", "[x] context", "[ ] memory  · install memorq", "[x] process", "[x] tips"]);
+		expect(panelRows(opened.panel!)).toEqual(["[x] signals", "[x] context", "[x] process", "[x] tips"]);
 		opened.panel!.handleInput(" "); // signals off
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(JSON.parse(readFileSync(join(dir, "orqi.json"), "utf8"))).toEqual({
@@ -672,7 +682,7 @@ test("two orqi windows on one agent dir keep each other's panel choices", async 
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(readPrefs(dir).sections).toEqual({ ...DEFAULT_SECTIONS, tips: false, context: false });
 		// The second window picked up the first one's choice when it saved.
-		expect(panelRows(two.opened.panel!)).toEqual(["[x] signals", "[ ] context", "[ ] memory  · install memorq", "[ ] process", "[ ] tips"]);
+		expect(panelRows(two.opened.panel!)).toEqual(["[x] signals", "[ ] context", "[ ] process", "[ ] tips"]);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -718,7 +728,7 @@ test("the memory section waits for memorq: asked for at session start, drawn onc
 		// The bus has no replay: orqi asks, and memorq (loaded first) answers.
 		expect(h.bus.sent).toContain("memorq:state?");
 		await h.commands.get("panel")!("", h.ctx);
-		expect(panelRows(h.opened.panel!)[2]).toBe("[ ] memory  · install memorq");
+		expect(panelRows(h.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 		expect(h.memory()).toEqual([]);
 		h.bus.emit("memorq:state", memorqState());
 		await h.commands.get("panel")!("", h.ctx);
@@ -743,12 +753,19 @@ test("memorq with its commands but silent points at /doctor; ORQ_NOTES=off and a
 		expect(panelRows(old.opened.panel!)[2]).toBe("[ ] memory  · not answering · /doctor");
 		await old.stop();
 
+		// ORQ_NOTES=off keeps an installed memorq from loading at all: the row says why.
 		process.env.ORQ_NOTES = "off";
-		const env = harnessOn(dir);
+		const env = harnessOn(dir, { memorq: "installed" });
 		await env.start();
 		await env.commands.get("panel")!("", env.ctx);
 		expect(panelRows(env.opened.panel!)[2]).toBe("[ ] memory  · off: ORQ_NOTES=off");
 		await env.stop();
+		// With no memorq installed, the variable changes nothing orqi shows.
+		const none = harnessOn(dir);
+		await none.start();
+		await none.commands.get("panel")!("", none.ctx);
+		expect(panelRows(none.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
+		await none.stop();
 		delete process.env.ORQ_NOTES;
 
 		const off = harnessOn(dir);
@@ -851,7 +868,8 @@ test("ORQ_NOTES=off is read at session start, not in a render", async () => {
 		await h.start();
 		process.env.ORQ_NOTES = "off";
 		await h.commands.get("panel")!("", h.ctx);
-		expect(panelRows(h.opened.panel!)[2]).toBe("[ ] memory  · install memorq");
+		// Read at start, when it was unset: no memorq, no memory row, whatever the variable says now.
+		expect(panelRows(h.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 	} finally {
 		await h.stop();
 		if (before === undefined) delete process.env.ORQ_NOTES;
@@ -993,7 +1011,8 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 		expect(host.panel.shown()).toBe(false);
 		expect(readPrefs(dir).sections.memory).toBe(false);
 		await h.commands.get("panel")!("", h.ctx);
-		expect(panelRows(h.opened.panel!)[2]).toBe("[ ] memory  · install memorq");
+		// No memorq installed in this harness, so no memory row, but the choice memorq made is saved.
+		expect(panelRows(h.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 		// No model runtime handed to this harness: the picker opens nothing and memorq writes nothing.
 		expect(await host.pickModel("openai/gpt-5")).toBeUndefined();
 	} finally {
@@ -1024,14 +1043,12 @@ test("memorq's panel switch never throws back into memorq, even from a closed se
 	}
 });
 
-test("a silent memorq row: commands registered points at /doctor, installed without them wants updating, none installs", async () => {
+test("a silent memorq row: commands registered points at /doctor, installed without them wants updating, none is not listed", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
 	try {
 		for (const [options, reason, help] of [
 			[{ commands: ["memory"], memorq: "installed" }, "not answering · /doctor", "/doctor checks python3"],
 			[{ memorq: "installed" }, "update memorq", "/plugin update"],
-			[{ memorq: "none" }, "install memorq", "orqi plugin install git:github.com/orq-ai/orq-knowledge-notes"],
-			[{}, "install memorq", "orqi plugin install git:github.com/orq-ai/orq-knowledge-notes"],
 		] as const) {
 			const late = { now: Date.now() };
 			const h = harnessOn(dir, { ...options, now: () => late.now } as never);
@@ -1046,6 +1063,15 @@ test("a silent memorq row: commands registered points at /doctor, installed with
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(h.notices.at(-1)).toContain(help);
 			expect(readPrefs(dir).sections.memory).toBe(true);
+			await h.stop();
+		}
+		// No memorq at all: orqi does not mention memory, so there is no row and no install advice.
+		for (const options of [{ memorq: "none" }, {}] as const) {
+			const h = harnessOn(dir, options as never);
+			await h.start();
+			await h.commands.get("panel")!("", h.ctx);
+			expect(panelRows(h.opened.panel!)).toEqual(["[x] signals", "[x] context", "[ ] process", "[x] tips"]);
+			expect(h.notices.join("\n")).not.toContain("install");
 			await h.stop();
 		}
 	} finally {
@@ -1190,15 +1216,20 @@ test("sections draw in registry order, only when chosen and available; the list 
 	const sections: InspectorSection[] = [
 		{ id: "signals", title: "signals", lines: () => [] },
 		{ id: "context", title: "context", lines: () => [] },
-		{ id: "memory", title: "memory", lines: () => [], unavailable: () => "install memorq" },
+		{ id: "memory", title: "memory", lines: () => [], unavailable: () => "update memorq" },
 		{ id: "process", title: "process", lines: () => [] },
 		{ id: "tips", title: "tips", lines: () => [] },
 	];
 	const prefs = { sections: { ...DEFAULT_SECTIONS, process: true, context: false } };
 	expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "process", "tips"]);
-	const { rows, disabled } = sectionRows(sections, prefs);
-	expect(rows).toEqual(["[x] signals", "[ ] context", "[ ] memory  · install memorq", "[x] process", "[x] tips"]);
+	const { rows, disabled, ids } = sectionRows(sections, prefs);
+	expect(rows).toEqual(["[x] signals", "[ ] context", "[ ] memory  · update memorq", "[x] process", "[x] tips"]);
 	expect([...disabled]).toEqual([2]);
+	expect(ids).toEqual(["signals", "context", "memory", "process", "tips"]);
+	// A hidden section is neither listed nor drawn, and the rows after it keep their own ids.
+	const hidden = sections.map((s) => (s.id === "memory" ? { ...s, hidden: () => true } : s));
+	expect(sectionRows(hidden, prefs).ids).toEqual(["signals", "context", "process", "tips"]);
+	expect(sectionsToDraw(hidden, prefs).map((s) => s.id)).toEqual(["signals", "process", "tips"]);
 	// Once available, memory draws where the registry puts it: above process, tips last.
 	sections[2] = { ...sections[2]!, unavailable: () => undefined };
 	expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "memory", "process", "tips"]);

@@ -107,11 +107,12 @@ memory (what memorq last published, below), process (orqi's resident memory, sam
 the render path: now, the last minute, the peak) and tips (`/tips off` hides it; `/teach` is the old
 name). Each section is an `InspectorSection` in `src/harness.ts`; bare `/panel` lists them with a
 checkbox each, and the choice lives in `<agentDir>/orqi.json` (`src/prefs.ts`). Process starts off;
-the rest start on. A section that cannot show (memory without memorq) is greyed in the list with the
-reason, and space on it says what to do.
+the rest start on. A section that cannot show (an installed memorq that is silent or too old) is
+greyed in the list with the reason, and space on it says what to do; with no memorq at all the memory
+section is not listed.
 
-Memory comes from memorq, a separate pi package (orq-ai/orq-knowledge-notes), installed with
-`orqi plugin install git:github.com/orq-ai/orq-knowledge-notes`. The two extensions share only pi's
+Memory comes from memorq, a separate pi package (orq-ai/orq-knowledge-notes) that orqi neither
+carries nor installs. The two extensions share only pi's
 in-process event bus: memorq publishes `memorq:state` (notes, notes used this turn, the last learn,
 the next review, the folders it writes to) and asks `memorq:host?`; orqi answers with `memorq:host`
 (the panel row and the model picker) and asks `memorq:state?` at session start. The bus has no replay

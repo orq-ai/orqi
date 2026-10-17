@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import { isMemorqSource, MEMORQ_INSTALL, memorqChecks, memorqInstalled } from "./memorq-detect.ts";
+import { isMemorqSource, memorqChecks, memorqInstalled } from "./memorq-detect.ts";
 
 /** An agent dir and a project, each with optional package settings. */
 function scene(options: { global?: unknown[]; project?: unknown[] } = {}) {
@@ -64,13 +64,16 @@ test("memorq is the repository or a folder named memorq, not any source that men
 	expect(isMemorqSource({ source: 7 })).toBe(false);
 });
 
-test("/doctor's memorq rows: the install command when it is missing, and python3 only when memorq is here", () => {
-	const python = () => ({ id: "python3", status: "fail", message: "python3 not found" });
-	expect(memorqChecks("none", python)).toEqual([
-		{ id: "memorq", status: "info", message: `memorq not installed; for memory notes: ${MEMORQ_INSTALL}` },
-	]);
+test("/doctor's memorq rows: none without memorq, and python3 only when memorq is here", () => {
+	let asked = 0;
+	const python = () => {
+		asked++;
+		return { id: "python3", status: "fail", message: "python3 not found" };
+	};
+	// No memorq: nothing about memory, and python3 is not even checked.
+	expect(memorqChecks("none", python)).toEqual([]);
+	expect(asked).toBe(0);
 	expect(memorqChecks("loaded", python)).toEqual([{ id: "memorq", status: "pass", message: "memorq loaded" }, python()]);
 	expect(memorqChecks("installed", python).map((check) => check.id)).toEqual(["memorq", "python3"]);
 	expect(memorqChecks("installed", python)[0]!.status).toBe("warn");
-	expect(MEMORQ_INSTALL).toBe("orqi plugin install git:github.com/orq-ai/orq-knowledge-notes");
 });

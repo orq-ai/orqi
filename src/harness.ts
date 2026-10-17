@@ -32,7 +32,7 @@ import {
 } from "./memory-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
-import { MEMORQ_COMMANDS, MEMORQ_INSTALL } from "./memorq-detect.ts";
+import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
 import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
@@ -138,23 +138,33 @@ export interface InspectorSection {
 	unavailable?(): string | undefined;
 	/** A word for /panel's row while the section is still on: `loading…`. */
 	note?(): string | undefined;
+	/** Left out of /panel's list and never drawn: memory, with no memorq anywhere. */
+	hidden?(): boolean;
 }
 
 /** The sections the inspector draws, in registry order: chosen in orqi.json and available. */
 export function sectionsToDraw(sections: readonly InspectorSection[], prefs: Prefs): InspectorSection[] {
-	return sections.filter((section) => prefs.sections[section.id] && !section.unavailable?.());
+	return sections.filter((section) => !section.hidden?.() && prefs.sections[section.id] && !section.unavailable?.());
 }
 
-/** /panel's rows, one per section: `[x] context`, or `[ ] memory  · install memorq`, greyed, for one that cannot show. */
-export function sectionRows(sections: readonly InspectorSection[], prefs: Prefs): { rows: string[]; disabled: Set<number> } {
+/**
+ * /panel's rows, one per section that is not hidden: `[x] context`, or `[ ] memory  · update memorq`,
+ * greyed, for one that cannot show. `ids[i]` is the section on row `i`.
+ */
+export function sectionRows(
+	sections: readonly InspectorSection[],
+	prefs: Prefs,
+): { rows: string[]; disabled: Set<number>; ids: SectionId[] } {
 	const disabled = new Set<number>();
-	const rows = sections.map((section, i) => {
+	const listed = sections.filter((section) => !section.hidden?.());
+	const ids = listed.map((section) => section.id);
+	const rows = listed.map((section, i) => {
 		const reason = section.unavailable?.();
 		if (reason) disabled.add(i);
 		const note = reason ?? section.note?.();
 		return `[${prefs.sections[section.id] && !reason ? "x" : " "}] ${section.title}${note ? `  · ${note}` : ""}`;
 	});
-	return { rows, disabled };
+	return { rows, disabled, ids };
 }
 
 type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: number; shrink?: number; minSize?: number };
@@ -401,14 +411,18 @@ export function orqHarness(deps: HarnessDeps) {
 		let memorqAskedAt = 0;
 		/** A loaded memorq that has not answered yet, within the few seconds it is given. */
 		const waitingForMemorq = () => memorqLoaded && !memorqState && now() - memorqAskedAt < MEMORQ_GRACE_MS;
+		/**
+		 * No memorq anywhere: not answering, not loaded, not installed. orqi then says nothing about memory at
+		 * all, since memorq is not something every orqi user can install.
+		 */
+		const memorqAbsent = () => !memorqState && !memorqLoaded && deps.memorq?.() !== "installed";
 		const memoryUnavailable = () => {
 			if (notesOff) return "off: ORQ_NOTES=off";
 			if (waitingForMemorq()) return undefined;
 			if (!memorqState) {
 				// Only a memorq new enough to publish its state registers commands, so with commands its silence is
 				// a failure (no python3, a broken store); an installed package with none predates the panel.
-				if (memorqLoaded) return "not answering · /doctor";
-				return deps.memorq?.() === "installed" ? "update memorq" : "install memorq";
+				return memorqLoaded ? "not answering · /doctor" : "update memorq";
 			}
 			return memorqState.enabled === "off" ? "off · /memory" : undefined;
 		};
@@ -651,6 +665,7 @@ export function orqHarness(deps: HarnessDeps) {
 				lines: (w) => (waitingForMemorq() ? sectionLines("memory", ["loading…"], w) : memoryLines(memorqState, noteReads, w)),
 				unavailable: memoryUnavailable,
 				note: () => (waitingForMemorq() ? "loading…" : undefined),
+				hidden: memorqAbsent,
 			},
 			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
 			{
@@ -1219,22 +1234,20 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
 
-		/** What to do about a greyed memory row: the install command, the update, or where to look. */
+		/** What to do about a greyed memory row: the update, or where to look. */
 		const memoryHelp = (row: string) =>
-			row.endsWith("install memorq")
-				? `Memory notes come from memorq. Install it, then restart orqi:\n  ${MEMORQ_INSTALL}`
-				: row.endsWith("update memorq")
-					? "This memorq is too old for the side panel. Update it with /plugin update, then restart orqi."
-					: row.includes("ORQ_NOTES=off")
-						? "Memory is off for this shell: ORQ_NOTES=off. Unset it and restart orqi."
-						: row.includes("/doctor")
-							? "memorq is loaded but has not answered. /doctor checks python3, which it needs."
-							: "memorq turned memory off. /memory turns it back on.";
+			row.endsWith("update memorq")
+				? "This memorq is too old for the side panel. Update it with /plugin update, then restart orqi."
+				: row.includes("ORQ_NOTES=off")
+					? "Memory is off for this shell: ORQ_NOTES=off. Unset it and restart orqi."
+					: row.includes("/doctor")
+						? "memorq is loaded but has not answered. /doctor checks python3, which it needs."
+						: "memorq turned memory off. /memory turns it back on.";
 		/** /panel's list: one row per section, space switches the selected one and saves the choice. */
 		const showSections = (ctx: ExtensionContext) => {
 			let live: Panel | undefined;
 			const spec = (): PanelSpec => {
-				const { rows, disabled } = sectionRows(sections, prefs);
+				const { rows, disabled, ids } = sectionRows(sections, prefs);
 				return {
 					title: "side panel",
 					rows,
@@ -1243,7 +1256,7 @@ export function orqHarness(deps: HarnessDeps) {
 					disabled,
 					keys: {
 						space: (i) => {
-							const id = sections[i]?.id;
+							const id = ids[i];
 							// A greyed row cannot be switched: say what would make it available instead.
 							if (id === "memory" && disabled.has(i)) ctx.ui.notify(memoryHelp(rows[i] ?? ""));
 							if (!id || disabled.has(i)) return false;

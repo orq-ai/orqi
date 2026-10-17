@@ -115,7 +115,7 @@ test("a checkpoint learn names its threshold when memorq sends it; a failed revi
 
 test("memorq's own types are states orqi accepts, and orqi's host is memorq's", () => {
 	// A hand copy of memorq's exported types. Re-copy them from orq-ai/orq-knowledge-notes
-	// integrations/pi/state.ts (copied at 4c0a41a) whenever memorq changes its payload.
+	// integrations/pi/state.ts (copied from main at 756f87d) whenever memorq changes its payload.
 	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "session_end" | "manual" | "sweep";
 	interface ProducerState {
 		version: string;

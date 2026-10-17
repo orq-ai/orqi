@@ -392,16 +392,16 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   off, so the RAM readout an upgrade used to show is gone until `/panel` turns it on. The file is
   read forgivingly (missing, unreadable or odd means the defaults; unknown ids are ignored) and each
   toggle rereads it and changes only its own id, so two orqi windows keep each other's choices.
-- **orqi does not carry memorq; it finds it.** memorq (orq-ai/orq-knowledge-notes) is a separate
-  plugin, `orqi plugin install git:github.com/orq-ai/orq-knowledge-notes`, so it ships on its own
-  schedule. `src/memorq-detect.ts` tells three cases apart without asking memorq: its commands are
-  registered (only a memorq new enough to publish its state registers any, so silence from it is a
-  failure: `not answering · /doctor`), a package whose source is memorq is in the trust-aware
-  settings pi loads from (but registered nothing, so it predates the panel: `update memorq`), or
-  neither (`install memorq`). Space on that greyed row prints the install command. `/doctor` adds a
-  memorq row and, only when memorq is there, a python3 row (memorq runs on it); on macOS it never
-  runs Apple's `/usr/bin/python3` stub, which opens an install dialog, and asks `xcode-select -p`
-  instead.
+- **orqi does not carry memorq, and only mentions memory once memorq is there.** memorq
+  (orq-ai/orq-knowledge-notes, a pi package) ships on its own schedule and is not something every orqi
+  user can install, so orqi never tells anyone to install it: with no memorq, `/panel` has no memory
+  row and `/doctor` no memorq or python3 row. `src/memorq-detect.ts` tells the cases apart without
+  asking memorq: its commands are registered (only a memorq new enough to publish its state registers
+  any, so silence after a few seconds' grace is a failure: `not answering · /doctor`), a package whose
+  source is memorq is in the trust-aware settings pi loads from (but registered nothing, so it
+  predates the panel: `update memorq`), or neither (nothing is shown). With memorq there, `/doctor`
+  adds a memorq row and a python3 row (memorq runs on it); on macOS it never runs Apple's
+  `/usr/bin/python3` stub, which opens an install dialog, and asks `xcode-select -p` instead.
 - **The memorq contract is request-driven, because pi's event bus has no replay.** memorq, a package
   extension, loads before orqi's inline one, so either side may emit before the other listens. orqi
   subscribes to `memorq:state` and `memorq:host?` at load (not in `session_start`), asks
