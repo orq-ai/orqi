@@ -363,7 +363,38 @@ export function orqCommands(
 		);
 	};
 
-	return (pi: ExtensionAPI) => {
+	// The session the browser sign-in should reconnect: the factory runs per
+	// session, so each session_start replaces it (the ctx `welcome` uses too).
+	let live: { pi: ExtensionAPI; ctx: { ui: Ui } } | undefined;
+
+	/**
+	 * pi's /login finished a browser sign-in (`orqOAuth`'s `onSignedIn`): pi
+	 * fires no event of its own, so without this the warning stayed pinned
+	 * until the next message. The token is the login session's, which whoami
+	 * already lists, so this works before pi has written auth.json; the same
+	 * pick as the `input` hook's, and marked tried so that hook does not knock again.
+	 */
+	const signedIn = (token: string) => {
+		if (!live) return;
+		const { pi, ctx } = live;
+		switchTried = token;
+		// After, not inside, an attempt already running: joining it would drop
+		// this pick, and it read the candidates before this token existed.
+		void (inFlight ?? Promise.resolve())
+			.catch(() => undefined)
+			// Already on it (that attempt picked it, or a second sign-in to the same session): nothing to do.
+			.then(() =>
+				token === process.env.ORQ_API_KEY
+					? undefined
+					: recover(pi, ctx, (all) => all.filter((candidate) => candidate.token === token).slice(0, 1)),
+			)
+			.then((outcome) => outcome && ctx.ui.notify(outcome, rejections.length ? "warning" : "info"))
+			.catch(() => {
+				// The session was replaced while the reconnect ran.
+			});
+	};
+
+	const factory = (pi: ExtensionAPI) => {
 		// A pinned notice above the editor, once per launch: from the cache at
 		// once, then again if the check that follows finds something newer. Never
 		// awaited by startup; a stale handle or a failed check just means no notice.
@@ -403,6 +434,7 @@ export function orqCommands(
 					// Stale handle after session replacement. Nothing to recover.
 				}
 			}
+			live = { pi, ctx };
 			// The header scrolls away; the footer is where you look to check which
 			// workspace a tool call just hit.
 			showWorkspace(ctx);
@@ -660,4 +692,5 @@ export function orqCommands(
 			},
 		});
 	};
+	return Object.assign(factory, { signedIn });
 }

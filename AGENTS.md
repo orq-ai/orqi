@@ -67,7 +67,10 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   hook that runs before the agent run snapshots its tool list (tools registered there are callable
   on that same turn) and also fires for a message typed while the model is still working, which is
   delivered as steering and starts no run; `before_agent_start` misses steering and `turn_start`
-  runs after the snapshot, both tried and rejected. The hook compares the candidate tokens first so
+  runs after the snapshot, both tried and rejected. The one exception is a browser sign-in through
+  pi's `/login`: that flow is orqi's own (`orqOAuth`), so it hands the token to `signedIn` the moment
+  it succeeds and the tools reconnect without a message. A key pasted into pi's `/login` still waits
+  for the next message (`/key` reconnects at once). The hook compares the candidate tokens first so
   a set the server refused never re-knocks; a stall clears that memo, because it is no verdict and
   the notice promises a retry. A failed `/workspace` switch leaves the old connection up (the server
   is re-registered only once a new credential is accepted), so the widget says "still on the
