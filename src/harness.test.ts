@@ -417,6 +417,7 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
 	const pi = {
 		on: () => {},
+		events: { on: () => () => {}, emit: () => {} },
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: () => {},
 		registerShortcut: () => {},
@@ -448,15 +449,45 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 	expect(notices).toContain("Refreshed 1 enabled models and 0 managed agents.");
 });
 
-/** The harness on a fake pi, its commands by name, and a TUI ctx whose overlay is the Panel a command opened. */
-function harnessOn(agentDir: string) {
+/** A fake of pi's in-process event bus: what the harness and memorq share. */
+function fakeBus() {
+	const listeners = new Map<string, Set<(data: unknown) => void>>();
+	const sent: string[] = [];
+	return {
+		sent,
+		on(channel: string, handler: (data: unknown) => void) {
+			if (!listeners.has(channel)) listeners.set(channel, new Set());
+			listeners.get(channel)!.add(handler);
+			return () => listeners.get(channel)?.delete(handler);
+		},
+		emit(channel: string, data: unknown) {
+			sent.push(channel);
+			for (const handler of listeners.get(channel) ?? []) handler(data);
+		},
+	};
+}
+
+/**
+ * The harness on a fake pi: its commands and event handlers by name, a TUI ctx whose overlays are
+ * recorded (the last one is the Panel a command opened), and `start()`, which runs session_start
+ * and hands over the footer, so the inspector is attached as regular mode's overlay.
+ */
+function harnessOn(agentDir: string, options: { bus?: ReturnType<typeof fakeBus>; commands?: string[]; cwd?: string } = {}) {
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
+	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
+	const bus = options.bus ?? fakeBus();
 	const pi = {
-		on: () => {},
+		on: (name: string, handler: any) => handlers.set(name, handler),
+		events: bus,
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: () => {},
 		registerShortcut: () => {},
 		setModel: async () => {},
+		getCommands: () => (options.commands ?? []).map((name) => ({ name, source: "extension" })),
+		getSettings: () => ({}),
+		getThinkingLevel: () => "off",
+		getAllTools: () => [],
+		getActiveTools: () => [],
 	};
 	orqHarness({
 		agentDir,
@@ -466,20 +497,53 @@ function harnessOn(agentDir: string) {
 		workspace: () => undefined,
 	})(pi as any);
 	const notices: string[] = [];
-	const opened: { panel?: Panel } = {};
+	const opened: { panel?: Panel; inspector?: { render(width: number): string[] } } = {};
+	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
 	const ctx = {
 		mode: "tui",
+		cwd: options.cwd ?? "/work/orqi",
+		model: undefined,
+		sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+		getContextUsage: () => undefined,
+		getSystemPrompt: () => "",
 		ui: {
-			theme: { fg: (_token: string, text: string) => text, bold: (text: string) => text },
+			theme: plainTheme,
 			notify: (message: string) => notices.push(message),
 			setWidget: () => {},
-			custom: (factory: any) => {
-				opened.panel = factory({ requestRender: () => {} }, { fg: (_token: string, text: string) => text }, {}, () => {});
+			setWorkingIndicator: () => {},
+			setWorkingMessage: () => {},
+			onTerminalInput: () => () => {},
+			setFooter: (factory: any) => {
+				factory({ requestRender: () => {} }, plainTheme, {
+					onBranchChange: () => () => {},
+					getExtensionStatuses: () => new Map(),
+					getGitBranch: () => undefined,
+				});
+			},
+			custom: (factory: any, options?: any) => {
+				const component = factory({ requestRender: () => {} }, plainTheme, {}, () => {});
+				if (options?.overlayOptions && typeof options.overlayOptions === "function") opened.inspector = component;
+				else opened.panel = component;
 				return Promise.resolve();
 			},
 		},
 	};
-	return { commands, ctx, notices, opened };
+	const start = async () => handlers.get("session_start")!({ reason: "startup" }, ctx);
+	/** End the session as /reload does, which stops the sampling timer session_start began. */
+	const stop = async () => handlers.get("session_shutdown")!({ reason: "reload" }, { ...ctx, mode: "print" });
+	/** The inspector's memory section as drawn, or [] when it is not. */
+	const memory = () => {
+		const lines = opened.inspector!.render(38).map((line) => bare(line).slice(1, -1).trimEnd());
+		const at = lines.findIndex((line) => line.startsWith(" ─ memory "));
+		if (at < 0) return [];
+		const end = lines.findIndex((line, i) => i > at && !line.startsWith("  "));
+		return lines.slice(at + 1, end < 0 ? undefined : end).map((line) => line.trim());
+	};
+	const read = async (id: string, path: string, isError = false) => {
+		await handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "read", args: { path } }, ctx);
+		await handlers.get("tool_execution_end")!({ toolCallId: id, toolName: "read", isError, durationMs: 1 }, ctx);
+	};
+	return { commands, ctx, notices, opened, handlers, bus, start, stop, memory, read };
 }
 
 /** The rows of a selectable panel as drawn, without the box. */
@@ -583,6 +647,121 @@ test("a choice that cannot be saved still applies, and says why it was not saved
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(notices.at(-1)).toContain("Could not save the panel choice");
 		expect(panelRows(opened.panel!)[0]).toBe("[ ] signals");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/** What memorq publishes for a repo whose notes are on this machine. */
+const memorqState = (over: Record<string, unknown> = {}) => ({
+	version: "0.12.0",
+	notes: 47,
+	usedThisTurn: 3,
+	stores: {
+		notes: "/home/me/.memorq/orq-ai__orqi/notes",
+		rules: "/home/me/.memorq/orq-ai__orqi/rules",
+		skills: "/home/me/.memorq/orq-ai__orqi/skills",
+	},
+	paused: false,
+	enabled: "on",
+	...over,
+});
+
+test("the memory section waits for memorq: asked for at session start, drawn once it answers", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		// The bus has no replay: orqi asks, and memorq (loaded first) answers.
+		expect(h.bus.sent).toContain("memorq:state?");
+		await h.commands.get("panel")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[2]).toBe("[ ] memory  · install memorq");
+		expect(h.memory()).toEqual([]);
+		h.bus.emit("memorq:state", memorqState());
+		await h.commands.get("panel")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[2]).toBe("[x] memory");
+		expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("memorq loaded but silent reads update memorq; ORQ_NOTES=off and a file-level off say so", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const before = process.env.ORQ_NOTES;
+	try {
+		const old = harnessOn(dir, { commands: ["memory-notes"] });
+		await old.start();
+		await old.commands.get("panel")!("", old.ctx);
+		expect(panelRows(old.opened.panel!)[2]).toBe("[ ] memory  · update memorq");
+		await old.stop();
+
+		process.env.ORQ_NOTES = "off";
+		const env = harnessOn(dir);
+		await env.start();
+		await env.commands.get("panel")!("", env.ctx);
+		expect(panelRows(env.opened.panel!)[2]).toBe("[ ] memory  · off: ORQ_NOTES=off");
+		await env.stop();
+		delete process.env.ORQ_NOTES;
+
+		const off = harnessOn(dir);
+		await off.start();
+		off.bus.emit("memorq:state", memorqState({ enabled: "off" }));
+		await off.commands.get("panel")!("", off.ctx);
+		expect(panelRows(off.opened.panel!)[2]).toBe("[ ] memory  · off · /memory");
+		expect(off.memory()).toEqual([]);
+		await off.stop();
+	} finally {
+		if (before === undefined) delete process.env.ORQ_NOTES;
+		else process.env.ORQ_NOTES = before;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a read of a note counts, wherever memorq keeps it; other reads and failed ones do not", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const home = process.env.ORQ_NOTES_HOME;
+	process.env.ORQ_NOTES_HOME = join(dir, "notes-home");
+	const h = harnessOn(dir, { cwd: "/work/orqi" });
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ stores: { ...memorqState().stores, rules: "/work/orqi/.memorq/rules" } }));
+		await h.read("r1", "/home/me/.memorq/orq-ai__orqi/notes/a.md");
+		expect(h.memory()[1]).toBe("using 3 this turn · read 1");
+		// The repo folder, relative to the working directory, when rules are written there.
+		await h.read("r2", ".memorq/rules/r.md");
+		expect(h.memory()[1]).toBe("using 3 this turn · read 2");
+		// The machine root still holds the other kinds' notes: ORQ_NOTES_HOME/<key>/<kind>/.
+		await h.read("r3", join(dir, "notes-home", "orq-ai__orqi", "skills", "s", "SKILL.md"));
+		expect(h.memory()[1]).toBe("using 3 this turn · read 3");
+		await h.read("r4", "src/main.ts");
+		await h.read("r5", "/home/me/.memorq/orq-ai__orqi/notes/missing.md", true);
+		expect(h.memory()[1]).toBe("using 3 this turn · read 3");
+	} finally {
+		await h.stop();
+		if (home === undefined) delete process.env.ORQ_NOTES_HOME;
+		else process.env.ORQ_NOTES_HOME = home;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/reload and /new: the next instance asks again and draws the fresh state", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const bus = fakeBus();
+	const first = harnessOn(dir, { bus });
+	try {
+		await first.start();
+		bus.emit("memorq:state", memorqState({ notes: 12 }));
+		expect(first.memory()[0]).toBe("12 notes for this repo");
+		await first.stop();
+		// pi builds the extension again for the next session; memorq answers the new request.
+		bus.on("memorq:state?", () => bus.emit("memorq:state", memorqState({ notes: 13 })));
+		const next = harnessOn(dir, { bus });
+		await next.start();
+		expect(bus.sent.filter((channel) => channel === "memorq:state?").length).toBe(2);
+		expect(next.memory()[0]).toBe("13 notes for this repo");
+		await next.stop();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

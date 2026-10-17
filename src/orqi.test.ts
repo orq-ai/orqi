@@ -160,6 +160,7 @@ test("every command orqi registers is in ORQI_COMMANDS, so the plugin never shad
 		registerShortcut: () => {},
 		registerTool: () => {},
 		on: () => {},
+		events: { on: () => () => {}, emit: () => {} },
 		appendEntry: () => {},
 	} as any;
 	orqCommands(noReconnect, () => [], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
@@ -309,6 +310,7 @@ test("our commands never collide with a pi built-in", () => {
 		registerEntryRenderer: () => {},
 		registerCommand: (name: string) => registered.push(name),
 		on: () => {},
+		events: { on: () => () => {}, emit: () => {} },
 		appendEntry: () => {},
 	} as any;
 	orqCommands(noReconnect, () => ["list_traces"], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);

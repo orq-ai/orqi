@@ -17,6 +17,7 @@ import {
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
+import { isNoteRead, memoryLines, noteRoots, type MemorqState } from "./memory-section.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
@@ -79,6 +80,11 @@ export function routeLine(
 
 const WORKSPACE_STATUS = "orq-workspace";
 
+/** What one inspector frame has already worked out, handed to every section it draws. */
+export interface SectionFrame {
+	signals: ReturnType<typeof signals>;
+}
+
 /**
  * One section of the inspector under the trajectory. `lines` is a pure renderer
  * over state already measured; `unavailable` names why it cannot show (memorq
@@ -87,7 +93,7 @@ const WORKSPACE_STATUS = "orq-workspace";
 export interface InspectorSection {
 	id: SectionId;
 	title: string;
-	lines(width: number): string[];
+	lines(width: number, frame: SectionFrame): string[];
 	unavailable?(): string | undefined;
 }
 
@@ -308,6 +314,28 @@ export function orqHarness(deps: HarnessDeps) {
 				ctx.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
 			}
 		};
+		// ── memory: what memorq last published on the bus, and the notes the model opened ──
+		// Subscribed at load, not at session_start: memorq, a path extension, loads first and may publish
+		// before orqi's session_start runs; pi drops these subscriptions with this instance.
+		let memorqState: MemorqState | undefined;
+		/** A memorq that registers its commands is loaded (read at session start, never in a render). */
+		let memorqLoaded = false;
+		let noteReads = 0;
+		/** `read` paths by tool call: tool_execution_end carries no args. */
+		const readPaths = new Map<string, string>();
+		/** Why the memory section cannot show, or undefined when it can. */
+		const memoryUnavailable = () => {
+			if (process.env.ORQ_NOTES === "off") return "off: ORQ_NOTES=off";
+			if (!memorqState) return memorqLoaded ? "update memorq" : "install memorq";
+			return memorqState.enabled === "off" ? "off · /memory" : undefined;
+		};
+		pi.events.on("memorq:state", (data) => {
+			const state = data as MemorqState | undefined;
+			// A payload this renderer cannot read is ignored rather than drawn.
+			if (!state || typeof state.notes !== "number" || !state.stores || typeof state.stores !== "object") return;
+			memorqState = state;
+			render();
+		});
 		// ── teach state: the card lives in the panel, never the transcript ──
 		// On by default (prefs.sections.tips): the cards are the harness explaining the platform; /tips off hides them
 		// (shown as "tips"; "teach" is the code name and the old command).
@@ -475,13 +503,11 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// ── the inspector ─────────────────────────────────────────────────────
 		/** The sections under the trajectory, in `SECTIONS` order (src/prefs.ts); orqi.json says which are drawn. */
-		/** The frame's signals: inspectorFrame reads them once and the signals section draws the same answer. */
-		let frameSignals: ReturnType<typeof signals> | undefined;
 		const sections: InspectorSection[] = [
-			{ id: "signals", title: "signals", lines: (w) => signalLines(frameSignals ?? signals(trajectory.steps, trajectory.turn), w) },
+			{ id: "signals", title: "signals", lines: (w, frame) => signalLines(frame.signals, w) },
 			// Empty until the first measure: an empty section is skipped.
 			{ id: "context", title: "context", lines: (w) => (split ? contextLines(split, w) : []) },
-			{ id: "memory", title: "memory", lines: () => [], unavailable: () => "install memorq" },
+			{ id: "memory", title: "memory", lines: (w) => memoryLines(memorqState, noteReads, w), unavailable: memoryUnavailable },
 			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
 			{
 				id: "tips",
@@ -528,11 +554,10 @@ export function orqHarness(deps: HarnessDeps) {
 					error: (text: string) => theme.fg("error", text),
 				};
 				const found = signals(trajectory.steps, trajectory.turn);
-				frameSignals = found;
 				// Under the trajectory: what needs attention, where the context goes, what memory knows,
 				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
 				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
-					const lines = section.lines(inner);
+					const lines = section.lines(inner, { signals: found });
 					return lines.length ? [{ id: section.id, lines }] : [];
 				});
 				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
@@ -715,6 +740,13 @@ export function orqHarness(deps: HarnessDeps) {
 			// the file's own. The provider headers read this per request.
 			process.env.ORQI_THREAD_ID = ctx.sessionManager.getSessionId();
 			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
+			// The bus has no replay: ask memorq for its state now, in case it published before this instance listened.
+			try {
+				memorqLoaded = pi.getCommands().some((command) => command.name === "memory-notes" || command.name === "memory");
+			} catch {
+				memorqLoaded = false;
+			}
+			pi.events.emit("memorq:state?", undefined);
 			trajectory.fromMessages(branchMessages(ctx));
 			traces.length = 0;
 			measure(ctx);
@@ -757,11 +789,18 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("tool_execution_start", (event, ctx) => {
 			if (event.parentToolCallId) return;
 			trajectory.toolStart(event.toolCallId, event.toolName, event.args ?? {});
+			if (event.toolName === "read" && typeof event.args?.path === "string") readPaths.set(event.toolCallId, event.args.path);
 			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : shortTool(event.toolName));
 		});
 		pi.on("tool_execution_end", (event, ctx) => {
 			if (event.parentToolCallId) return;
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
+			const path = readPaths.get(event.toolCallId);
+			readPaths.delete(event.toolCallId);
+			if (path && !event.isError && memorqState && isNoteRead(path, memorqState.stores, noteRoots(), ctx.cwd)) {
+				noteReads++;
+				render();
+			}
 			syncWidgets(ctx);
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
 		});
