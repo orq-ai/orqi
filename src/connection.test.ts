@@ -335,6 +335,39 @@ test("a rejected boot pins the warning, and the next message reconnects", async 
 	expect(calls.length).toBe(1);
 });
 
+test("a browser sign-in in /login reconnects at once, and the next message does not knock again", async () => {
+	// pi fires nothing when /login stores the credential; orqOAuth hands the
+	// token over the moment the sign-in succeeds, before pi writes auth.json.
+	const session: Credential = { token: "sk-orq-good", source: "login session" };
+	const calls: Credential[][] = [];
+	const rejected = [{ source: "ORQ_API_KEY", reason: "API key is not valid for this workspace" }];
+	const h = recoveryHarness(
+		async (candidates) => {
+			calls.push(candidates);
+			const r = await rejectAllBut("sk-orq-good")(candidates);
+			h.header.workspace = "acme";
+			process.env.ORQ_API_KEY = r.credential.token;
+			return r;
+		},
+		{ rejections: rejected, candidates: [bad], readCandidates: () => ({ candidates: [bad, session] }) },
+	);
+	const before = process.env.ORQ_API_KEY;
+	try {
+		h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
+		h.factory.signedIn("sk-orq-good");
+		await Bun.sleep(0);
+		expect(calls).toEqual([[session]]);
+		expect(h.widgets.get("orq-auth")).toBeUndefined();
+		expect(h.status.get("orq-workspace")).toBe("orq:acme");
+		expect(h.notices.at(-1)).toStartWith("Connected to orq: acme");
+		await h.input();
+		expect(calls.length).toBe(1);
+	} finally {
+		if (before === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = before;
+	}
+});
+
 test("a stall during recovery is reported and does not end recovery", async () => {
 	// The server hangs on roughly one call in three. Rethrowing that out of the
 	// input handler put it in pi's extension diagnostics, where the user never

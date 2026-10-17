@@ -453,9 +453,14 @@ const models = await createOrqModelRuntime(AGENT_DIR, credential?.token ?? candi
 const modelRuntime = models.runtime;
 // "Sign in with an account" in pi's /login: the orq CLI's browser login, so a
 // key never has to be pasted. Its token is the login session's (via whoami).
+// A finished sign-in reconnects the tools at once; `commands` is built below.
 modelRuntime.registerProvider("orq", {
 	name: "orq.ai",
-	oauth: orqOAuth(() => credentialCandidates().candidates.find((candidate) => candidate.source === SESSION_SOURCE)?.token),
+	oauth: orqOAuth(
+		() => credentialCandidates().candidates.find((candidate) => candidate.source === SESSION_SOURCE)?.token,
+		undefined,
+		(token) => commands.signedIn(token),
+	),
 } as never);
 // `orq/auto` and the Decisions API classifiers, on the runtime itself so the
 // boot model can be `orq/auto` and subagents can resolve its rungs.

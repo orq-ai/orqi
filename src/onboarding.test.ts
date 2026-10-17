@@ -185,8 +185,14 @@ test("Sign in with an account: the CLI's device login, shown in pi's device-code
 		if (exit !== 0) onOutput("Error: context canceled\n");
 		return exit;
 	};
-	const flow = orqOAuth(() => "session-token", fakeCli(0));
+	const signedIn: string[] = [];
+	const flow = orqOAuth(
+		() => "session-token",
+		fakeCli(0),
+		(token) => signedIn.push(token),
+	);
 	const credentials = await flow.login({ onDeviceCode: (info) => shown.push(info) });
+	expect(signedIn).toEqual(["session-token"]);
 	expect(shown).toEqual([
 		{ userCode: "2YA3-ENTL", verificationUri: "https://my.orq.ai/device/approve?client_name=orq-cli&user_code=2YA3-ENTL" },
 	]);

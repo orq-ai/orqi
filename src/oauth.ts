@@ -57,10 +57,15 @@ interface Callbacks {
 /**
  * The provider `oauth` block. `sessionToken` reads the login session's token
  * (credentialCandidates' session entry); `run` is injectable for tests.
+ * `onSignedIn` hears the token the moment the sign-in succeeds: pi fires no
+ * event when it stores the credential, so this is how the tools reconnect
+ * without waiting for the next message. Not awaited, so pi's own save and
+ * "Logged in" are not held up by the reconnect.
  */
 export function orqOAuth(
 	sessionToken: () => string | undefined,
 	run: (args: string[], onOutput: (chunk: string) => void, signal?: AbortSignal) => Promise<number> = runCli,
+	onSignedIn?: (token: string) => void,
 ) {
 	const fresh = (refreshMarker = "orq-cli-session") => {
 		const access = sessionToken();
@@ -86,7 +91,9 @@ export function orqOAuth(
 				callbacks.signal,
 			);
 			if (code !== 0) throw new Error(output.trim().split("\n").at(-1) || `orq auth login exited with ${code}`);
-			return fresh();
+			const credentials = fresh();
+			onSignedIn?.(credentials.access);
+			return credentials;
 		},
 		refreshToken: async (_credentials: unknown) => fresh(),
 		getApiKey: (credentials: { access: string }) => credentials.access,
