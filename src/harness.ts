@@ -292,9 +292,18 @@ export function orqHarness(deps: HarnessDeps) {
 		// Which inspector sections show: orqi.json in the agent dir, read once per session (makeServices builds
 		// this extension again for /new, /resume and /fork) and written whole on every toggle.
 		const prefs = readPrefs(deps.agentDir);
-		const savePrefs = (ctx: ExtensionContext) => {
+		/**
+		 * Switch one section and save it. The file is read again and only this id changed, so a second
+		 * orqi window's choices since this one started are kept rather than overwritten, and come back
+		 * into this one. Never from a render: it reads and writes the file.
+		 */
+		const setSection = (ctx: ExtensionContext, id: SectionId, value: boolean) => {
+			prefs.sections[id] = value;
 			try {
-				writePrefs(deps.agentDir, prefs);
+				const fresh = readPrefs(deps.agentDir);
+				fresh.sections[id] = value;
+				writePrefs(deps.agentDir, fresh);
+				Object.assign(prefs.sections, fresh.sections);
 			} catch (error) {
 				ctx.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
 			}
@@ -466,8 +475,10 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// ── the inspector ─────────────────────────────────────────────────────
 		/** The sections under the trajectory, in `SECTIONS` order (src/prefs.ts); orqi.json says which are drawn. */
+		/** The frame's signals: inspectorFrame reads them once and the signals section draws the same answer. */
+		let frameSignals: ReturnType<typeof signals> | undefined;
 		const sections: InspectorSection[] = [
-			{ id: "signals", title: "signals", lines: (w) => signalLines(signals(trajectory.steps, trajectory.turn), w) },
+			{ id: "signals", title: "signals", lines: (w) => signalLines(frameSignals ?? signals(trajectory.steps, trajectory.turn), w) },
 			// Empty until the first measure: an empty section is skipped.
 			{ id: "context", title: "context", lines: (w) => (split ? contextLines(split, w) : []) },
 			{ id: "memory", title: "memory", lines: () => [], unavailable: () => "install memorq" },
@@ -517,6 +528,7 @@ export function orqHarness(deps: HarnessDeps) {
 					error: (text: string) => theme.fg("error", text),
 				};
 				const found = signals(trajectory.steps, trajectory.turn);
+				frameSignals = found;
 				// Under the trajectory: what needs attention, where the context goes, what memory knows,
 				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
 				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
@@ -980,8 +992,7 @@ export function orqHarness(deps: HarnessDeps) {
 				ctx.ui.notify("usage: /tips on|off", "warning");
 				return;
 			}
-			prefs.sections.tips = arg ? arg === "on" : !prefs.sections.tips;
-			savePrefs(ctx);
+			setSection(ctx, "tips", arg ? arg === "on" : !prefs.sections.tips);
 			ctx.ui.notify(
 				prefs.sections.tips
 					? `Tips on: a card follows the next relevant tool call, ${panelShown() ? "in the inspector" : "above the editor"}.`
@@ -1017,8 +1028,7 @@ export function orqHarness(deps: HarnessDeps) {
 						space: (i) => {
 							const id = sections[i]?.id;
 							if (!id || disabled.has(i)) return false;
-							prefs.sections[id] = !prefs.sections[id];
-							savePrefs(ctx);
+							setSection(ctx, id, !prefs.sections[id]);
 							syncWidgets(ctx);
 							render();
 							live?.update(spec());

@@ -552,6 +552,42 @@ test("orqi.json with unknown ids and garbage values: the harness starts on the d
 	}
 });
 
+test("two orqi windows on one agent dir keep each other's panel choices", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
+	try {
+		// Both start before either saves, so each holds the defaults in memory.
+		const one = harnessOn(dir);
+		const two = harnessOn(dir);
+		await one.commands.get("tips")!("off", one.ctx);
+		await two.commands.get("panel")!("", two.ctx);
+		two.opened.panel!.handleInput("\x1b[B"); // context
+		two.opened.panel!.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(readPrefs(dir).sections).toEqual({ ...DEFAULT_SECTIONS, tips: false, context: false });
+		// The second window picked up the first one's choice when it saved.
+		expect(panelRows(two.opened.panel!)).toEqual(["[x] signals", "[ ] context", "[ ] memory  · install memorq", "[ ] process", "[ ] tips"]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a choice that cannot be saved still applies, and says why it was not saved", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
+	try {
+		// A regular file where the agent dir should be: mkdir under it fails.
+		const blocked = join(dir, "not-a-dir");
+		writeFileSync(blocked, "");
+		const { commands, ctx, notices, opened } = harnessOn(blocked);
+		await commands.get("panel")!("", ctx);
+		opened.panel!.handleInput(" "); // signals off
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(notices.at(-1)).toContain("Could not save the panel choice");
+		expect(panelRows(opened.panel!)[0]).toBe("[ ] signals");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("/tips off flips the tips row and the inspector omits the section", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
 	try {
