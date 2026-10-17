@@ -129,9 +129,10 @@ export function applyGardenKey(Class: SelectorClass, open: () => void): boolean 
 		// working, instead of the base call losing them.
 		const result = (baseList as (this: unknown, ...args: unknown[]) => unknown).apply(this, redraw);
 		try {
-			// The selector clears its list on every redraw, so one row per render;
-			// rawKeyHint colours it just like pi's own key hints.
-			this.listContainer?.addChild(new Text(rawKeyHint("ctrl+g", "open the model garden in your browser"), 0, 0));
+			// The selector clears its list on every redraw, so one row per render.
+			// Pi indents its supporting rows by two columns; retain that layout while
+			// rawKeyHint colours the shortcut like pi's own key hints.
+			this.listContainer?.addChild(new Text(`  ${rawKeyHint("ctrl+g", "open the model garden in your browser")}`, 0, 0));
 		} catch {
 			// No list to draw into (a stub in a test, a strange pi); the key still works.
 		}

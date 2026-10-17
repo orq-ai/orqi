@@ -137,6 +137,9 @@ test("applyGardenKey's hint survives a redraw without stacking", () => {
 	expect(applyGardenKey(Selector as never, () => {})).toBe(true);
 	const instance = new Selector();
 	instance.updateList();
+	const hint = instance.listContainer.children.at(-1) as { render: (width: number) => string[] };
+	// Pi's supporting selector rows are indented by two columns.
+	expect(hint.render(120)[0]).toMatch(/^  /);
 	instance.updateList();
 	instance.updateList();
 	// pi clears its list before every redraw, so the wrap sees one clear per
