@@ -69,6 +69,7 @@ export const ORQI_COMMANDS = [
 	"reconnect",
 	"whoami",
 	"workspace",
+	"garden",
 	"server",
 	"doctor",
 	"update",

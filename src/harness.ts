@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
+import { ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { isAgentModel } from "./agents.ts";
 import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
 import { dollars, footerLine, headerBar, hostLabel, shortModel, tokens, type Paint } from "./footer.ts";
@@ -35,6 +36,7 @@ import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
 import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
+import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { orqGate } from "./gate.ts";
@@ -1307,6 +1309,14 @@ export function orqHarness(deps: HarnessDeps) {
 		// Not `/export trajectory`: `/export` is pi's (HTML export), and pi drops
 		// any extension command that collides with a built-in.
 		registerViewCommands(pi, { deps, trajectory, traces, panel, studio, measure, agentKey, split: () => split, returnTo: () => returnTo });
+
+		// ctrl+g in the model selector opens the garden; /garden is the direct jump.
+		// The opener goes through the session ctx: it is the only notify orqi has at
+		// the pi level, and a session that has since closed would throw on it.
+		applyGardenKey(ModelSelectorComponent as never, () => {
+			if (ctxRef) void openGarden(ctxRef, studio);
+		});
+		registerGarden(pi, studio);
 	};
 }
 
