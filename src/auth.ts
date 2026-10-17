@@ -35,8 +35,122 @@ let cliProfile: string | undefined;
  * `ORQ_API_BASE_URL`, which the CLI reads for something else entirely.
  */
 export function apiBaseUrl(env: NodeJS.ProcessEnv = process.env, server = cliServer): string {
-	// CLI 11 moved its default host to my.orq.ai (api.orq.ai still answers).
-	return server ?? env.ORQ_SERVER ?? "https://my.orq.ai";
+	return server ?? env.ORQ_SERVER ?? DEFAULT_SERVER;
+}
+
+/** CLI 11 moved its default host to my.orq.ai (api.orq.ai still answers). */
+export const DEFAULT_SERVER = "https://my.orq.ai";
+
+/**
+ * orq's own hosts: saved the moment they are chosen. Any other host is saved
+ * only once a credential is accepted there and it answers as orq, so a typo or
+ * a lookalike never becomes the CLI's default for every later `orq` and `orqi`.
+ */
+export const OFFICIAL_SERVERS = [DEFAULT_SERVER, "https://my.staging.orq.ai"];
+
+/**
+ * A host as typed (`my.staging.orq.ai`, `https://acme.example.com/`) as the
+ * base URL the CLI stores, or why it is not one. https only, but for localhost.
+ */
+export function normalizeServer(input: string): { server: string } | { error: string } {
+	const raw = input.trim();
+	const bad = { error: `${raw || "an empty value"} is not an orq host, e.g. https://my.staging.orq.ai` };
+	// A leading dash would reach `orq server use` as a flag (`--help` saved https://--help).
+	if (!raw || raw.startsWith("-")) return bad;
+	let url: URL;
+	try {
+		url = new URL(raw.includes("://") ? raw : `https://${raw}`);
+	} catch {
+		return bad;
+	}
+	const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+	// Checked as typed: the parser reads `0` (the CLI's index for a host) as https://0.0.0.0.
+	const typedHost = raw.replace(/^[a-z]+:\/\//i, "").split(/[/:]/)[0] ?? "";
+	if (url.search || url.hash || url.username || url.password || (!local && !typedHost.includes("."))) return bad;
+	if (url.protocol !== "https:" && !(local && url.protocol === "http:"))
+		return { error: `${raw}: an orq host needs https (http only on localhost)` };
+	return { server: `${url.origin}${url.pathname.replace(/\/+$/, "")}` };
+}
+
+// Their own arguments are theirs: `orqi mcp add x -- srv --server …` is a server's flag.
+const SUBCOMMANDS = ["update", "plugin", "mcp"];
+
+/**
+ * `--server <url>` (or `--server=<url>`) taken out of argv, wherever it sits
+ * before a `--`, so `orqi --server X --session id` and `orqi --server X "prompt"`
+ * read the rest as they would without it. Given twice is an error: the second
+ * would otherwise be left in argv[2] and sent to the model as a prompt.
+ */
+export function takeServerFlag(argv: string[]): { argv: string[]; server?: string; error?: string } {
+	if (SUBCOMMANDS.includes(argv[2] ?? "")) return { argv };
+	const end = argv.indexOf("--", 2);
+	const found = argv
+		.map((arg, i) => (i >= 2 && (end < 0 || i < end) && (arg === "--server" || arg.startsWith("--server=")) ? i : -1))
+		.filter((i) => i >= 0);
+	if (found.length === 0) return { argv };
+	if (found.length > 1) return { argv, error: "orqi --server is given more than once" };
+	const at = found[0]!;
+	const inline = argv[at]!.startsWith("--server=");
+	const value = inline ? argv[at]!.slice("--server=".length) : argv[at + 1];
+	if (!value || value.startsWith("-")) return { argv, error: "orqi --server needs a URL, e.g. orqi --server https://my.staging.orq.ai" };
+	const host = normalizeServer(value);
+	if ("error" in host) return { argv, error: `orqi --server: ${host.error}` };
+	return { argv: [...argv.slice(0, at), ...argv.slice(at + (inline ? 1 : 2))], server: host.server };
+}
+
+/** A host other than orq's own, chosen but not saved until it proves itself. */
+let stagedServer: string | undefined;
+
+export function stageServer(server: string | undefined): void {
+	stagedServer = server;
+}
+
+/** The host waiting to be saved, while it is still the one in use: a later `/server` drops it. */
+export function staged(): string | undefined {
+	if (stagedServer && process.env.ORQ_SERVER !== stagedServer) stagedServer = undefined;
+	return stagedServer;
+}
+
+/**
+ * Whether `server` answers as orq for this credential, or why not. The
+ * credential check alone is not enough: it takes anything but 401, 403 and a
+ * 5xx, so a parked domain answering 404 would pass. This wants what whoami
+ * wants, a 2xx JSON list of projects.
+ */
+export async function verifyOrqHost(server: string, token: string): Promise<string | undefined> {
+	try {
+		const response = await fetch(`${server}/v2/projects?limit=1`, {
+			headers: { Authorization: `Bearer ${token}` },
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!response.ok) return `${server} did not answer as orq (HTTP ${response.status})`;
+		const body = (await response.json()) as unknown;
+		if (Array.isArray(body) || Array.isArray((body as { data?: unknown })?.data)) return undefined;
+		return `${server} did not answer as orq (no project list)`;
+	} catch (error) {
+		return `${server} did not answer as orq (${error instanceof Error ? error.message : String(error)})`;
+	}
+}
+
+/** Save `server` as the CLI's default, the key `orq setup --server` writes. Why not, when it fails. */
+export function saveServer(server: string): string | undefined {
+	const saved = runOrq(["server", "use", "--", server]);
+	return saved.ok ? undefined : `could not save ${server} as the orq host: ${(saved.stderr || saved.stdout).trim().split("\n")[0]}`;
+}
+
+/** The server an API-key profile in force carries, from `orq server current -o json`: it outranks ORQ_SERVER. */
+export function profileServerOf(json: string): string | undefined {
+	try {
+		const server = (JSON.parse(json) as { profile_server?: unknown })?.profile_server;
+		return typeof server === "string" && server ? server : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The ORQ_SERVER exported in the shell orqi was launched from: it outranks what the CLI saved, on every launch. */
+export function exportedServer(): string | undefined {
+	return LAUNCH_ENV.ORQ_SERVER || undefined;
 }
 
 export function mcpUrl(): string {
@@ -57,9 +171,29 @@ export interface OrqResult {
 	stderr: string;
 }
 
+// The environment orqi was launched with, before it moves ORQ_API_KEY onto
+// whichever candidate won: handed to the CLI, that would make every later
+// whoami report the winner as ORQ_API_KEY and lose where it came from.
+const LAUNCH_ENV = { ...process.env };
+
+/**
+ * The CLI's environment: the launch one, with the host orqi is on now.
+ *
+ * Bun's `spawnSync` and `Bun.spawn` hand a child the launch environment, not
+ * `process.env` as changed since (node's async `spawn` does see the change),
+ * so `--server` and `/server`, which move ORQ_SERVER after launch, reach the
+ * CLI only through here. Every `orq` spawn passes it, so all of them agree.
+ */
+export function orqEnv(): NodeJS.ProcessEnv {
+	const env = { ...LAUNCH_ENV };
+	if (process.env.ORQ_SERVER) env.ORQ_SERVER = process.env.ORQ_SERVER;
+	else delete env.ORQ_SERVER;
+	return env;
+}
+
 /** Run the orq CLI. Never throws: a missing binary is just a failed result. */
 export function runOrq(args: string[]): OrqResult {
-	const res = spawnSync("orq", args, { encoding: "utf8", timeout: CLI_TIMEOUT_MS });
+	const res = spawnSync("orq", args, { encoding: "utf8", timeout: CLI_TIMEOUT_MS, env: orqEnv() });
 	if (res.error) return { ok: false, stdout: "", stderr: spawnFailure(res.error) };
 	return { ok: res.status === 0, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }

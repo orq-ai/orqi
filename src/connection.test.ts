@@ -10,6 +10,8 @@ import {
 	readWhoami,
 	loginKey,
 	LOGIN_HINT,
+	normalizeServer,
+	orqEnv,
 	profileKey,
 	profileOf,
 	serverOf,
@@ -17,6 +19,9 @@ import {
 	SESSION_SOURCE,
 	sessionToken,
 	spawnFailure,
+	stageServer,
+	staged,
+	takeServerFlag,
 	WHOAMI_ARGS,
 	workspaceOfKey,
 	type Credential,
@@ -120,6 +125,160 @@ test("the host follows the CLI, because an API-key profile carries its own serve
 	expect(apiBaseUrl({}, undefined)).toBe("https://my.orq.ai");
 	expect(serverOf('{"authenticated":false}')).toBeUndefined();
 	expect(serverOf("you are not logged in")).toBeUndefined();
+});
+
+test("a host is read as the base URL the CLI stores, and anything else is refused", () => {
+	expect(normalizeServer("my.staging.orq.ai")).toEqual({ server: "https://my.staging.orq.ai" });
+	expect(normalizeServer(" https://acme.example.com/ ")).toEqual({ server: "https://acme.example.com" });
+	expect(normalizeServer("http://localhost:8080")).toEqual({ server: "http://localhost:8080" });
+	// Each of these was saved as the CLI's default by `orq server use` before.
+	for (const typed of [
+		"--help",
+		"-h",
+		"0",
+		"list",
+		"list my agents",
+		"",
+		"https://acme.example.com?x=1",
+		"https://:secret@acme.example.com",
+	])
+		expect("error" in normalizeServer(typed)).toBe(true);
+	expect(normalizeServer("http://acme.example.com")).toEqual({
+		error: "http://acme.example.com: an orq host needs https (http only on localhost)",
+	});
+});
+
+test("--server is taken out of argv wherever it sits, so the rest reads as without it", () => {
+	const bin = ["bun", "boot.ts"];
+	expect(takeServerFlag([...bin])).toEqual({ argv: bin });
+	expect(takeServerFlag([...bin, "--server", "https://x.orq.ai"])).toEqual({ argv: bin, server: "https://x.orq.ai" });
+	expect(takeServerFlag([...bin, "--server=x.orq.ai/", "--session", "abc"])).toEqual({
+		argv: [...bin, "--session", "abc"],
+		server: "https://x.orq.ai",
+	});
+	expect(takeServerFlag([...bin, "--server", "https://x.orq.ai", "list my agents"])).toEqual({
+		argv: [...bin, "list my agents"],
+		server: "https://x.orq.ai",
+	});
+	// A missing or unusable value is an error, not the next flag or an empty host.
+	expect(takeServerFlag([...bin, "--server"]).error).toContain("needs a URL");
+	expect(takeServerFlag([...bin, "--server", "--session", "abc"]).error).toContain("needs a URL");
+	expect(takeServerFlag([...bin, "--server="]).error).toContain("needs a URL");
+	expect(takeServerFlag([...bin, "--server", "list my agents"]).error).toContain("not an orq host");
+	// Twice would leave the second in argv[2], sent to the model as a prompt.
+	expect(takeServerFlag([...bin, "--server", "a.orq.ai", "--server", "b.orq.ai"]).error).toContain("more than once");
+	// A prompt that merely mentions the flag is the prompt's business: only argv[2..] entries count.
+	expect(takeServerFlag([...bin, "what does --server do"]).server).toBeUndefined();
+	// Another command's arguments, and anything after `--`, are not orqi's.
+	const mcp = [...bin, "mcp", "add", "x", "--", "srv", "--server", "https://internal"];
+	expect(takeServerFlag(mcp)).toEqual({ argv: mcp });
+	const after = [...bin, "hi", "--", "--server", "https://x.orq.ai"];
+	expect(takeServerFlag(after)).toEqual({ argv: after });
+});
+
+test("the CLI gets the host orqi is on now, but never the key orqi moved onto", () => {
+	const saved = { server: process.env.ORQ_SERVER, key: process.env.ORQ_API_KEY };
+	try {
+		process.env.ORQ_SERVER = "https://my.staging.orq.ai";
+		process.env.ORQ_API_KEY = "sk-orq-picked-at-runtime";
+		expect(orqEnv().ORQ_SERVER).toBe("https://my.staging.orq.ai");
+		expect(orqEnv().ORQ_API_KEY).not.toBe("sk-orq-picked-at-runtime");
+		delete process.env.ORQ_SERVER;
+		expect("ORQ_SERVER" in orqEnv()).toBe(false);
+	} finally {
+		for (const [name, value] of [
+			["ORQ_SERVER", saved.server],
+			["ORQ_API_KEY", saved.key],
+		] as const) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
+	}
+});
+
+/** /server against a fake CLI: what it was asked, and ORQ_SERVER put back afterwards. */
+async function withServerCommand(
+	reconnect: (candidates: Credential[]) => Promise<any>,
+	run: (h: ReturnType<typeof recoveryHarness>, cli: string[][]) => Promise<void>,
+	current = '{"server":"https://my.orq.ai","profile_server":""}',
+) {
+	const prior = process.env.ORQ_SERVER;
+	const cli: string[][] = [];
+	const h = recoveryHarness(reconnect, {
+		readCandidates: () => ({ candidates: [good] }),
+		runOrq: (args) => {
+			cli.push(args);
+			return { ok: true, stdout: args[1] === "current" ? current : "", stderr: "" };
+		},
+	});
+	try {
+		await run(h, cli);
+	} finally {
+		stageServer(undefined);
+		if (prior === undefined) delete process.env.ORQ_SERVER;
+		else process.env.ORQ_SERVER = prior;
+	}
+}
+
+const connected = async (candidates: Credential[]) => ({ credential: candidates[0]!, added: [] });
+
+test("/server refuses what is not a host without asking the CLI anything", async () => {
+	await withServerCommand(connected, async (h, cli) => {
+		await h.commands.get("server")!("--help", h.ctx);
+		expect(cli).toEqual([]);
+		expect(h.notices.at(-1)).toContain("not an orq host");
+	});
+});
+
+test("/server saves orq's own hosts at once", async () => {
+	await withServerCommand(connected, async (h, cli) => {
+		await h.commands.get("server")!("my.staging.orq.ai", h.ctx);
+		expect(cli).toContainEqual(["server", "use", "--", "https://my.staging.orq.ai"]);
+		expect(process.env.ORQ_SERVER).toBe("https://my.staging.orq.ai");
+	});
+});
+
+test("/server puts the previous host back, unsaved, when another host accepts nothing", async () => {
+	await withServerCommand(
+		async (candidates) => {
+			// Refused while the custom host is staged, accepted once it is put back.
+			if (staged()) throw new CredentialsRejected([{ source: "acme.example.com", reason: "did not answer as orq" }]);
+			return connected(candidates);
+		},
+		async (h, cli) => {
+			process.env.ORQ_SERVER = "https://my.orq.ai";
+			await h.commands.get("server")!("https://acme.example.com", h.ctx);
+			expect(cli.some((args) => args[1] === "use")).toBe(false);
+			expect(process.env.ORQ_SERVER).toBe("https://my.orq.ai");
+			expect(staged()).toBeUndefined();
+			expect(h.notices.at(-1)).toContain("https://acme.example.com is not saved");
+			// The rollback reconnected on the old host, so nothing stays pinned.
+			expect(h.widgets.get("orq-auth")).toBeUndefined();
+		},
+	);
+});
+
+test("/server leaves the host alone while a profile pins its own", async () => {
+	await withServerCommand(
+		connected,
+		async (h, cli) => {
+			const before = process.env.ORQ_SERVER;
+			await h.commands.get("server")!("my.staging.orq.ai", h.ctx);
+			expect(cli).toEqual([["server", "current", "-o", "json"]]);
+			expect(process.env.ORQ_SERVER).toBe(before);
+			expect(h.notices.at(-1)).toContain("pins https://aim.orq.ai");
+		},
+		'{"server":"https://aim.orq.ai","profile_server":"https://aim.orq.ai"}',
+	);
+});
+
+test("a boot notice is said once, at startup, never on a resume", () => {
+	const h = recoveryHarness(noReconnect, { notice: "https://acme.example.com is not saved as the orq host yet" });
+	h.ctx.hasUI = true;
+	h.handlers.get("session_start")!({ type: "session_start", reason: "resume" }, h.ctx);
+	expect(h.notices).toEqual([]);
+	h.handlers.get("session_start")!({ type: "session_start", reason: "startup" }, h.ctx);
+	expect(h.notices.filter((notice) => notice.includes("not saved"))).toHaveLength(1);
 });
 
 test("no orq call asks for --json, which the CLI dropped in 8.4", () => {

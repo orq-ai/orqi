@@ -65,6 +65,28 @@ CLI does (see [6](#6-pinning-a-profile)).
 `orq orqi` also exports the resolved server to the child process as `ORQ_SERVER`, so that launch
 path agrees with whoami by construction.
 
+Choosing a host from orqi goes through the same place. orq's own hosts (`https://my.orq.ai`, the
+default, and `https://my.staging.orq.ai`) are saved the moment they are chosen. Any other host is
+saved only once a credential is accepted there and it answers as orq (a 2xx project list, which a
+parked domain answering 404 does not give), so a typo or a lookalike never becomes the default for
+every later `orq` and `orqi`. Hosts take `https` (plain `http` only on `localhost`) and may be typed
+without the scheme.
+
+| How | This run | Later runs |
+|---|---|---|
+| `orqi --server <url>` (or `--server=<url>`) | sets `ORQ_SERVER`, so whoami, `orq auth login` and every URL follow it | orq's own hosts: saved at once. Any other: saved once it has passed the check, at boot or on a later sign-in in the same session; until then a startup notice says it is not saved |
+| `/server` | a list of orq's hosts (and the one in use), enter switches | as below |
+| `/server <url>` | switches the session; another host that refuses every credential, or does not answer as orq, puts the previous one back | saved on success |
+| `/server clear` or `orq server clear` | back to the default | forgotten |
+
+Two things outrank a saved host. An API-key profile that carries its own server (whoami's
+`profile_server`) wins over `ORQ_SERVER` too, so `--server` and `/server` say so and change nothing.
+An `ORQ_SERVER` exported in the shell wins over the saved default on every launch, which `/server`
+mentions when it applies.
+
+orqi keeps no copy of the host: the CLI's `config.json` is the one store. The fixed header names
+the host (`server my.staging.orq.ai`) whenever it is not the default `https://my.orq.ai`.
+
 ## 3. Which session file, and which token inside it
 
 ```
@@ -148,7 +170,7 @@ are JWT-shaped; rotate those explicitly with `/key`, the environment, or the pro
 ## 5. Which workspace is shown
 
 The header names the active workspace, because it scopes every tool call and
-`/workspace <key>` can change it mid-session.
+`/workspace <key>` (or `/server <url>`, which moves to another host) can change it mid-session.
 
 | Credential | Workspace label comes from |
 |---|---|

@@ -131,9 +131,17 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 	return truncateToWidth(`${l}${sep}${r}`, width);
 }
 
+/** The header's name for the orq host: none for the default, the host without its scheme otherwise. */
+export function hostLabel(base: string, defaultServer: string): string | undefined {
+	const trimmed = base.replace(/\/+$/, "");
+	return trimmed === defaultServer ? undefined : trimmed.replace(/^https?:\/\//, "");
+}
+
 /** What the fixed header shows: who and where, as opposed to the footer's what and how much. */
 export interface HeaderBarState {
 	workspace?: string;
+	/** The orq host without its scheme, only when it is not the default: another host is another set of workspaces. */
+	server?: string;
 	project?: string;
 	/** Display name of the managed agent in agent mode. */
 	agent?: string;
@@ -147,7 +155,7 @@ export interface HeaderBarState {
 /**
  * The fixed header line:
  *
- *   ◌ orqi v<version>  workspace acme · project Arian · agent support-triage · routing orq/auto
+ *   ◌ orqi v<version>  workspace acme · agent support-triage · server my.staging.orq.ai · project Arian · routing orq/auto
  *
  * Segments drop from the right as the terminal narrows; the workspace and
  * the agent stay longest, being the two that change what every call does.
@@ -160,6 +168,7 @@ export function headerBar(state: HeaderBarState, width: number, paint: Paint = p
 	else if (state.workspace) segments.push(label("workspace", state.workspace));
 	// Agent mode changes who answers: the agent stands out, it is not just another fact.
 	if (state.agent) segments.push(`${paint.dim("agent")} ${paint.hot(state.agent)}`);
+	if (state.server) segments.push(label("server", state.server));
 	if (state.project) segments.push(label("project", state.project));
 	if (state.routing) segments.push(label("routing", state.routing));
 	if (state.plugin) segments.push(paint.dim(state.plugin));

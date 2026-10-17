@@ -8,7 +8,7 @@ import { readSkill, skillOrigin } from "./skills.ts";
 import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
-import { contextBar, dollars, footerLine, headerBar, sparkline, tokens } from "./footer.ts";
+import { contextBar, dollars, footerLine, headerBar, hostLabel, sparkline, tokens } from "./footer.ts";
 import { exitSummary, orqHarness, repoOf } from "./harness.ts";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
@@ -766,6 +766,13 @@ test("the fixed header says who and where, dropping segments from the right as i
 	expect(narrow).toBe(` ◌ orqi v${VERSION}  workspace acme · agent support-triage · project Arian`);
 	expect(headerBar({ connected: false }, 80)).toBe(` ◌ orqi v${VERSION}  not signed in · /login`);
 	expect(visibleWidth(headerBar(state, 20))).toBeLessThanOrEqual(20);
+	// Another host is another set of workspaces: named, without its scheme, right after who answers.
+	expect(headerBar({ ...state, server: "my.staging.orq.ai" }, 200)).toContain(
+		"agent support-triage · server my.staging.orq.ai · project Arian",
+	);
+	// The default host is not news, trailing slash or not.
+	expect(hostLabel("https://my.orq.ai/", "https://my.orq.ai")).toBeUndefined();
+	expect(hostLabel("https://my.staging.orq.ai", "https://my.orq.ai")).toBe("my.staging.orq.ai");
 });
 
 test("a tool's parameters read as name, type, required, default and description", () => {
