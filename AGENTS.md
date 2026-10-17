@@ -134,8 +134,15 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   red-vs-green alone). `/theme` switches mid-session. There used to be five: `orq-amber` was one hue
   throughout, and a failed tool call read much like a successful one, so it added only a worse
   `orq-dark`; `orq-teal` was `orq-slate` in another hue, with the same layout, warning and error.
-  `ORQI_THEME=amber` and `=teal` still resolve (to `orq-dark` and `orq-slate`) so a pinned setting
-  does not silently fall through to the default.
+  `ORQI_THEME=amber` and `=teal` still resolve (to `orq-dark` and `orq-slate`), as does a saved
+  `orq-amber`/`orq-teal`, so a pinned setting does not silently fall through to the default.
+- **The `/theme` pick persists; `ORQI_THEME` is a one-run override.** pi saves `/theme` to
+  `settings.json`. Boot used to call `settingsManager.setTheme()` with `ORQI_THEME` or `orq-dark`
+  on every start, and `setTheme` saves, so it wrote over that pick and no choice survived a restart.
+  Boot now applies `startupTheme` (`src/branding.ts`) in memory only: it sets pi's in-memory global
+  theme without marking it modified, because pi's `save()` rebuilds merged settings from the global
+  ones (an `applyOverrides` alone is gone after the next setter) and writes only modified fields. So: `ORQI_THEME` if set, else the saved theme, else `orq-dark`. A saved name this run cannot load
+  (a plugin theme not installed now) runs as `orq-dark` without erasing the saved choice.
 - **Ten more themes ride beside them, lightened, in `themes/pack/`.** `catppuccin-mocha`, `dracula`,
   `gruvbox-dark`, `neon-afterglow`, `neon-noir`, `night-owl`, `nord`, `one-dark`, `solarized-dark`
   and `tokyo-night` come from the `@spences10/pi-themes` package (MIT, pinned in devDependencies; its

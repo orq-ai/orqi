@@ -28,7 +28,7 @@ import {
 import { BUILTIN_SLASH_COMMANDS } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/slash-commands.js";
 import { credentialCandidates, LOGIN_HINT_ONESHOT, projectForCredential, routerUrl, SESSION_SOURCE, type Credential } from "./auth.ts";
 import { orqOAuth, refreshStoredSignIn, storedOAuthToken } from "./oauth.ts";
-import { dim, type HeaderInfo, terminalProgress, VERSION } from "./branding.ts";
+import { dim, type HeaderInfo, startupTheme, terminalProgress, VERSION } from "./branding.ts";
 import { authLines, NO_CREDENTIAL, ORQI_COMMANDS, orqCommands } from "./connection.ts";
 import {
 	callOrqTool,
@@ -620,22 +620,25 @@ const makeServices = async () => {
 	// theme cannot ship here: the contrast floor is checked against the lightest
 	// plausible terminal background (#282C34), which no light-skin text colour
 	// could clear.
-	const THEMES: Record<string, string> = {
-		dark: "orq-dark",
-		slate: "orq-slate",
-		signal: "orq-signal",
-		// orq-amber and orq-teal were folded into these: same surface, different
-		// status colours (amber) or the same layout in another hue (teal). The old
-		// ORQI_THEME values keep working rather than silently meaning orq-dark.
-		amber: "orq-dark",
-		teal: "orq-slate",
-	};
-	// orq-dark is the default: amber with turquoise for success and red for errors,
-	// so a failed tool call reads as one. ORQI_THEME also takes a theme pack name
-	// (tokyo-night); anything unknown falls back to orq-dark.
-	const wanted = process.env.ORQI_THEME ?? "dark";
-	const packed = existsSync(THEME_PACK) ? readdirSync(THEME_PACK).map((f) => f.replace(/\.json$/, "")) : [];
-	created.settingsManager.setTheme(THEMES[wanted] ?? (packed.includes(wanted) ? wanted : "orq-dark"));
+	// The /theme pick persists (pi saves it to settings.json); ORQI_THEME overrides
+	// it for one run without saving (startupTheme in src/branding.ts).
+	const themeNames = (dir: string) =>
+		existsSync(dir)
+			? readdirSync(dir)
+					.filter((f) => f.endsWith(".json"))
+					.map((f) => f.replace(/\.json$/, ""))
+			: [];
+	const known = [...themeNames(join(pkgDir, "themes")), ...themeNames(THEME_PACK), "dark", "light", "system"];
+	const saved = created.settingsManager.getThemeSetting();
+	const theme = startupTheme(process.env.ORQI_THEME, saved, known);
+	if (theme !== saved) {
+		// In memory only. pi's save() rebuilds its merged settings from the global ones,
+		// so applyOverrides alone is gone after the next setter below; and it writes
+		// only the fields marked modified, so a value set here is never persisted.
+		const global = (created.settingsManager as unknown as { globalSettings?: { theme?: string } }).globalSettings;
+		if (global) global.theme = theme;
+		created.settingsManager.applyOverrides({ theme });
+	}
 	// Silence pi's own startup header - it pitches pi, and this CLI prints its own.
 	// ctrl+o still shows the full help and loaded resources on demand.
 	created.settingsManager.setQuietStartup(true);

@@ -145,3 +145,31 @@ export function headerLines(info: HeaderInfo): string[] {
 		...footer,
 	];
 }
+
+/** ORQI_THEME's short names, plus the two themes folded into others (old pins keep working). */
+export const THEME_ALIASES: Record<string, string> = {
+	dark: "orq-dark",
+	slate: "orq-slate",
+	signal: "orq-signal",
+	amber: "orq-dark",
+	teal: "orq-slate",
+};
+const RETIRED_THEMES: Record<string, string> = { "orq-amber": "orq-dark", "orq-teal": "orq-slate" };
+
+/**
+ * The theme a run starts on. `ORQI_THEME` wins for that run; otherwise the theme
+ * `/theme` saved in settings.json; otherwise orq-dark. The caller applies it in
+ * memory only, never a save: booting used to `setTheme` every time, which
+ * wrote over the user's `/theme` pick, so it never survived a restart.
+ * `known` is every theme this run can load; a saved name it lacks (a removed theme,
+ * a plugin not loaded now) runs as orq-dark without erasing the saved choice.
+ */
+export function startupTheme(env: string | undefined, saved: string | undefined, known: readonly string[]): string {
+	if (env) {
+		const name = THEME_ALIASES[env] ?? env;
+		return known.includes(name) ? name : "orq-dark";
+	}
+	if (saved?.includes("/")) return saved; // pi's "light/dark" pair follows the terminal
+	if (saved && RETIRED_THEMES[saved]) return RETIRED_THEMES[saved];
+	return saved && known.includes(saved) ? saved : "orq-dark";
+}
