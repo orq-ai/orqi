@@ -472,9 +472,16 @@ function fakeBus() {
  * recorded (the last one is the Panel a command opened), and `start()`, which runs session_start
  * and hands over the footer, so the inspector is attached as regular mode's overlay.
  */
-function harnessOn(agentDir: string, options: { bus?: ReturnType<typeof fakeBus>; commands?: string[]; cwd?: string } = {}) {
+function harnessOn(
+	agentDir: string,
+	options: { bus?: ReturnType<typeof fakeBus>; commands?: string[]; cwd?: string; branch?: any[] } = {},
+) {
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
 	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
+	const renderers = new Map<string, (entry: any, options: any, theme: any) => any>();
+	/** Session entries the harness appended; they join the branch, as pi's session file does. */
+	const entries: { customType: string; data: any }[] = [];
+	const branch = options.branch ?? [];
 	const bus = options.bus ?? fakeBus();
 	// pi drops an instance's bus subscriptions with it: stop() does the same.
 	const unsubscribe: (() => void)[] = [];
@@ -489,7 +496,11 @@ function harnessOn(agentDir: string, options: { bus?: ReturnType<typeof fakeBus>
 			emit: bus.emit,
 		},
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
-		registerEntryRenderer: () => {},
+		registerEntryRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
+		appendEntry: (customType: string, data: any) => {
+			entries.push({ customType, data });
+			branch.push({ type: "custom", customType, data, timestamp: new Date().toISOString() });
+		},
 		registerShortcut: () => {},
 		setModel: async () => {},
 		getCommands: () => (options.commands ?? []).map((name) => ({ name, source: "extension" })),
@@ -512,7 +523,7 @@ function harnessOn(agentDir: string, options: { bus?: ReturnType<typeof fakeBus>
 		mode: "tui",
 		cwd: options.cwd ?? "/work/orqi",
 		model: undefined,
-		sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+		sessionManager: { getSessionId: () => "s1", getBranch: () => branch },
 		getContextUsage: () => undefined,
 		getSystemPrompt: () => "",
 		ui: {
@@ -555,7 +566,13 @@ function harnessOn(agentDir: string, options: { bus?: ReturnType<typeof fakeBus>
 		await handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "read", args: { path }, parentToolCallId }, ctx);
 		await handlers.get("tool_execution_end")!({ toolCallId: id, toolName: "read", isError, durationMs: 1, parentToolCallId }, ctx);
 	};
-	return { commands, ctx, notices, opened, handlers, bus, start, stop, memory, read };
+	/** The inspector's trajectory rows as drawn. */
+	const rows = () =>
+		opened
+			.inspector!.render(38)
+			.map((line) => bare(line).slice(1, -1).trimEnd())
+			.filter((line) => /^[ ▌][^─\s] (user|assist|agent|tool|sub|route|memory) /.test(line));
+	return { commands, ctx, notices, opened, handlers, bus, start, stop, memory, read, entries, renderers, branch, rows };
 }
 
 /** The rows of a selectable panel as drawn, without the box. */
@@ -824,6 +841,86 @@ test("ORQ_NOTES=off is read at session start, not in a render", async () => {
 		else process.env.ORQ_NOTES = before;
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("a learn is one orqi-memory entry and one trajectory step; the same state again adds nothing", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const h = harnessOn(dir);
+	const at = Date.parse("2026-10-17T12:00:00Z");
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState());
+		expect(h.entries).toEqual([]);
+		const learned = { count: 2, trigger: "ship", at, costUsd: 0.14 };
+		h.bus.emit("memorq:state", memorqState({ learned }));
+		h.bus.emit("memorq:state", memorqState({ learned, usedThisTurn: 5 }));
+		expect(h.entries).toEqual([{ customType: "orqi-memory", data: learned }]);
+		expect(h.rows()).toEqual(["▌◇ memory learned 2 after git push"]);
+		// A later learn is a step of its own; its cost is the session's.
+		h.bus.emit("memorq:state", memorqState({ learned: { count: 1, trigger: "idle", at: at + 60_000 } }));
+		expect(h.entries.map((entry) => entry.data.trigger)).toEqual(["ship", "idle"]);
+		expect(h.rows()).toEqual([" ◇ memory learned 2 after git push", "▌◇ memory learned 1 while idle"]);
+		// An older learn arriving late (an earlier publish delivered out of order) is not recorded twice.
+		h.bus.emit("memorq:state", memorqState({ learned }));
+		expect(h.entries).toHaveLength(2);
+		// The entry draws in the transcript as a dim line.
+		const text = h.renderers.get("orqi-memory")!({ data: learned }, {}, { fg: (_t: string, s: string) => s });
+		expect(bare(text.render(80).join("")).trim()).toBe("learned 2 after git push · $0.140");
+		expect(h.renderers.get("orqi-memory")!({ data: { count: "x" } }, {}, { fg: (_t: string, s: string) => s })).toBeUndefined();
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a resumed session rebuilds the learn from its entry and does not record it again", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const at = Date.parse("2026-10-17T12:00:00Z");
+	const learned = { count: 2, trigger: "compact", at, costUsd: 0.05 };
+	const branch: any[] = [
+		{ type: "custom", customType: "orqi-memory", data: learned, timestamp: "2026-10-17T12:00:01Z" },
+		{ type: "custom", customType: "orqi-memory", data: { count: "two" }, timestamp: "2026-10-17T12:00:02Z" },
+	];
+	const bus = fakeBus();
+	// memorq loads first and publishes at its own session_start, before orqi's runs.
+	bus.on("memorq:state?", () => bus.emit("memorq:state", memorqState({ learned })));
+	const h = harnessOn(dir, { bus, branch });
+	try {
+		bus.emit("memorq:state", memorqState({ learned }));
+		await h.start();
+		expect(h.entries).toEqual([]);
+		expect(h.rows()).toEqual(["▌◇ memory learned 2 after compaction"]);
+		// A learn that landed after the last session ended (session end) arrives on resume, and is recorded then.
+		h.bus.emit("memorq:state", memorqState({ learned: { count: 3, trigger: "session_end", at: at + 1000 } }));
+		expect(h.entries.map((entry) => entry.data.count)).toEqual([3]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/trajectory exports a learn as a system step, as it does a route", () => {
+	const trajectory = new Trajectory();
+	trajectory.fromMessages([
+		{ role: "user", content: "hi", timestamp: 1 },
+		{
+			role: "memory",
+			label: "learned 2",
+			detail: "after git push",
+			usage: { input: 0, output: 0, cacheRead: 0, cost: 0.14 },
+			timestamp: Date.parse("2026-10-17T12:00:00Z"),
+		},
+	] as any);
+	expect(trajectory.steps.map((step) => step.role)).toEqual(["user", "memory"]);
+	expect(trajectory.totals().cost).toBe(0.14);
+	const atif = toAtif(trajectory.steps, { sessionId: "s", agentVersion: "0", model: "m" });
+	expect((atif.steps as any[])[1]).toEqual({
+		step_id: 2,
+		timestamp: "2026-10-17T12:00:00.000Z",
+		source: "system",
+		message: "memory learned 2 after git push",
+	});
+	expect(peekLines(trajectory.steps[1]!).title).toBe("step 2 · memory learned 2");
 });
 
 test("/reload and /new: the next instance asks again and draws the fresh state", async () => {

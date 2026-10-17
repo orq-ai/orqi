@@ -54,7 +54,7 @@ test("the full session: used this turn, read, learned after a git push, the next
 	expect(body(lines)).toEqual([
 		"  47 notes for this repo",
 		"  using 3 this turn · read 1",
-		"  learned 2 after last git push · 3m",
+		"  learned 2 after git push · 3m",
 		"  next memory review in 2 sessions",
 	]);
 	for (const line of lines) expect(visibleWidth(line)).toBe(36);
@@ -74,6 +74,18 @@ test("every trigger reads as words, and the age as m, h or d", () => {
 	// An event named like an Object method is still just an unknown event.
 	expect(learned("toString", MIN)).toBe("  learned 2 on toString · 1m");
 	expect(learned("prompt", MIN)).toBe("  learned 2 on prompt · 1m");
+});
+
+test("a failed review is accepted but not drawn yet, and an unknown enabled reads as on", () => {
+	expect(body(memoryLines(state({ review: { failed: "boom" } }), 0, 36, NOW))).toEqual(["  47 notes for this repo"]);
+	expect(body(memoryLines(state({ review: { dueInSessions: 2, failed: "boom" } }), 0, 36, NOW))[1]).toBe(
+		"  next memory review in 2 sessions",
+	);
+	expect(body(memoryLines(state({ enabled: "later" as never }), 0, 36, NOW))).toEqual(["  47 notes for this repo"]);
+	// A review only reads as running when it says so.
+	expect(body(memoryLines(state({ review: { running: false, dueInSessions: 1 } as never }), 0, 36, NOW))[1]).toBe(
+		"  next memory review in 1 session",
+	);
 });
 
 test("a review in progress, a paused repo, read-only, and memory off", () => {
@@ -110,8 +122,11 @@ test("a long learned line cuts the trigger, never the age", () => {
 		expect(visibleWidth(line)).toBe(36);
 		expect(line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toEndWith(" · 59m");
 	}
-	const cut = memoryLines(state({ learned: { count: 12, trigger: "ship", at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
-	expect(cut.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toBe("  learned 12 after last git p… · 59m");
+	// The commonest trigger, a git push, fits whole even with a two-digit count.
+	const ship = memoryLines(state({ learned: { count: 12, trigger: "ship", at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
+	expect(ship.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toBe("  learned 12 after git push · 59m");
+	const cut = memoryLines(state({ learned: { count: 12, trigger: "from-another-harness", at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
+	expect(cut.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toBe("  learned 12 on from-another-… · 59m");
 });
 
 test("a state is only taken when every field the section reads has the right shape", () => {
@@ -119,6 +134,10 @@ test("a state is only taken when every field the section reads has the right sha
 	expect(isMemorqState(good)).toBe(true);
 	expect(isMemorqState(state({ review: { running: true, notes: 4 } }))).toBe(true);
 	expect(isMemorqState({ ...good, learned: undefined, review: undefined })).toBe(true);
+	// A failed review, with or without the next one's due count, and an `enabled` orqi does not know.
+	expect(isMemorqState(state({ review: { failed: "model timed out" } }))).toBe(true);
+	expect(isMemorqState(state({ review: { dueInSessions: 3, failed: "model timed out" } }))).toBe(true);
+	expect(isMemorqState({ ...good, enabled: "later" })).toBe(true);
 	for (const bad of [
 		undefined,
 		null,
@@ -135,7 +154,8 @@ test("a state is only taken when every field the section reads has the right sha
 		{ ...good, learned: { count: "2", trigger: "ship", at: NOW } },
 		{ ...good, learned: { count: 2, trigger: "ship", at: "today" } },
 		{ ...good, learned: { count: 2, trigger: 7, at: NOW } },
-		{ ...good, enabled: "maybe" },
+		{ ...good, review: { failed: 1 } },
+		{ ...good, review: { dueInSessions: "2", failed: "x" } },
 		{ ...good, paused: "no" },
 	])
 		expect(isMemorqState(bad)).toBe(false);

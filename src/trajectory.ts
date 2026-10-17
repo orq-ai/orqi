@@ -17,7 +17,7 @@
 import type { Door } from "./router.ts";
 
 export type { Door };
-export type Role = "user" | "assistant" | "tool" | "subagent" | "route";
+export type Role = "user" | "assistant" | "tool" | "subagent" | "route" | "memory";
 export type Status = "running" | "ok" | "error";
 
 export interface StepUsage {
@@ -183,8 +183,8 @@ export class Trajectory {
 	}
 
 	private add(message: AnyMessage): void {
-		if (message.role === "route") {
-			// A persisted orqi-route entry, replayed on resume.
+		if (message.role === "route" || message.role === "memory") {
+			// A persisted orqi-route or orqi-memory entry, replayed on resume.
 			const route = message as unknown as {
 				label: string;
 				detail: string;
@@ -194,7 +194,7 @@ export class Trajectory {
 				timestamp?: number;
 			};
 			this.push({
-				role: "route",
+				role: message.role as "route" | "memory",
 				label: route.label,
 				detail: route.detail,
 				status: "ok",
@@ -343,7 +343,13 @@ export class Trajectory {
 		this.changed();
 	}
 
-	/** Everything this session has cost, subagents and routing included. */
+	/** A learn memorq reported (`orqi-memory`): its count, its trigger, when it landed, what it cost. */
+	memory(label: string, detail: string, ts: number, usage?: StepUsage): void {
+		this.push({ role: "memory", label, detail, status: "ok", ts, usage });
+		this.changed();
+	}
+
+	/** Everything this session has cost, subagents, routing and learns included. */
 	totals(): StepUsage {
 		return sumUsage(this.steps);
 	}
@@ -440,7 +446,7 @@ export interface AtifMeta {
  *
  * One ATIF step per user message and per assistant reply; a reply's tool calls
  * and their results ride on that step (`tool_calls` + `observation`), as the
- * format requires. Route decisions are system steps. A subagent becomes an
+ * format requires. Route decisions and learns are system steps. A subagent becomes an
  * embedded trajectory referenced from its tool result by `trajectory_id`.
  * Validated once against `harbor.utils.trajectory_validator`; the committed
  * fixture in the tests is that validated output.
@@ -451,13 +457,18 @@ export function toAtif(steps: Step[], meta: AtifMeta): Record<string, unknown> {
 	let current: Record<string, any> | undefined;
 	const iso = (ts: number) => new Date(ts).toISOString();
 	for (const step of steps) {
-		if (step.role === "user" || step.role === "route") {
+		if (step.role === "user" || step.role === "route" || step.role === "memory") {
 			current = undefined;
 			out.push({
 				step_id: out.length + 1,
 				timestamp: iso(step.ts),
 				source: step.role === "user" ? "user" : "system",
-				message: step.role === "user" ? (step.text ?? step.detail) : `route ${step.label}: ${step.detail}`,
+				message:
+					step.role === "user"
+						? (step.text ?? step.detail)
+						: step.role === "memory"
+							? `memory ${step.label} ${step.detail}`
+							: `route ${step.label}: ${step.detail}`,
 			});
 			continue;
 		}

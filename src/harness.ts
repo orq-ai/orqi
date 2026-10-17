@@ -18,7 +18,7 @@ import {
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
-import { isMemorqState, isNoteRead, memoryLines, noteRoots, readPath, type MemorqState } from "./memory-section.ts";
+import { isLearned, isMemorqState, isNoteRead, learnPhrase, memoryLines, noteRoots, readPath, type MemorqState } from "./memory-section.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
@@ -48,6 +48,25 @@ export interface HarnessDeps {
 }
 
 const ROUTE_ENTRY = "orqi-route";
+/** A learn memorq reported, persisted so /trajectory exports it and a resume shows it. */
+const MEMORY_ENTRY = "orqi-memory";
+type Learned = NonNullable<MemorqState["learned"]>;
+
+/** A learn as a trajectory step: `learned 2` · `after git push`, its cost the session's. */
+function learnStep(learned: Learned) {
+	const cost = typeof learned.costUsd === "number" ? learned.costUsd : 0;
+	return {
+		label: `learned ${learned.count}`,
+		detail: learnPhrase(learned.trigger),
+		usage: { input: 0, output: 0, cacheRead: 0, cost },
+	};
+}
+
+/** The orqi-memory entry in the transcript: `learned 2 after git push · $0.140`. */
+export function learnLine(learned: Learned): string {
+	const step = learnStep(learned);
+	return `${step.label} ${step.detail}${typeof learned.costUsd === "number" ? ` · ${dollars(learned.costUsd)}` : ""}`;
+}
 const ROUTE_WIDGET = "orqi-route";
 const BARS = "▁▂▃▄▅▆▇█";
 
@@ -345,11 +364,31 @@ export function orqHarness(deps: HarnessDeps) {
 			if (!memorqState) return memorqLoaded ? "update memorq" : "install memorq";
 			return memorqState.enabled === "off" ? "off · /memory" : undefined;
 		};
+		/**
+		 * The newest learn already in the trajectory. A learn is recorded once: memorq republishes the same
+		 * `learned` on every change and answers each `memorq:state?`, and a resume replays the entries.
+		 */
+		let lastLearnAt = Number.NEGATIVE_INFINITY;
+		/** Set once session_start has rebuilt the trajectory: a learn published before that waits for it. */
+		let branchLoaded = false;
+		const recordLearn = (learned: Learned | undefined) => {
+			if (!branchLoaded || !learned || learned.at <= lastLearnAt) return;
+			lastLearnAt = learned.at;
+			const step = learnStep(learned);
+			trajectory.memory(step.label, step.detail, learned.at, step.usage);
+			try {
+				// The whole learn as memorq sent it, so fields it adds later ride along.
+				pi.appendEntry(MEMORY_ENTRY, { ...learned });
+			} catch {
+				// A stale handle after /new: the step is in the trajectory regardless.
+			}
+		};
 		pi.events.on("memorq:state", (data) => {
 			// The bus is untyped: a payload this renderer cannot read is ignored, and the last good one stays.
 			if (!isMemorqState(data)) return;
 			memorqState = data;
 			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
+			recordLearn(data.learned);
 			render();
 		});
 		/** A finished `read` that opened a note, by its own path or, through a symlink, by the real one. Subagents' count too. */
@@ -779,6 +818,10 @@ export function orqHarness(deps: HarnessDeps) {
 			realRoots = roots.map(real);
 			pi.events.emit("memorq:state?", undefined);
 			trajectory.fromMessages(branchMessages(ctx));
+			// Learns already on this branch are not recorded again; one memorq published before now is.
+			for (const step of trajectory.steps) if (step.role === "memory") lastLearnAt = Math.max(lastLearnAt, step.ts);
+			branchLoaded = true;
+			recordLearn(memorqState?.learned);
 			traces.length = 0;
 			measure(ctx);
 			syncAgent(ctx);
@@ -931,6 +974,10 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// ── routing ───────────────────────────────────────────────────────────
 		let routeShown = true;
+		pi.registerEntryRenderer<Learned>(MEMORY_ENTRY, (entry, _options, theme) => {
+			if (!isLearned(entry.data)) return undefined;
+			return new Text(theme.fg("dim", learnLine(entry.data)), 1, 0);
+		});
 		pi.registerEntryRenderer<Decision>(ROUTE_ENTRY, (entry, _options, theme) => {
 			if (!routeShown || !entry.data) return undefined;
 			return new Text(theme.fg("dim", routeLine(entry.data)), 1, 0);
@@ -1161,6 +1208,10 @@ function branchMessages(ctx: ExtensionContext): any[] {
 					timestamp: Date.parse(entry.timestamp ?? "") || undefined,
 				},
 			];
+		}
+		if (entry.type === "custom" && entry.customType === MEMORY_ENTRY && isLearned(entry.data)) {
+			const step = learnStep(entry.data);
+			return [{ role: "memory", ...step, timestamp: entry.data.at }];
 		}
 		return [];
 	});

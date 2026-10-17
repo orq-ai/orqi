@@ -24,11 +24,15 @@ export interface MemorqState {
 	/** Index lines and ranked notes in this turn's prompt. */
 	usedThisTurn: number;
 	learned?: { count: number; trigger: Trigger; at: number; costUsd?: number };
-	/** Absent when no review can run: the review is off, the repo paused, or under ten notes. */
-	review?: { dueInSessions: number } | { running: true; notes: number };
+	/**
+	 * Absent when no review can run: the review is off, the repo paused, or under ten notes. `failed`
+	 * (the last review's error) is not drawn yet; it is accepted so a memorq that sends it is not refused.
+	 */
+	review?: { running: true; notes: number } | { running?: undefined; dueInSessions?: number; failed?: string };
 	/** The folder each kind is written to; empty strings outside a git repository. */
 	stores: { notes: string; rules: string; skills: string };
 	paused: boolean;
+	/** `on`, `readonly` or `off`; a value orqi does not know reads as on. */
 	enabled: "on" | "readonly" | "off";
 }
 
@@ -41,7 +45,7 @@ export interface MemorqHost {
 const KINDS = new Set(["notes", "rules", "skills"]);
 
 const TRIGGER: Record<string, string> = {
-	ship: "after last git push",
+	ship: "after git push",
 	compact: "after compaction",
 	// memorq's state does not carry the threshold, so the line names the moment rather than a percentage.
 	checkpoint: "as context filled",
@@ -61,27 +65,39 @@ const absent = (value: unknown) => value === undefined || value === null;
  */
 export function isMemorqState(data: unknown): data is MemorqState {
 	if (!isObject(data)) return false;
-	const { notes, usedThisTurn, stores, review, learned, paused, enabled } = data;
+	// `enabled` is not checked: a value orqi does not know (a newer memorq's) reads as on rather than losing the state.
+	const { notes, usedThisTurn, stores, review, learned, paused } = data;
 	if (typeof notes !== "number" || typeof usedThisTurn !== "number" || typeof paused !== "boolean") return false;
-	if (enabled !== "on" && enabled !== "readonly" && enabled !== "off") return false;
 	if (!isObject(stores) || !["notes", "rules", "skills"].every((kind) => typeof stores[kind] === "string")) return false;
 	if (!absent(review)) {
 		if (!isObject(review)) return false;
 		const running = review.running === true && typeof review.notes === "number";
-		if (!running && typeof review.dueInSessions !== "number") return false;
+		const due = typeof review.dueInSessions === "number";
+		const failed = typeof review.failed === "string";
+		if (!running && !due && !failed) return false;
+		if (!absent(review.dueInSessions) && !due) return false;
 	}
-	if (!absent(learned)) {
-		if (!isObject(learned)) return false;
-		if (typeof learned.count !== "number" || typeof learned.at !== "number" || typeof learned.trigger !== "string") return false;
-	}
-	return true;
+	return absent(learned) || isLearned(learned);
 }
+
+/** A learn as memorq reports it and as an `orqi-memory` entry stores it: a count, a trigger, when, and maybe its cost. */
+export function isLearned(data: unknown): data is NonNullable<MemorqState["learned"]> {
+	return isObject(data) && typeof data.count === "number" && typeof data.at === "number" && typeof data.trigger === "string";
+}
+
+/** The trigger as words: `after last git push`, `while idle`, `on <event>` for one orqi has no words for. */
+function triggerPhrase(trigger: Trigger): string {
+	return Object.hasOwn(TRIGGER, trigger) ? TRIGGER[trigger]! : `on ${trigger}`;
+}
+
+/** The trigger as words, for a learn that stands on its own: a trajectory step, an entry, the panel line. */
+export const learnPhrase = triggerPhrase;
 
 /** `learned <count> <trigger> · <age>` in `width` cells: the trigger is what gives way, never the age. */
 function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number, now: number): string {
 	const head = `learned ${learned.count} `;
 	const tail = ` · ${age(Math.max(0, now - learned.at))}`;
-	const trigger = Object.hasOwn(TRIGGER, learned.trigger) ? TRIGGER[learned.trigger]! : `on ${learned.trigger}`;
+	const trigger = triggerPhrase(learned.trigger);
 	const room = Math.max(1, width - visibleWidth(head) - visibleWidth(tail));
 	return `${head}${truncateToWidth(trigger, room, "…")}${tail}`;
 }
@@ -115,8 +131,8 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 	if (state.learned) body.push(learnedLine(state.learned, width - 2, now));
 	if (state.paused) body.push("learning paused · /memory");
 	else if (state.enabled === "readonly") body.push("read-only · learns nothing");
-	else if (state.review && "running" in state.review) body.push(`reviewing ${state.review.notes} notes…`);
-	else if (state.review)
+	else if (state.review?.running === true) body.push(`reviewing ${state.review.notes} notes…`);
+	else if (typeof state.review?.dueInSessions === "number")
 		body.push(
 			state.review.dueInSessions > 0
 				? `next memory review in ${plural(state.review.dueInSessions, "session")}`
