@@ -375,11 +375,19 @@ export function orqCommands(
 	 * pick as the `input` hook's, and marked tried so that hook does not knock again.
 	 */
 	const signedIn = (token: string) => {
-		// Already on it: signing in again to the session in use changes nothing.
-		if (!live || token === process.env.ORQ_API_KEY) return;
+		if (!live) return;
 		const { pi, ctx } = live;
 		switchTried = token;
-		void recover(pi, ctx, (all) => all.filter((candidate) => candidate.token === token).slice(0, 1))
+		// After, not inside, an attempt already running: joining it would drop
+		// this pick, and it read the candidates before this token existed.
+		void (inFlight ?? Promise.resolve())
+			.catch(() => undefined)
+			// Already on it (that attempt picked it, or a second sign-in to the same session): nothing to do.
+			.then(() =>
+				token === process.env.ORQ_API_KEY
+					? undefined
+					: recover(pi, ctx, (all) => all.filter((candidate) => candidate.token === token).slice(0, 1)),
+			)
 			.then((outcome) => outcome && ctx.ui.notify(outcome, rejections.length ? "warning" : "info"))
 			.catch(() => {
 				// The session was replaced while the reconnect ran.

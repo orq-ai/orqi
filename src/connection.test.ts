@@ -368,6 +368,39 @@ test("a browser sign-in in /login reconnects at once, and the next message does 
 	}
 });
 
+test("a browser sign-in during a reconnect already running still gets tried", async () => {
+	// recover() shares one attempt between callers: joining the running one
+	// would drop the sign-in's pick, and that attempt read the candidates
+	// before the new token existed.
+	const other: Credential = { token: "sk-orq-other", source: "ORQ_API_KEY" };
+	const session: Credential = { token: "sk-orq-good", source: "login session" };
+	let stored: Credential[] = [bad, other];
+	let release!: () => void;
+	const first = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const calls: Credential[][] = [];
+	const h = recoveryHarness(
+		async (candidates) => {
+			calls.push(candidates);
+			if (calls.length === 1) await first;
+			const r = await rejectAllBut("sk-orq-good")(candidates);
+			h.header.workspace = "acme";
+			return r;
+		},
+		{ rejections: [{ source: "ORQ_API_KEY", reason: "nope" }], candidates: [bad], readCandidates: () => ({ candidates: stored }) },
+	);
+	h.handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, h.ctx);
+	const message = h.input();
+	stored = [bad, other, session];
+	h.factory.signedIn("sk-orq-good");
+	release();
+	await message;
+	await Bun.sleep(0);
+	expect(calls).toEqual([[bad, other], [session]]);
+	expect(h.widgets.get("orq-auth")).toBeUndefined();
+});
+
 test("a stall during recovery is reported and does not end recovery", async () => {
 	// The server hangs on roughly one call in three. Rethrowing that out of the
 	// input handler put it in pi's extension diagnostics, where the user never
