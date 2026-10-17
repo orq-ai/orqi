@@ -188,3 +188,11 @@ test("repeated ids are refused before a dialog opens", async () => {
 	const twice = { ...scope, options: [scope.options[0], scope.options[0]] };
 	expect((await ask([twice], [])).result.isError).toBe(true);
 });
+
+test("back on an answered text question shows the answer; a cleared draft stays cleared", () => {
+	const view = askUserView(normalize({ questions: [{ id: "goal", prompt: "Goal?" }, scope] }), theme, tui, () => {});
+	for (const key of ["h", "i", ENTER, "\x1b[Z"]) view.handleInput(key);
+	expect(view.render(80).join("\n")).toContain("hi");
+	for (const key of ["\x7f", "\x7f", "\t", "\x1b[Z"]) view.handleInput(key);
+	expect(view.render(80).join("\n")).not.toContain("hi");
+});

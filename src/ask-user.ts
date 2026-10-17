@@ -141,7 +141,7 @@ export function askUserView(questions: AskQuestion[], theme: Theme, tui: Tui, do
 		const q = question();
 		cursor = q ? recommendedIndex(q) : 0;
 		typing = q?.kind === "text";
-		editor.setText(q?.kind === "text" ? drafts.get(q.id) || answers.get(q.id)?.text || "" : "");
+		editor.setText(q?.kind === "text" ? (drafts.get(q.id) ?? "") : "");
 		refresh();
 	};
 	const finish = (cancelled: boolean) => done({ questions, answers: cancelled ? [] : [...answers.values()], cancelled });
@@ -156,6 +156,9 @@ export function askUserView(questions: AskQuestion[], theme: Theme, tui: Tui, do
 		const q = question();
 		if (!q) return;
 		const text = value.trim() || "(no response)";
+		// pi's Editor is already empty here; keep what was sent as the draft, so going back shows it.
+		drafts.set(q.id, value);
+		typing = false;
 		answer({ id: q.id, optionIds: q.kind === "multi" ? picks(q) : undefined, text, custom: true });
 	};
 
