@@ -11,6 +11,13 @@ test("gardenUrl builds <host>/<workspace>/router/models and trims a trailing sla
 	expect(gardenUrl("https://my.orq.ai/", "acme")).toBe("https://my.orq.ai/acme/router/models");
 });
 
+test("gardenUrl encodes the workspace as a path segment", () => {
+	// Real keys are slugs and encode to themselves; anything stray must not re-route the link.
+	expect(gardenUrl("https://my.orq.ai", "orquesta-demos")).toBe("https://my.orq.ai/orquesta-demos/router/models");
+	expect(gardenUrl("https://my.orq.ai", "a/b")).toBe("https://my.orq.ai/a%2Fb/router/models");
+	expect(gardenUrl("https://my.orq.ai", "x?y#z")).toBe("https://my.orq.ai/x%3Fy%23z/router/models");
+});
+
 test("gardenUrl without a workspace key is undefined, so nothing opens on a guess", () => {
 	expect(gardenUrl("https://my.orq.ai", undefined)).toBeUndefined();
 	expect(gardenUrl("https://my.orq.ai", "")).toBeUndefined();
@@ -25,6 +32,41 @@ test("openGarden opens the link and says so", async () => {
 	);
 	expect(seen[0]).toContain("Opening the model garden");
 	expect(seen[0]).toContain("https://my.orq.ai/acme/router/models");
+});
+
+test("openGarden survives a rejected resolver and says so", async () => {
+	const seen: { message: string; type?: string }[] = [];
+	await openGarden(
+		{ ui: { notify: (message, type) => seen.push({ message, type }) } },
+		async () => {
+			throw new Error("the workspace-settings fetch died");
+		},
+		() => {
+			throw new Error("must not be reached");
+		},
+	);
+	expect(seen[0]?.type).toBe("error");
+	expect(seen[0]?.message).toContain("Could not resolve the model garden");
+	expect(seen[0]?.message).toContain("the workspace-settings fetch died");
+});
+
+test("openGarden never rejects, even when the session died mid-resolution", async () => {
+	const dead = {
+		ui: {
+			notify: () => {
+				throw new Error("the session is gone");
+			},
+		},
+	};
+	// Both paths: the happy one and the resolver that rejects.
+	await openGarden(
+		dead,
+		async () => ({ host: "https://my.orq.ai", workspace: "acme" }),
+		() => true,
+	);
+	await openGarden(dead, async () => {
+		throw new Error("late failure");
+	});
 });
 
 test("openGarden with a failed opener still shows the link", async () => {

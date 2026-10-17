@@ -23,7 +23,10 @@ export const GARDEN_PATH = "router/models";
 /** The Studio page for the workspace's model garden, or undefined with no workspace key. */
 export function gardenUrl(host: string, workspace: string | undefined): string | undefined {
 	if (!workspace) return undefined;
-	return `${host.replace(/\/+$/, "")}/${workspace}/${GARDEN_PATH}`;
+	// A path segment like any other id orqi interpolates: threadUrl and agentUrl
+	// encode theirs, and ORQI_WORKSPACE is raw user input — a stray `/` must not
+	// re-route the link. Real keys are slugs and encode to themselves.
+	return `${host.replace(/\/+$/, "")}/${encodeURIComponent(workspace)}/${GARDEN_PATH}`;
 }
 
 /** What openGarden needs of a context: only the notify it reports with. */
@@ -33,28 +36,41 @@ type NotifyContext = {
 
 /**
  * Resolve the garden URL the way /open resolves its links and open it. The
- * context arrives live from the caller, so a closed session never reaches here.
+ * ctrl+g path fires this detached from a keydown (void), so nothing here may
+ * reject: every step is inside the try, and even the reports swallow a dead
+ * session's refusal to hear them.
  */
 export async function openGarden(
 	ctx: NotifyContext,
 	studio: () => Promise<{ host: string; workspace?: string }>,
 	opener: (url: string) => boolean = openUrl,
 ): Promise<void> {
-	const { host, workspace } = await studio();
-	const url = gardenUrl(host, workspace);
-	if (!url) {
-		// The workspace key is what scopes the page; opening the workspace-less
-		// URL would let the browser's own login pick the workspace, which can
-		// silently differ from the one this session is on. Nothing opens until
-		// a credential that names one is in force.
-		ctx.ui.notify(
-			"The model garden is per workspace, and this credential cannot name it. /login to sign in (its token carries the workspace), or set ORQI_WORKSPACE=<key>.",
-			"warning",
-		);
-		return;
+	const say = (message: string, type?: "info" | "warning" | "error") => {
+		try {
+			ctx.ui.notify(message, type);
+		} catch {
+			// A session that closed mid-resolution has no one left to tell.
+		}
+	};
+	try {
+		const { host, workspace } = await studio();
+		const url = gardenUrl(host, workspace);
+		if (!url) {
+			// The workspace key is what scopes the page; opening the workspace-less
+			// URL would let the browser's own login pick the workspace, which can
+			// silently differ from the one this session is on. Nothing opens until
+			// a credential that names one is in force.
+			say(
+				"The model garden is per workspace, and this credential cannot name it. /login to sign in (its token carries the workspace), or set ORQI_WORKSPACE=<key>.",
+				"warning",
+			);
+			return;
+		}
+		const opened = opener(url);
+		say(`${opened ? "Opening" : "Open"} the model garden in Studio: ${url}`);
+	} catch (error) {
+		say(`Could not resolve the model garden: ${error instanceof Error ? error.message : String(error)}`, "error");
 	}
-	const opened = opener(url);
-	ctx.ui.notify(`${opened ? "Opening" : "Open"} the model garden in Studio: ${url}`);
 }
 
 /**
@@ -108,8 +124,10 @@ export function applyGardenKey(Class: SelectorClass, open: () => void): boolean 
 	const baseList = (proto[GARDEN_LIST] ?? currentList) as (this: SelectorClass["prototype"]) => void;
 	proto[GARDEN_HANDLE] = base;
 	proto[GARDEN_LIST] = baseList;
-	proto.updateList = function (this: { listContainer?: { addChild: (child: unknown) => void } }) {
-		const result = (baseList as (...args: unknown[]) => unknown).apply(this);
+	proto.updateList = function (this: { listContainer?: { addChild: (child: unknown) => void } }, ...redraw: unknown[]) {
+		// Forward the redraw args: a pi that grows updateList's signature keeps
+		// working, instead of the base call losing them.
+		const result = (baseList as (this: unknown, ...args: unknown[]) => unknown).apply(this, redraw);
 		try {
 			// The selector clears its list on every redraw, so one row per render;
 			// rawKeyHint colours it just like pi's own key hints.
@@ -119,7 +137,7 @@ export function applyGardenKey(Class: SelectorClass, open: () => void): boolean 
 		}
 		return result;
 	};
-	proto.handleInput = function (this: { dispose?: () => void }, data: string) {
+	proto.handleInput = function (this: { dispose?: () => void }, data: string, ...rest: unknown[]) {
 		if (matchesKey(data, "ctrl+g")) {
 			try {
 				this.dispose?.();
@@ -129,7 +147,7 @@ export function applyGardenKey(Class: SelectorClass, open: () => void): boolean 
 			open();
 			return;
 		}
-		return (base as (this: unknown, ...args: unknown[]) => unknown).apply(this, [data]) as void;
+		return (base as (this: unknown, ...args: unknown[]) => unknown).apply(this, [data, ...rest]) as void;
 	};
 	return true;
 }
