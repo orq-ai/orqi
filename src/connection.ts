@@ -706,9 +706,10 @@ export function orqCommands(
 		const memorqPresence = async (): Promise<MemorqPresence> => {
 			try {
 				if (pi.getCommands().some((command) => MEMORQ_COMMANDS.includes(command.name))) return "loaded";
-				const { SettingsManager, getAgentDir } = await import("@earendil-works/pi-coding-agent");
+				// The agent dir orqi was handed, as main.ts builds the session's settings from it.
+				const { SettingsManager } = await import("@earendil-works/pi-coding-agent");
 				const cwd = process.cwd();
-				const settings = SettingsManager.create(cwd, getAgentDir(), { projectTrusted: projectTrusted(cwd, getAgentDir()) });
+				const settings = SettingsManager.create(cwd, agentDir, { projectTrusted: projectTrusted(cwd, agentDir) });
 				return memorqInstalled(settings) ? "installed" : "none";
 			} catch {
 				return "none";

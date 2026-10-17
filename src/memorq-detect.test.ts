@@ -54,9 +54,12 @@ test("memorq is the repository or a folder named memorq, not any source that men
 		"../memorq",
 		"/src/memorq/",
 		"git:example.com/me/memorq.git",
+		"npm:memorq@0.12.0",
+		"git:example.com/me/memorq@v1",
+		"git:example.com/me/memorq.git#main",
 	])
 		expect(isMemorqSource(source)).toBe(true);
-	for (const source of ["npm:memorq-themes", "../not-memorq-at-all/x", "git:github.com/me/memorquest", ""])
+	for (const source of ["npm:memorq-themes", "../not-memorq-at-all/x", "git:github.com/me/memorquest", "npm:memorq-x@1", ""])
 		expect(isMemorqSource(source)).toBe(false);
 	expect(isMemorqSource({ source: 7 })).toBe(false);
 });

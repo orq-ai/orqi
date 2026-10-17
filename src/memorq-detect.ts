@@ -15,10 +15,10 @@ export const MEMORQ_INSTALL = "orqi plugin install git:github.com/orq-ai/orq-kno
 /** A package entry as pi's settings hold it: a source string, or an object with a `source`. */
 type PackageEntry = string | { source?: unknown };
 
-/** memorq by its source: the repository's name, or a path or URL whose last segment is `memorq`. */
+/** memorq by its source: the repository's name, or a path or URL whose last segment is `memorq`, pinned or not. */
 export function isMemorqSource(entry: PackageEntry): boolean {
 	const source = typeof entry === "string" ? entry : entry?.source;
-	return typeof source === "string" && /orq-knowledge-notes|(^|[/\\:])memorq(\.git)?\/?$/.test(source);
+	return typeof source === "string" && /orq-knowledge-notes|(^|[/\\:])memorq(\.git)?\/?([@#][^/]*)?$/.test(source);
 }
 
 /**

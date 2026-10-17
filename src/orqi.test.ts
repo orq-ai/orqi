@@ -262,7 +262,8 @@ test("main.ts refuses to run without boot.ts, which is what makes pi orqi", () =
 	expect(direct.stderr.toString()).toContain("src/boot.ts");
 	const booted = Bun.spawnSync(["bun", join(root, "src", "boot.ts"), "--version"], { cwd: root, env });
 	expect(booted.exitCode).toBe(0);
-});
+	// Two cold bun starts: on a loaded machine they outlast bun's 5 s default.
+}, 30_000);
 
 test("--session resolves a path, an exact id, a prefix, and reports another directory's session", async () => {
 	const lookup = {
@@ -325,6 +326,13 @@ test("our commands never collide with a pi built-in", () => {
 	expect(registered).toContain("whatsnew");
 	expect(registered).toContain("trajectory");
 	expect(registered.filter((name) => builtins.has(name))).toEqual([]);
+
+	// memorq's commands are memorq's: orqi must never take them (its own would win dispatch and hide
+	// memorq's screens), and pi must not own them either, or memorq's would be dropped.
+	const memorqs = ["memory", "memory-notes", "memory-review", "memory-stats"];
+	expect(
+		memorqs.filter((name) => registered.includes(name) || (ORQI_COMMANDS as readonly string[]).includes(name) || builtins.has(name)),
+	).toEqual([]);
 });
 
 test("the model catalogue cache belongs to the credential that fetched it", async () => {
