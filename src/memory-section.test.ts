@@ -4,7 +4,6 @@ import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { MemorqHost as ProducerHost, MemorqState as ProducerState } from "../vendor/memorq/integrations/pi/state.ts";
 import { minimapRow } from "./inspector-rows.ts";
 import {
 	isMemorqState,
@@ -113,9 +112,24 @@ test("a checkpoint learn names its threshold when memorq sends it; a failed revi
 	expect(body(memoryLines(state({ review: { running: true, notes: 47, failed: "x" } }), 0, 36, NOW))[1]).toBe("  reviewing 47 notes…");
 });
 
-test("memorq's own types, from the vendored copy, are states orqi accepts, and orqi's host is memorq's", () => {
-	// memorq's own types, from the copy orqi ships (vendor/memorq, pinned in memorq.lock.json): a re-vendor that
-	// changes the payload's shape fails to compile here.
+test("memorq's own types are states orqi accepts, and orqi's host is memorq's", () => {
+	// A hand copy of memorq's exported types. Re-copy them from orq-ai/orq-knowledge-notes
+	// integrations/pi/state.ts (copied at 4c0a41a) whenever memorq changes its payload.
+	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "session_end" | "manual" | "sweep";
+	interface ProducerState {
+		version: string;
+		notes: number;
+		usedThisTurn: number;
+		learned?: { count: number; trigger: ProducerTrigger; at: number; costUsd?: number; pct?: number };
+		review?: ({ dueInSessions: number } | { running: true; notes: number }) & { failed?: string };
+		stores: { notes: string; rules: string; skills: string };
+		paused: boolean;
+		enabled: "on" | "readonly" | "off";
+	}
+	interface ProducerHost {
+		panel: { shown(): boolean; set(shown: boolean): void };
+		pickModel(current: string): Promise<string | undefined>;
+	}
 	const produced: ProducerState[] = [
 		{ ...state(), learned: { count: 1, trigger: "manual", at: NOW, pct: 80 }, review: { dueInSessions: 0, failed: "boom" } },
 		{ ...state(), learned: { count: 3, trigger: "sweep", at: NOW, costUsd: 0.2 }, review: { running: true, notes: 47 } },
@@ -212,9 +226,10 @@ test("text that came from memorq is drawn without its escapes: an OSC 52 trigger
 	const line = memoryLines(state({ learned: { count: 1, trigger: osc52 as Trigger, at: NOW } }), 0, 36, NOW)[2]!;
 	expect(line).not.toContain("\x1b]");
 	expect(bare(line).trimEnd()).toBe("  learned 1 on pwn · now");
-	// CSI, OSC ended by ST, DCS, APC, PM and SOS go whole; lone C0, DEL and C1 bytes go; a tab stays.
+	// CSI, OSC ended by ST, DCS, APC, PM and SOS go whole; lone C0, DEL and C1 bytes go.
 	expect(printable("a\x1b[2Jb\x1b]8;;http://x\x1b\\c\x1bPq#0\x1b\\d\x1b_g\x1b\\e\x1b^m\x1b\\f\x1bXs\x1b\\g")).toBe("abcdefg");
-	expect(printable("x\ny\rz\x00\x7f\x9b31m\x9d0;t\x07\tw")).toBe("xyz31m0;t\tw");
+	// A tab becomes a space: it would break a one-line row's width.
+	expect(printable("x\ny\rz\x00\x7f\x9b31m\x9d0;t\x07\tw")).toBe("xyz31m0;t w");
 	expect(printable("plain words")).toBe("plain words");
 });
 

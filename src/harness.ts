@@ -31,6 +31,7 @@ import {
 } from "./memory-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
+import { MEMORQ_COMMANDS, MEMORQ_INSTALL } from "./memorq-detect.ts";
 import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { argSummary, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
@@ -58,8 +59,8 @@ export interface HarnessDeps {
 	routing?: Routing;
 	/** pi's model runtime (orq models only), for the picker orqi offers memorq; the session ctx has only the registry. */
 	modelRuntime?: ModelRuntime;
-	/** Which memorq this session loads: the copy orqi ships, one the user installed, or none (src/memorq-bundle.ts). */
-	memorq?: () => "bundled" | "installed" | "none";
+	/** Whether memorq is installed as a package this session loads (src/memorq-detect.ts). */
+	memorq?: () => "installed" | "none";
 }
 
 const ROUTE_ENTRY = "orqi-route";
@@ -384,13 +385,10 @@ export function orqHarness(deps: HarnessDeps) {
 		const memoryUnavailable = () => {
 			if (notesOff) return "off: ORQ_NOTES=off";
 			if (!memorqState) {
-				// The bundled memorq is current, so its silence is a failure (no python3, a broken store), not age.
-				const loaded = deps.memorq?.() ?? (memorqLoaded ? "installed" : "none");
-				return loaded === "bundled"
-					? "not answering · /doctor"
-					: loaded === "installed" || memorqLoaded
-						? "update memorq"
-						: "install memorq";
+				// Only a memorq new enough to publish its state registers commands, so with commands its silence is
+				// a failure (no python3, a broken store); an installed package with none predates the panel.
+				if (memorqLoaded) return "not answering · /doctor";
+				return deps.memorq?.() === "installed" ? "update memorq" : "install memorq";
 			}
 			return memorqState.enabled === "off" ? "off · /memory" : undefined;
 		};
@@ -861,7 +859,7 @@ export function orqHarness(deps: HarnessDeps) {
 			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
 			// The bus has no replay: ask memorq for its state now, in case it published before this instance listened.
 			try {
-				memorqLoaded = pi.getCommands().some((command) => command.name === "memory-notes" || command.name === "memory");
+				memorqLoaded = pi.getCommands().some((command) => MEMORQ_COMMANDS.includes(command.name));
 			} catch {
 				memorqLoaded = false;
 			}
@@ -1185,6 +1183,17 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
 
+		/** What to do about a greyed memory row: the install command, the update, or where to look. */
+		const memoryHelp = (row: string) =>
+			row.endsWith("install memorq")
+				? `Memory notes come from memorq. Install it, then restart orqi:\n  ${MEMORQ_INSTALL}`
+				: row.endsWith("update memorq")
+					? "This memorq is too old for the side panel. Update it with /plugin update, then restart orqi."
+					: row.includes("ORQ_NOTES=off")
+						? "Memory is off for this shell: ORQ_NOTES=off. Unset it and restart orqi."
+						: row.includes("/doctor")
+							? "memorq is loaded but has not answered. /doctor checks python3, which it needs."
+							: "memorq turned memory off. /memory turns it back on.";
 		/** /panel's list: one row per section, space switches the selected one and saves the choice. */
 		const showSections = (ctx: ExtensionContext) => {
 			let live: Panel | undefined;
@@ -1199,6 +1208,8 @@ export function orqHarness(deps: HarnessDeps) {
 					keys: {
 						space: (i) => {
 							const id = sections[i]?.id;
+							// A greyed row cannot be switched: say what would make it available instead.
+							if (id === "memory" && disabled.has(i)) ctx.ui.notify(memoryHelp(rows[i] ?? ""));
 							if (!id || disabled.has(i)) return false;
 							setSection(ctx, id, !prefs.sections[id]);
 							syncWidgets(ctx);

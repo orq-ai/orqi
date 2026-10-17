@@ -109,7 +109,8 @@ function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number
 
 /**
  * Text that came from memorq, safe to draw: escape sequences (CSI, OSC, DCS, SOS, PM, APC, and any other
- * ESC pair) removed whole, then every other control character (C0 but tab, DEL, C1) dropped. memorq is a
+ * ESC pair) removed whole, a tab made a space (it would break a one-line row's width), then every other
+ * control character (C0, DEL, C1) dropped. memorq is a
  * separate package, and a terminal acts on what it is sent: an OSC 52 in a trigger name would write the
  * clipboard.
  */
@@ -118,7 +119,8 @@ export function printable(text: string): string {
 		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/\x1b[\]PX^_][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
 		.replace(/\x1b[\s\S]?/g, "")
-		.replace(/[\x00-\x08\x0a-\x1f\x7f-\x9f]/g, "");
+		.replace(/\t/g, " ")
+		.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

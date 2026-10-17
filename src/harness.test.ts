@@ -479,7 +479,7 @@ function harnessOn(
 		commands?: string[];
 		cwd?: string;
 		branch?: any[];
-		memorq?: "bundled" | "installed" | "none";
+		memorq?: "installed" | "none";
 		modelRuntime?: unknown;
 	} = {},
 ) {
@@ -725,14 +725,14 @@ test("the memory section waits for memorq: asked for at session start, drawn onc
 	}
 });
 
-test("memorq loaded but silent reads update memorq; ORQ_NOTES=off and a file-level off say so", async () => {
+test("memorq with its commands but silent points at /doctor; ORQ_NOTES=off and a file-level off say so", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
 	const before = process.env.ORQ_NOTES;
 	try {
 		const old = harnessOn(dir, { commands: ["memory-notes"] });
 		await old.start();
 		await old.commands.get("panel")!("", old.ctx);
-		expect(panelRows(old.opened.panel!)[2]).toBe("[ ] memory  · update memorq");
+		expect(panelRows(old.opened.panel!)[2]).toBe("[ ] memory  · not answering · /doctor");
 		await old.stop();
 
 		process.env.ORQ_NOTES = "off";
@@ -1016,18 +1016,26 @@ test("memorq's panel switch never throws back into memorq, even from a closed se
 	}
 });
 
-test("a memorq that is loaded but silent: the bundled one points at /doctor, an installed one wants updating", async () => {
+test("a silent memorq row: commands registered points at /doctor, installed without them wants updating, none installs", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
 	try {
-		for (const [memorq, reason] of [
-			["bundled", "not answering · /doctor"],
-			["installed", "update memorq"],
-			["none", "install memorq"],
+		for (const [options, reason, help] of [
+			[{ commands: ["memory"], memorq: "installed" }, "not answering · /doctor", "/doctor checks python3"],
+			[{ memorq: "installed" }, "update memorq", "/plugin update"],
+			[{ memorq: "none" }, "install memorq", "orqi plugin install git:github.com/orq-ai/orq-knowledge-notes"],
+			[{}, "install memorq", "orqi plugin install git:github.com/orq-ai/orq-knowledge-notes"],
 		] as const) {
-			const h = harnessOn(dir, { memorq });
+			const h = harnessOn(dir, options as never);
 			await h.start();
 			await h.commands.get("panel")!("", h.ctx);
 			expect(panelRows(h.opened.panel!)[2]).toBe(`[ ] memory  · ${reason}`);
+			// Space on the greyed row says what would make it available, and switches nothing.
+			h.opened.panel!.handleInput("\x1b[B");
+			h.opened.panel!.handleInput("\x1b[B");
+			h.opened.panel!.handleInput(" ");
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(h.notices.at(-1)).toContain(help);
+			expect(readPrefs(dir).sections.memory).toBe(true);
 			await h.stop();
 		}
 	} finally {
