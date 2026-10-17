@@ -2,14 +2,15 @@
 
 import { expect, test } from "bun:test";
 import { startupTheme, VERSION } from "./branding.ts";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
 import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, hostLabel, sparkline, tokens } from "./footer.ts";
-import { exitSummary, orqHarness, repoOf } from "./harness.ts";
+import { exitSummary, orqHarness, repoOf, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
@@ -28,6 +29,7 @@ import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
+import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
 import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate } from "./gate.ts";
 import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
 import { brandBuiltinCommands, bugHint, bugIssueUrl, ORQI_ISSUES_URL, redirectPiBugCommand } from "./bug.ts";
@@ -444,6 +446,147 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 	expect(refreshed).toBe(1);
 	expect(selected).toBe(fresh);
 	expect(notices).toContain("Refreshed 1 enabled models and 0 managed agents.");
+});
+
+/** The harness on a fake pi, its commands by name, and a TUI ctx whose overlay is the Panel a command opened. */
+function harnessOn(agentDir: string) {
+	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
+	const pi = {
+		on: () => {},
+		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
+		registerEntryRenderer: () => {},
+		registerShortcut: () => {},
+		setModel: async () => {},
+	};
+	orqHarness({
+		agentDir,
+		catalogue: () => [],
+		toolCount: () => 0,
+		callTool: async () => ({ text: "", isError: false }),
+		workspace: () => undefined,
+	})(pi as any);
+	const notices: string[] = [];
+	const opened: { panel?: Panel } = {};
+	const ctx = {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_token: string, text: string) => text, bold: (text: string) => text },
+			notify: (message: string) => notices.push(message),
+			setWidget: () => {},
+			custom: (factory: any) => {
+				opened.panel = factory({ requestRender: () => {} }, { fg: (_token: string, text: string) => text }, {}, () => {});
+				return Promise.resolve();
+			},
+		},
+	};
+	return { commands, ctx, notices, opened };
+}
+
+/** The rows of a selectable panel as drawn, without the box. */
+const panelRows = (panel: Panel) =>
+	panel
+		.render(60)
+		.slice(1, -3)
+		.map((line) =>
+			bare(line)
+				.slice(2, -2)
+				.replace(/^▌ |^ {2}/, "")
+				.trimEnd(),
+		);
+
+test("/panel lists the sections with their state and space toggles and persists", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
+	try {
+		const { commands, ctx, opened } = harnessOn(dir);
+		await commands.get("panel")!("", ctx);
+		const panel = opened.panel!;
+		expect(panelRows(panel)).toEqual(["[x] signals", "[x] context", "[ ] memory  · install memorq", "[ ] process", "[x] tips"]);
+		panel.handleInput("\x1b[B"); // down to context
+		panel.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(panelRows(panel)[1]).toBe("[ ] context");
+		expect(readPrefs(dir).sections.context).toBe(false);
+		// The unavailable memory row cannot be switched, by space or anything else.
+		panel.handleInput("\x1b[B");
+		panel.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(panelRows(panel)[2]).toBe("[ ] memory  · install memorq");
+		expect(readPrefs(dir).sections.memory).toBe(true);
+		// The next session (what /new, /resume and a restart build) reads the choice back.
+		const next = harnessOn(dir);
+		await next.commands.get("panel")!("", next.ctx);
+		expect(panelRows(next.opened.panel!)[1]).toBe("[ ] context");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/panel on|off shows or hides the inspector; anything else says how", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
+	try {
+		const { commands, ctx, notices, opened } = harnessOn(dir);
+		await commands.get("panel")!("off", ctx);
+		await commands.get("panel")!("on", ctx);
+		expect(opened.panel).toBeUndefined(); // neither opens the section list
+		await commands.get("panel")!("sideways", ctx);
+		expect(notices.at(-1)).toContain("/panel on|off");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("orqi.json with unknown ids and garbage values: the harness starts on the defaults and rewrites it whole on the next toggle", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
+	try {
+		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { bogus: true, tips: "nah", process: true }, extra: [1] }));
+		const { commands, ctx, opened } = harnessOn(dir);
+		await commands.get("panel")!("", ctx);
+		expect(panelRows(opened.panel!)).toEqual(["[x] signals", "[x] context", "[ ] memory  · install memorq", "[x] process", "[x] tips"]);
+		opened.panel!.handleInput(" "); // signals off
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(JSON.parse(readFileSync(join(dir, "orqi.json"), "utf8"))).toEqual({
+			sections: { ...DEFAULT_SECTIONS, signals: false, process: true },
+		});
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/tips off flips the tips row and the inspector omits the section", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
+	try {
+		const { commands, ctx, opened } = harnessOn(dir);
+		await commands.get("tips")!("off", ctx);
+		const prefs = readPrefs(dir);
+		expect(prefs.sections.tips).toBe(false);
+		await commands.get("panel")!("", ctx);
+		expect(panelRows(opened.panel!).at(-1)).toBe("[ ] tips");
+		const sections: InspectorSection[] = SECTIONS.map((id) => ({ id, title: id, lines: () => [] }));
+		expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "context", "memory"]);
+		// /teach is the same switch.
+		await commands.get("teach")!("", ctx);
+		expect(readPrefs(dir).sections.tips).toBe(true);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("sections draw in registry order, only when chosen and available; the list shows why one is not", () => {
+	const sections: InspectorSection[] = [
+		{ id: "signals", title: "signals", lines: () => [] },
+		{ id: "context", title: "context", lines: () => [] },
+		{ id: "memory", title: "memory", lines: () => [], unavailable: () => "install memorq" },
+		{ id: "process", title: "process", lines: () => [] },
+		{ id: "tips", title: "tips", lines: () => [] },
+	];
+	const prefs = { sections: { ...DEFAULT_SECTIONS, process: true, context: false } };
+	expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "process", "tips"]);
+	const { rows, disabled } = sectionRows(sections, prefs);
+	expect(rows).toEqual(["[x] signals", "[ ] context", "[ ] memory  · install memorq", "[x] process", "[x] tips"]);
+	expect([...disabled]).toEqual([2]);
+	// Once available, memory draws where the registry puts it: above process, tips last.
+	sections[2] = { ...sections[2]!, unavailable: () => undefined };
+	expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "memory", "process", "tips"]);
 });
 
 test("the inspect view reads get_agent's JSON", () => {

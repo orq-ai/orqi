@@ -18,6 +18,7 @@ import {
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
+import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { argSummary, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
@@ -77,6 +78,34 @@ export function routeLine(
 }
 
 const WORKSPACE_STATUS = "orq-workspace";
+
+/**
+ * One section of the inspector under the trajectory. `lines` is a pure renderer
+ * over state already measured; `unavailable` names why it cannot show (memorq
+ * not installed), which greys its row in /panel.
+ */
+export interface InspectorSection {
+	id: SectionId;
+	title: string;
+	lines(width: number): string[];
+	unavailable?(): string | undefined;
+}
+
+/** The sections the inspector draws, in registry order: chosen in orqi.json and available. */
+export function sectionsToDraw(sections: readonly InspectorSection[], prefs: Prefs): InspectorSection[] {
+	return sections.filter((section) => prefs.sections[section.id] && !section.unavailable?.());
+}
+
+/** /panel's rows, one per section: `[x] context`, or `[ ] memory  · install memorq`, greyed, for one that cannot show. */
+export function sectionRows(sections: readonly InspectorSection[], prefs: Prefs): { rows: string[]; disabled: Set<number> } {
+	const disabled = new Set<number>();
+	const rows = sections.map((section, i) => {
+		const reason = section.unavailable?.();
+		if (reason) disabled.add(i);
+		return `[${prefs.sections[section.id] && !reason ? "x" : " "}] ${section.title}${reason ? `  · ${reason}` : ""}`;
+	});
+	return { rows, disabled };
+}
 
 type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: number; shrink?: number; minSize?: number };
 
@@ -260,9 +289,19 @@ export function orqHarness(deps: HarnessDeps) {
 		let statusOf: (key: string) => string | undefined = () => undefined;
 		let lastFooter = "";
 		let split: ContextSplit | undefined;
+		// Which inspector sections show: orqi.json in the agent dir, read once per session (makeServices builds
+		// this extension again for /new, /resume and /fork) and written whole on every toggle.
+		const prefs = readPrefs(deps.agentDir);
+		const savePrefs = (ctx: ExtensionContext) => {
+			try {
+				writePrefs(deps.agentDir, prefs);
+			} catch (error) {
+				ctx.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
+			}
+		};
 		// ── teach state: the card lives in the panel, never the transcript ──
-		// On by default: the cards are the harness explaining the platform; /tips off hides them (shown as "tips"; "teach" is the code name and the old command).
-		let teachOn = true;
+		// On by default (prefs.sections.tips): the cards are the harness explaining the platform; /tips off hides them
+		// (shown as "tips"; "teach" is the code name and the old command).
 		let card: { concept: Concept; used: string[]; step: number } | undefined;
 		const shownConcepts = new Set<string>();
 		/** The last step id a previous run reached: steering advances `turn` more than once per run. */
@@ -426,6 +465,19 @@ export function orqHarness(deps: HarnessDeps) {
 		};
 
 		// ── the inspector ─────────────────────────────────────────────────────
+		/** The sections under the trajectory, in `SECTIONS` order (src/prefs.ts); orqi.json says which are drawn. */
+		const sections: InspectorSection[] = [
+			{ id: "signals", title: "signals", lines: (w) => signalLines(signals(trajectory.steps, trajectory.turn), w) },
+			// Empty until the first measure: an empty section is skipped.
+			{ id: "context", title: "context", lines: (w) => (split ? contextLines(split, w) : []) },
+			{ id: "memory", title: "memory", lines: () => [], unavailable: () => "install memorq" },
+			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
+			{
+				id: "tips",
+				title: "tips",
+				lines: (w) => sectionLines("tips", card ? cardLines(card, w - 2) : [], w, "a card follows the next answer"),
+			},
+		];
 		/**
 		 * The side panel, called the inspector on screen: a box as tall as the
 		 * screen, the trajectory (one row per step, `minimapRows`) on top and the
@@ -465,30 +517,32 @@ export function orqHarness(deps: HarnessDeps) {
 					error: (text: string) => theme.fg("error", text),
 				};
 				const found = signals(trajectory.steps, trajectory.turn);
-				const teach = teachOn
-					? [sectionLines("tips", card ? cardLines(card, inner - 2) : [], inner, "a card follows the next answer")]
-					: [];
-				// Under the trajectory: what needs attention, where the context goes, what orqi's process holds, then the lesson.
-				const sections = [
-					signalLines(found, inner),
-					...(split ? [contextLines(split, inner)] : []),
-					processLines(rss, rssPeak, inner),
-					...teach,
-				];
-				const below = sections.reduce((n, lines) => n + 1 + lines.length, 0);
+				// Under the trajectory: what needs attention, where the context goes, what memory knows,
+				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
+				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
+					const lines = section.lines(inner);
+					return lines.length ? [{ id: section.id, lines }] : [];
+				});
+				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				const height = Math.max(3, (process.stdout.rows ?? 30) - 6 - below);
-				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, teachOn ? card?.step : undefined);
+				const rows = minimapRows(
+					trajectory.steps,
+					inner,
+					height,
+					minimapSelected,
+					frame,
+					rowPaint,
+					prefs.sections.tips ? card?.step : undefined,
+				);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
-				const paintSection = (lines: string[]) => [
+				const paintSection = ({ id, lines }: { id: SectionId; lines: string[] }) => [
 					blank,
 					side(theme.fg("dim", lines[0]!)),
 					...lines
 						.slice(1)
 						.map((line, i) =>
-							side(
-								theme.fg(line.trimStart().startsWith("⚠") ? "warning" : lines === teach[0] && i === 0 && card ? "accent" : "muted", line),
-							),
+							side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : id === "tips" && i === 0 && card ? "accent" : "muted", line)),
 						),
 				];
 				const title = " inspector ";
@@ -497,13 +551,13 @@ export function orqHarness(deps: HarnessDeps) {
 					? "↑↓ move · enter peek · esc"
 					: minimapSelected !== undefined
 						? "scrolled back · wheel down follows"
-						: `alt+i · /panel focus · /tips ${teachOn ? "off" : "on"}`;
+						: `alt+i · /panel focus · /tips ${prefs.sections.tips ? "off" : "on"}`;
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					side(theme.fg("dim", sectionLines("trajectory", [], inner)[0]!)),
 					...rows.map(side),
 					...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
-					...sections.flatMap(paintSection),
+					...drawn.flatMap(paintSection),
 					side(theme.fg("dim", fit(minimapSummary(trajectory.steps, trajectory.turn, trajectory.totals().cost, found.loop ? 1 : 0)))),
 					side(theme.fg("dim", fit(hint))),
 					theme.fg("border", `└${"─".repeat(inner)}┘`),
@@ -713,11 +767,12 @@ export function orqHarness(deps: HarnessDeps) {
 			ctx.ui.setWidget(
 				"orqi-signals",
 				loop && !panelShown()
-					? [ctx.ui.theme.fg("warning", `⚠ tool loop: ${loop.tool} ×${loop.count} same args · /panel for details`)]
+					? [ctx.ui.theme.fg("warning", `⚠ tool loop: ${loop.tool} ×${loop.count} same args · alt+i for details`)]
 					: undefined,
 			);
-			if (teachLine !== undefined || !teachOn || panelShown())
-				ctx.ui.setWidget("orqi-teach", teachLine && teachOn && !panelShown() ? [dim(teachLine)] : undefined);
+			const tipsOn = prefs.sections.tips;
+			if (teachLine !== undefined || !tipsOn || panelShown())
+				ctx.ui.setWidget("orqi-teach", teachLine && tipsOn && !panelShown() ? [dim(teachLine)] : undefined);
 		};
 
 		// The one-way gate. Registered here so its verdicts reach the trajectory;
@@ -748,7 +803,7 @@ export function orqHarness(deps: HarnessDeps) {
 			const run = trajectory.steps.filter((step) => step.id > runFrom);
 			runFrom = trajectory.steps.at(-1)?.id ?? runFrom;
 			let teachLine = "";
-			if (teachOn && ctx.mode === "tui") {
+			if (prefs.sections.tips && ctx.mode === "tui") {
 				const picked = pickCard(run, shownConcepts);
 				if (picked) card = { concept: picked.concept, used: picked.used, step: picked.step.id };
 				if (picked) teachLine = cardLine(card!);
@@ -925,9 +980,10 @@ export function orqHarness(deps: HarnessDeps) {
 				ctx.ui.notify("usage: /tips on|off", "warning");
 				return;
 			}
-			teachOn = arg ? arg === "on" : !teachOn;
+			prefs.sections.tips = arg ? arg === "on" : !prefs.sections.tips;
+			savePrefs(ctx);
 			ctx.ui.notify(
-				teachOn
+				prefs.sections.tips
 					? `Tips on: a card follows the next relevant tool call, ${panelShown() ? "in the inspector" : "above the editor"}.`
 					: "Tips off.",
 			);
@@ -946,14 +1002,63 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
 
+		/** /panel's list: one row per section, space switches the selected one and saves the choice. */
+		const showSections = (ctx: ExtensionContext) => {
+			let live: Panel | undefined;
+			const spec = (): PanelSpec => {
+				const { rows, disabled } = sectionRows(sections, prefs);
+				return {
+					title: "side panel",
+					rows,
+					selectable: true,
+					filterable: false,
+					disabled,
+					keys: {
+						space: (i) => {
+							const id = sections[i]?.id;
+							if (!id || disabled.has(i)) return false;
+							prefs.sections[id] = !prefs.sections[id];
+							savePrefs(ctx);
+							syncWidgets(ctx);
+							render();
+							live?.update(spec());
+							return false;
+						},
+					},
+					hint: "↑↓ · space toggle · esc",
+				};
+			};
+			return panel(
+				ctx,
+				() => spec(),
+				44,
+				(p) => {
+					live = p;
+				},
+			);
+		};
+
 		pi.registerCommand("panel", {
-			description: "the inspector: /panel toggles it, /panel focus moves through the trajectory with ↑↓ and enter",
+			description:
+				"the inspector's sections: /panel picks which show, /panel on|off shows or hides it (alt+i), /panel focus moves through the trajectory with ↑↓ and enter",
 			handler: async (args, ctx) => {
-				if (args.trim() === "focus") {
+				const arg = args.trim();
+				if (arg === "focus") {
 					focusMinimap(ctx);
 					return;
 				}
-				toggleMinimap();
+				if (arg === "on" || arg === "off") {
+					minimapForced = arg === "on";
+					if (!minimapForced && minimapFocused) blurMinimap();
+					syncWidgets(ctx);
+					render();
+					return;
+				}
+				if (arg) {
+					ctx.ui.notify("usage: /panel (pick sections) · /panel on|off · /panel focus", "warning");
+					return;
+				}
+				await showSections(ctx);
 			},
 		});
 
