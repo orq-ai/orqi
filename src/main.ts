@@ -63,6 +63,7 @@ import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
 import { createLocalFileTools } from "./local-tools.ts";
+import { createAskUserTool } from "./ask-user.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { runUpdate } from "./update.ts";
 import { resolveSession } from "./resume.ts";
@@ -529,6 +530,7 @@ const model = pickModel(models);
 const localFileTools = createLocalFileTools(process.cwd());
 const customTools = [
 	...localFileTools,
+	createAskUserTool(),
 	createSubagentTool({
 		model,
 		modelRuntime,
@@ -659,9 +661,9 @@ const makeServices = async () => {
 				orqHarness({
 					agentDir: AGENT_DIR,
 					catalogue: () => models.catalogue,
-					// MCP tools arrive after their connection completes; local tools are
-					// registered synchronously through `customTools`.
-					toolCount: () => localFileTools.length + 1 + mcp.toolNames().length,
+					// MCP tools arrive after their connection completes; local tools,
+					// ask_user and subagent are registered synchronously through `customTools`.
+					toolCount: () => localFileTools.length + 2 + mcp.toolNames().length,
 					// Slash commands cannot run tools in pi, so they make one direct
 					// call - after waiting for any session renewal in flight, so the
 					// short-lived connection never carries a token about to expire.
