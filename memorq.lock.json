@@ -1,0 +1,9 @@
+{
+	"source": "/Users/arian/conductor/workspaces/tonybot/boston/.context/wt-memorq-ext",
+	"ref": "arianpasquali/memory-extension",
+	"sha": "4c0a41acf2ae57db11142e192260b20a60dafc4e",
+	"committed": "2026-10-17T03:34:14+02:00",
+	"version": "0.11.0",
+	"files": 49,
+	"note": "pinned to unmerged branch head; re-vendor from GitHub at the merged sha before release"
+}

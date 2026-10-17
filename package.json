@@ -13,6 +13,7 @@
 		"test": "bun test",
 		"assets": "bun scripts/build.ts",
 		"vendor": "bun scripts/vendor.ts",
+		"vendor:memorq": "bun scripts/vendor-memorq.ts",
 		"build": "bun run assets && bun build --compile --outfile orqi src/boot.ts",
 		"dist": "bun scripts/dist.ts",
 		"format": "biome format --write",

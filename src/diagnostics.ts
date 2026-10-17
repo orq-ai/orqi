@@ -126,6 +126,31 @@ export function parseDoctor(json: string): Doctor | undefined {
 	};
 }
 
+/** How `python3Check` runs a command: Bun.spawnSync's shape, so a test can stand in for it. */
+type Run = (cmd: string[]) => { exitCode: number | null; stdout: { toString(): string }; stderr: { toString(): string } };
+
+const spawnRun: Run = (cmd) => Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
+
+/**
+ * /doctor's row for the Python memorq runs on: memory notes are written by a stdlib Python 3.9+
+ * script, and with no python3 the memory section stays silent with nothing else to say why.
+ */
+export function python3Check(run: Run = spawnRun): Check {
+	const missing: Check = { id: "python3", status: "fail", message: "python3 not found; memory notes need it (brew install python3)" };
+	let out: ReturnType<Run>;
+	try {
+		out = run(["python3", "--version"]);
+	} catch {
+		return missing;
+	}
+	const version = /Python (\d+)\.(\d+)(\.\d+)?/.exec(`${out.stdout.toString()} ${out.stderr.toString()}`);
+	if (out.exitCode !== 0 || !version) return missing;
+	const [text, major, minor] = [version[0].slice("Python ".length), Number(version[1]), Number(version[2])];
+	if (major < 3 || (major === 3 && minor < 9))
+		return { id: "python3", status: "fail", message: `python3 ${text} is too old; memory notes need 3.9 or newer` };
+	return { id: "python3", status: "pass", message: `python3 ${text}` };
+}
+
 /** A glyph per status that reads without colour: the words stay in the row. */
 const MARK: Record<string, string> = { pass: "✓", info: "·", warn: "!", fail: "✗" };
 

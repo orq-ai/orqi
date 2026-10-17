@@ -42,8 +42,9 @@ export async function pickModel(
 	catalogue: ModelInfo[],
 	current: string,
 ): Promise<string | undefined> {
-	if (ctx.mode !== "tui") return undefined;
 	try {
+		// Inside the try: a ctx from a session that has since closed throws on any read.
+		if (ctx.mode !== "tui") return undefined;
 		const chat = catalogue.filter((model) => !model.kind || model.kind === "chat");
 		const scoped = chat.flatMap((model) => {
 			const found = ctx.modelRegistry.find(PROVIDER_ID, model.id);

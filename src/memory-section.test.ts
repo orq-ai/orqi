@@ -4,8 +4,18 @@ import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { MemorqHost as ProducerHost, MemorqState as ProducerState } from "../vendor/memorq/integrations/pi/state.ts";
 import { minimapRow } from "./inspector-rows.ts";
-import { isMemorqState, isNoteRead, learnPhrase, memoryLines, type MemorqState, type Trigger } from "./memory-section.ts";
+import {
+	isMemorqState,
+	isNoteRead,
+	learnPhrase,
+	memoryLines,
+	printable,
+	type MemorqHost,
+	type MemorqState,
+	type Trigger,
+} from "./memory-section.ts";
 import { Trajectory } from "./trajectory.ts";
 
 const bare = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -103,19 +113,9 @@ test("a checkpoint learn names its threshold when memorq sends it; a failed revi
 	expect(body(memoryLines(state({ review: { running: true, notes: 47, failed: "x" } }), 0, 36, NOW))[1]).toBe("  reviewing 47 notes…");
 });
 
-test("memorq's own types, as it exports them, are states orqi accepts", () => {
-	// Verbatim from orq-knowledge-notes integrations/pi/state.ts (Plan 2, 63c481d).
-	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "session_end" | "manual" | "sweep";
-	interface ProducerState {
-		version: string;
-		notes: number;
-		usedThisTurn: number;
-		learned?: { count: number; trigger: ProducerTrigger; at: number; costUsd?: number; pct?: number };
-		review?: ({ dueInSessions: number } | { running: true; notes: number }) & { failed?: string };
-		stores: { notes: string; rules: string; skills: string };
-		paused: boolean;
-		enabled: "on" | "readonly" | "off";
-	}
+test("memorq's own types, from the vendored copy, are states orqi accepts, and orqi's host is memorq's", () => {
+	// memorq's own types, from the copy orqi ships (vendor/memorq, pinned in memorq.lock.json): a re-vendor that
+	// changes the payload's shape fails to compile here.
 	const produced: ProducerState[] = [
 		{ ...state(), learned: { count: 1, trigger: "manual", at: NOW, pct: 80 }, review: { dueInSessions: 0, failed: "boom" } },
 		{ ...state(), learned: { count: 3, trigger: "sweep", at: NOW, costUsd: 0.2 }, review: { running: true, notes: 47 } },
@@ -124,6 +124,10 @@ test("memorq's own types, as it exports them, are states orqi accepts", () => {
 		const accepted: MemorqState = p; // a compile error here means the shapes drifted
 		expect(isMemorqState(accepted)).toBe(true);
 	}
+	// Both directions: what orqi offers is what memorq calls, and the reverse.
+	const offered: ProducerHost = {} as MemorqHost;
+	const called: MemorqHost = {} as ProducerHost;
+	expect([offered, called]).toHaveLength(2);
 	// A pct that is not a number is ignored, not fatal.
 	expect(isMemorqState(state({ learned: { count: 1, trigger: "checkpoint", at: NOW, pct: "80" as never } }))).toBe(true);
 	expect(body(memoryLines(state({ learned: { count: 1, trigger: "checkpoint", at: NOW, pct: "80" as never } }), 0, 36, NOW))[1]).toBe(
@@ -199,6 +203,19 @@ test("every trigger, with a two-digit count, fits whole in the panel line and th
 		expect(visibleWidth(row)).toBe(36);
 		expect(row.trimEnd()).toBe(`▌◇ memory learned 12 ${phrase}`);
 	}
+});
+
+test("text that came from memorq is drawn without its escapes: an OSC 52 trigger cannot reach the clipboard", () => {
+	const osc52 = "\x1b]52;c;ZXZpbA==\x07pwn";
+	expect(printable(osc52)).toBe("pwn");
+	expect(learnPhrase(osc52 as Trigger)).toBe("on pwn");
+	const line = memoryLines(state({ learned: { count: 1, trigger: osc52 as Trigger, at: NOW } }), 0, 36, NOW)[2]!;
+	expect(line).not.toContain("\x1b]");
+	expect(bare(line).trimEnd()).toBe("  learned 1 on pwn · now");
+	// CSI, OSC ended by ST, DCS, APC, PM and SOS go whole; lone C0, DEL and C1 bytes go; a tab stays.
+	expect(printable("a\x1b[2Jb\x1b]8;;http://x\x1b\\c\x1bPq#0\x1b\\d\x1b_g\x1b\\e\x1b^m\x1b\\f\x1bXs\x1b\\g")).toBe("abcdefg");
+	expect(printable("x\ny\rz\x00\x7f\x9b31m\x9d0;t\x07\tw")).toBe("xyz31m0;t\tw");
+	expect(printable("plain words")).toBe("plain words");
 });
 
 test("a state is only taken when every field the section reads has the right shape", () => {

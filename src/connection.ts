@@ -38,7 +38,17 @@ import type { SessionRenewal } from "./session.ts";
 import { loginUrl, MaskedInput, plausibleKey, saveLoginKey, WELCOME_OPTIONS, WELCOME_TITLE, welcomeChoice } from "./onboarding.ts";
 import { LEGACY_PROJECT_DIR, legacyProjectDir } from "./trust.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
-import { checkRows, doctorHeader, noticeText, parseDoctor, redactKeys, sortChecks, summary, whoamiRows } from "./diagnostics.ts";
+import {
+	checkRows,
+	doctorHeader,
+	noticeText,
+	parseDoctor,
+	python3Check,
+	redactKeys,
+	sortChecks,
+	summary,
+	whoamiRows,
+} from "./diagnostics.ts";
 import { parseWorkspaces, sortWorkspaces, workspaceRows } from "./workspaces.ts";
 
 /**
@@ -696,14 +706,17 @@ export function orqCommands(
 			handler: async (_args, ctx) => {
 				const answer = runOrq(["doctor", "-o", "json"]);
 				const doctor = answer.ok ? parseDoctor(answer.stdout) : undefined;
+				// memorq, which orqi ships, writes its notes with the system python3.
+				const python = python3Check();
 				if (doctor && doctor.checks.length > 0) {
-					const checks = sortChecks(doctor.checks);
+					const checks = sortChecks([...doctor.checks, python]);
 					const rows = [...doctorHeader(doctor), "", ...checkRows(checks)];
 					// One call, not two: with no panel to draw the same rows are the notice.
 					const spec = { title: "doctor", badge: summary(checks), rows, height: 24, hint: "↑↓ scroll · esc close · full text: orq doctor" };
 					if (!(await showPanel(ctx, spec))) ctx.ui.notify(noticeText([`doctor · ${summary(checks)}`, ...rows]));
 				} else {
 					report(ctx, { ...answer, stdout: redactKeys(answer.stdout), stderr: redactKeys(answer.stderr) });
+					ctx.ui.notify(checkRows([python]).join("\n"), python.status === "pass" ? "info" : "warning");
 				}
 				try {
 					const { DefaultPackageManager } = await import("@earendil-works/pi-coding-agent");

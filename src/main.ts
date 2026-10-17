@@ -57,6 +57,7 @@ import {
 	type Reconnected,
 	type Rejection,
 } from "./mcp.ts";
+import { memorqBundle, type MemorqBundle } from "./memorq-bundle.ts";
 import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, repointOrqModels, talkable } from "./model.ts";
 import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
@@ -631,14 +632,19 @@ const commands = orqCommands(
 // handles from then on (the footer's first frame after /new crashed on it).
 // State that must outlive a session sits in the factories built above
 // (orqCommands); the harness rebuilds from the branch.
+/** The memorq this session loads: the bundled copy, an installed one, or none. Set per session by makeServices. */
+let memorq: MemorqBundle = { note: "", source: "none" };
 const makeServices = async () => {
 	const cwd = process.cwd();
+	// pi's SDK trusts every project, so a cloned repo's .orqi/extensions would run
+	// inside orqi unasked (src/trust.ts). The same trust-aware settings decide the
+	// bundled memorq: its packages are exactly the ones pi will load.
+	const settingsManager = SettingsManager.create(cwd, AGENT_DIR, { projectTrusted: projectTrusted(cwd, AGENT_DIR) });
+	memorq = memorqBundle(pkgDir, settingsManager);
 	const created = await createAgentSessionServices({
 		cwd,
 		agentDir: AGENT_DIR,
-		// pi's SDK trusts every project, so a cloned repo's .pi/extensions would run
-		// inside orqi unasked (src/trust.ts).
-		settingsManager: SettingsManager.create(cwd, AGENT_DIR, { projectTrusted: projectTrusted(cwd, AGENT_DIR) }),
+		settingsManager,
 		modelRuntime,
 		resourceLoaderOptions: {
 			// The tools themselves are declared by pi's MCP; the prompt carries what their schemas leave out.
@@ -653,6 +659,9 @@ const makeServices = async () => {
 			additionalSkillPaths: plugin.additionalSkillPaths,
 			additionalPromptTemplatePaths: plugin.additionalPromptTemplatePaths,
 			additionalThemePaths: [join(pkgDir, "themes"), THEME_PACK],
+			// memorq, as the binary ships it, unless the user installed one (src/memorq-bundle.ts). pi loads
+			// these as temporary extensions, which load whether or not the project is trusted.
+			additionalExtensionPaths: memorq.path ? [memorq.path] : [],
 			extensionFactories: [
 				// pi's own MCP client (built in for the CLI, opt-in for SDK sessions), and the orq server on it.
 				createMcpExtension(),
@@ -662,6 +671,7 @@ const makeServices = async () => {
 					agentDir: AGENT_DIR,
 					catalogue: () => models.catalogue,
 					modelRuntime,
+					memorq: () => memorq.source,
 					// MCP tools arrive after their connection completes; local tools,
 					// ask_user and subagent are registered synchronously through `customTools`.
 					toolCount: () => localFileTools.length + 2 + mcp.toolNames().length,
@@ -754,6 +764,7 @@ function statusLine(connection: string, note = bootNote): string {
 		// A plugin newer than the binary shipped with; silent drift would otherwise be
 		// invisible until someone diffed behaviour against a colleague's machine.
 		plugin.note,
+		memorq.note,
 	]
 		.filter(Boolean)
 		.join(" · ");

@@ -13,7 +13,8 @@ import { orqiPiPackage } from "../src/pi-package.ts";
 import { PI_DIST, PI_FILES } from "./pi-files.ts";
 
 const ROOT = join(import.meta.dir, "..");
-const TREES = ["skills", "commands", "themes"];
+// vendor/memorq is text only (scripts/vendor-memorq.ts refuses binaries): this embeds files as UTF-8.
+const TREES = ["skills", "commands", "themes", "vendor/memorq"];
 const FILES = ["src/system-prompt.txt"];
 
 function walk(dir: string): string[] {

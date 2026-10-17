@@ -8,6 +8,7 @@ import {
 	maskKey,
 	noticeText,
 	parseDoctor,
+	python3Check,
 	redactKeys,
 	sortChecks,
 	summary,
@@ -193,4 +194,25 @@ test("a notice is one safe line per row: where no panel is drawn, nothing reache
 	const out = noticeText([...doctorHeader(doc), ...checkRows(doc.checks)]);
 	expect(out).not.toContain("\x1b");
 	expect(out.split("\n").length).toBe(doctorHeader(doc).length + checkRows(doc.checks).length);
+});
+
+test("doctor's python3 row: the version when it runs, how to get it when it does not, and too old for memorq", () => {
+	const ran =
+		(stdout: string, stderr = "", exitCode = 0) =>
+		() => ({ exitCode, stdout, stderr });
+	expect(python3Check(ran("Python 3.12.4\n"))).toEqual({ id: "python3", status: "pass", message: "python3 3.12.4" });
+	// Python 2 and some 3.x builds print the version on stderr.
+	expect(python3Check(ran("", "Python 3.9.6\n"))).toEqual({ id: "python3", status: "pass", message: "python3 3.9.6" });
+	const missing = { id: "python3", status: "fail", message: "python3 not found; memory notes need it (brew install python3)" };
+	expect(
+		python3Check(() => {
+			throw new Error("ENOENT");
+		}),
+	).toEqual(missing);
+	expect(python3Check(ran("", "not found", 127))).toEqual(missing);
+	expect(python3Check(ran("Python 3.8.10\n"))).toEqual({
+		id: "python3",
+		status: "fail",
+		message: "python3 3.8.10 is too old; memory notes need 3.9 or newer",
+	});
 });

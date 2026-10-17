@@ -474,7 +474,14 @@ function fakeBus() {
  */
 function harnessOn(
 	agentDir: string,
-	options: { bus?: ReturnType<typeof fakeBus>; commands?: string[]; cwd?: string; branch?: any[] } = {},
+	options: {
+		bus?: ReturnType<typeof fakeBus>;
+		commands?: string[];
+		cwd?: string;
+		branch?: any[];
+		memorq?: "bundled" | "installed" | "none";
+		modelRuntime?: unknown;
+	} = {},
 ) {
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
 	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
@@ -515,6 +522,8 @@ function harnessOn(
 		toolCount: () => 0,
 		callTool: async () => ({ text: "", isError: false }),
 		workspace: () => undefined,
+		memorq: options.memorq ? () => options.memorq! : undefined,
+		modelRuntime: options.modelRuntime as never,
 	})(pi as any);
 	const notices: string[] = [];
 	const opened: { panel?: Panel; inspector?: { render(width: number): string[] } } = {};
@@ -1003,6 +1012,45 @@ test("memorq's panel switch never throws back into memorq, even from a closed se
 		expect(hosts[0].panel.shown()).toBe(false);
 	} finally {
 		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a memorq that is loaded but silent: the bundled one points at /doctor, an installed one wants updating", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	try {
+		for (const [memorq, reason] of [
+			["bundled", "not answering · /doctor"],
+			["installed", "update memorq"],
+			["none", "install memorq"],
+		] as const) {
+			const h = harnessOn(dir, { memorq });
+			await h.start();
+			await h.commands.get("panel")!("", h.ctx);
+			expect(panelRows(h.opened.panel!)[2]).toBe(`[ ] memory  · ${reason}`);
+			await h.stop();
+		}
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("after its session ends, the host memorq kept picks nothing and opens nothing", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-host-"));
+	const h = harnessOn(dir, { modelRuntime: {} });
+	const hosts: any[] = [];
+	h.bus.on("memorq:host", (host) => hosts.push(host));
+	try {
+		await h.start();
+		await h.stop();
+		let opened = false;
+		h.ctx.ui.custom = () => {
+			opened = true;
+			return Promise.resolve();
+		};
+		expect(await hosts[0].pickModel("openai/gpt-5")).toBeUndefined();
+		expect(opened).toBe(false);
+	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

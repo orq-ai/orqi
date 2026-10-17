@@ -58,6 +58,8 @@ export interface HarnessDeps {
 	routing?: Routing;
 	/** pi's model runtime (orq models only), for the picker orqi offers memorq; the session ctx has only the registry. */
 	modelRuntime?: ModelRuntime;
+	/** Which memorq this session loads: the copy orqi ships, one the user installed, or none (src/memorq-bundle.ts). */
+	memorq?: () => "bundled" | "installed" | "none";
 }
 
 const ROUTE_ENTRY = "orqi-route";
@@ -356,6 +358,8 @@ export function orqHarness(deps: HarnessDeps) {
 		// Subscribed at load, not at session_start: memorq, a path extension, loads first and may publish
 		// before orqi's session_start runs; pi drops these subscriptions with this instance.
 		let memorqState: MemorqState | undefined;
+		/** This instance's session has shut down: what memorq still holds of it must not touch its ctx. */
+		let sessionEnded = false;
 		/** The same three folders with symlinks resolved, worked out when a state arrives. */
 		let realStores: MemorqState["stores"] | undefined;
 		// Read at session start, never in a render: whether a memorq that registers commands is loaded,
@@ -379,7 +383,15 @@ export function orqHarness(deps: HarnessDeps) {
 		/** Why the memory section cannot show, or undefined when it can. */
 		const memoryUnavailable = () => {
 			if (notesOff) return "off: ORQ_NOTES=off";
-			if (!memorqState) return memorqLoaded ? "update memorq" : "install memorq";
+			if (!memorqState) {
+				// The bundled memorq is current, so its silence is a failure (no python3, a broken store), not age.
+				const loaded = deps.memorq?.() ?? (memorqLoaded ? "installed" : "none");
+				return loaded === "bundled"
+					? "not answering · /doctor"
+					: loaded === "installed" || memorqLoaded
+						? "update memorq"
+						: "install memorq";
+			}
 			return memorqState.enabled === "off" ? "off · /memory" : undefined;
 		};
 		/**
@@ -424,8 +436,11 @@ export function orqHarness(deps: HarnessDeps) {
 					render();
 				},
 			},
+			// memorq keeps this object; once this session has ended its ctx is stale, and the next session offers a new host.
 			pickModel: (current) =>
-				ctxRef && deps.modelRuntime ? pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current) : Promise.resolve(undefined),
+				ctxRef && deps.modelRuntime && !sessionEnded
+					? pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current)
+					: Promise.resolve(undefined),
 		};
 		pi.events.on("memorq:host?", () => pi.events.emit("memorq:host", host));
 		/** A finished `read` that opened a note, by its own path or, through a symlink, by the real one. Subagents' count too. */
@@ -875,6 +890,7 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 		// This handle dies with its session: stop everything that would outlive it.
 		pi.on("session_shutdown", (event, ctx) => {
+			sessionEnded = true;
 			// On quit pi has left the alternate screen by now and prints "To resume" next,
 			// so these lines land just above it. Never studio() here: it fetches.
 			if (event.reason === "quit" && ctx.mode === "tui" && trajectory.turn > 0) {

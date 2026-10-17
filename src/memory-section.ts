@@ -95,7 +95,7 @@ export function isLearned(data: unknown): data is NonNullable<MemorqState["learn
  */
 export function learnPhrase(trigger: string, pct?: unknown): string {
 	if (trigger === "checkpoint" && typeof pct === "number") return `at ${pct}% context`;
-	return Object.hasOwn(TRIGGER, trigger) ? TRIGGER[trigger]! : `on ${trigger}`;
+	return Object.hasOwn(TRIGGER, trigger) ? TRIGGER[trigger]! : `on ${printable(String(trigger))}`;
 }
 
 /** `learned <count> <trigger> · <age>` in `width` cells: the trigger is what gives way, never the age. */
@@ -105,6 +105,20 @@ function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number
 	const trigger = learnPhrase(learned.trigger, learned.pct);
 	const room = Math.max(1, width - visibleWidth(head) - visibleWidth(tail));
 	return `${head}${truncateToWidth(trigger, room, "…")}${tail}`;
+}
+
+/**
+ * Text that came from memorq, safe to draw: escape sequences (CSI, OSC, DCS, SOS, PM, APC, and any other
+ * ESC pair) removed whole, then every other control character (C0 but tab, DEL, C1) dropped. memorq is a
+ * separate package, and a terminal acts on what it is sent: an OSC 52 in a trigger name would write the
+ * clipboard.
+ */
+export function printable(text: string): string {
+	return text
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\x1b[\]PX^_][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
+		.replace(/\x1b[\s\S]?/g, "")
+		.replace(/[\x00-\x08\x0a-\x1f\x7f-\x9f]/g, "");
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

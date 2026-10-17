@@ -1,0 +1,35 @@
+{
+  "name": "memorq",
+  "version": "0.11.0",
+  "description": "memorq for Pi: a memory of each repository, notes of facts and corrections written from past sessions. The Claude Code plugin lives in the same folder.",
+  "keywords": [
+    "pi-package"
+  ],
+  "private": true,
+  "scripts": {
+    "lint": "uv run ruff check . && biome lint",
+    "format": "uv run ruff format . && biome format --write",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "uv run ruff check . && uv run ruff format --check . && biome ci && npm run typecheck",
+    "changelog": "if git rev-parse -q --verify \"refs/tags/v$npm_package_version\" >/dev/null; then uvx git-cliff==2.14.2 -o CHANGELOG.md; else uvx git-cliff==2.14.2 --tag \"v$npm_package_version\" -o CHANGELOG.md; fi",
+    "fonts": "FONT_SRC=${FONT_SRC:-/Users/arian/conductor/workspaces/evaluatorq/amsterdam/docs/stylesheets/fonts}; for f in Regular Medium SemiBold; do uvx --from fonttools --with brotli pyftsubset $FONT_SRC/AvioSans-$f.woff2 --flavor=woff2 --layout-features='kern,liga,tnum' --unicodes='U+0020-007E,U+00A0-00FF,U+2013-2014,U+2018-201D,U+2022,U+2026,U+2190-2193,U+25B2,U+25BC,U+2713,U+00D7' --output-file=assets/AvioSans-$f.woff2; done"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/orq-ai/orq-knowledge-notes"
+  },
+  "pi": {
+    "extensions": [
+      "./integrations/pi/memorq.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2"
+  }
+}

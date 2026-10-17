@@ -110,3 +110,15 @@ test("a picker that cannot open resolves undefined instead of rejecting", async 
 	};
 	expect(await pickModel(ctx, runtime, catalogue, "openai/gpt-5")).toBeUndefined();
 });
+
+test("a ctx from a session that has since closed: undefined, never a throw into memorq", async () => {
+	const stale: any = new Proxy(
+		{},
+		{
+			get() {
+				throw new Error("This extension ctx is stale after session replacement or reload.");
+			},
+		},
+	);
+	expect(await pickModel(stale, runtime, catalogue, "openai/gpt-5")).toBeUndefined();
+});
