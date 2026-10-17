@@ -860,13 +860,30 @@ test("a learn is one orqi-memory entry and one trajectory step; the same state a
 		h.bus.emit("memorq:state", memorqState({ learned: { count: 1, trigger: "idle", at: at + 60_000 } }));
 		expect(h.entries.map((entry) => entry.data.trigger)).toEqual(["ship", "idle"]);
 		expect(h.rows()).toEqual([" ◇ memory learned 2 after git push", "▌◇ memory learned 1 while idle"]);
-		// An older learn arriving late (an earlier publish delivered out of order) is not recorded twice.
+		// The first learn again (an earlier publish delivered late) is not recorded twice...
 		h.bus.emit("memorq:state", memorqState({ learned }));
 		expect(h.entries).toHaveLength(2);
+		// ...but a different learn that is older than the newest one is, when it arrives out of order.
+		h.bus.emit("memorq:state", memorqState({ learned: { count: 3, trigger: "manual", at: at + 30_000 } }));
+		h.bus.emit("memorq:state", memorqState({ learned: { count: 3, trigger: "manual", at: at + 30_000 } }));
+		expect(h.entries.map((entry) => entry.data.trigger)).toEqual(["ship", "idle", "manual"]);
 		// The entry draws in the transcript as a dim line.
 		const text = h.renderers.get("orqi-memory")!({ data: learned }, {}, { fg: (_t: string, s: string) => s });
 		expect(bare(text.render(80).join("")).trim()).toBe("learned 2 after git push · $0.140");
 		expect(h.renderers.get("orqi-memory")!({ data: { count: "x" } }, {}, { fg: (_t: string, s: string) => s })).toBeUndefined();
+		// A render never throws: an entry whose cost cannot even be read draws nothing.
+		const hostile = new Proxy(
+			{ count: 2, trigger: "ship", at },
+			{
+				get: (target, key) =>
+					key === "costUsd"
+						? (() => {
+								throw new Error("boom");
+							})()
+						: Reflect.get(target, key),
+			},
+		);
+		expect(h.renderers.get("orqi-memory")!({ data: hostile }, {}, { fg: (_t: string, s: string) => s })).toBeUndefined();
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
@@ -889,7 +906,7 @@ test("a resumed session rebuilds the learn from its entry and does not record it
 		bus.emit("memorq:state", memorqState({ learned }));
 		await h.start();
 		expect(h.entries).toEqual([]);
-		expect(h.rows()).toEqual(["▌◇ memory learned 2 after compaction"]);
+		expect(h.rows()).toEqual(["▌◇ memory learned 2 at compaction"]);
 		// A learn that landed after the last session ended (session end) arrives on resume, and is recorded then.
 		h.bus.emit("memorq:state", memorqState({ learned: { count: 3, trigger: "session_end", at: at + 1000 } }));
 		expect(h.entries.map((entry) => entry.data.count)).toEqual([3]);
@@ -897,6 +914,24 @@ test("a resumed session rebuilds the learn from its entry and does not record it
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("/cost counts what memory's learns spent, so its total is the session's", () => {
+	const trajectory = new Trajectory();
+	trajectory.fromMessages(session());
+	trajectory.memory("learned 2", "after git push", Date.now(), { input: 0, output: 0, cacheRead: 0, cost: 0.14 });
+	trajectory.memory("learned 1", "while idle", Date.now(), { input: 0, output: 0, cacheRead: 0, cost: 0.06 });
+	const rows = trajectory.byModel();
+	expect(rows.get("memory (learns)")).toEqual({ calls: 2, input: 0, output: 0, cacheRead: 0, cost: 0.2 });
+	const total = [...rows.values()].reduce((sum, row) => sum + row.cost, 0);
+	expect(total).toBeCloseTo(trajectory.totals().cost, 10);
+	const lines = costLines(rows, 1);
+	expect(lines[0]).toContain(dollars(trajectory.totals().cost));
+	expect(lines.some((line) => line.startsWith("memory (learns)") && line.includes("2 calls"))).toBe(true);
+	// The "always the top model" line keeps memory's spend: picking another chat model would not change it.
+	const top: ModelInfo = { id: "openai/top", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+	// A free top model would still have paid for the learns: always = $0.200.
+	expect(costLines(rows, 1, top).at(-1)).toContain(`would have cost${dollars(0.2).padStart(34 - "top".length)}`);
 });
 
 test("/trajectory exports a learn as a system step, as it does a route", () => {

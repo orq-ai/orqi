@@ -4,8 +4,11 @@ import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { minimapRow } from "./inspector-rows.ts";
 import { isMemorqState, isNoteRead, learnPhrase, memoryLines, type MemorqState, type Trigger } from "./memory-section.ts";
+import { Trajectory } from "./trajectory.ts";
 
+const bare = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 const MIN = 60_000;
 const NOW = Date.parse("2026-10-17T12:00:00Z");
 const rule = ` ─ memory ${"─".repeat(26)}`;
@@ -65,12 +68,12 @@ test("the full session: used this turn, read, learned after a git push, the next
 test("every trigger reads as words, and the age as m, h or d", () => {
 	const learned = (trigger: string, ago: number) =>
 		body(memoryLines(state({ learned: { count: 2, trigger: trigger as Trigger, at: NOW - ago } }), 0, 60, NOW))[1];
-	expect(learned("compact", 5 * MIN)).toBe("  learned 2 after compaction · 5m");
-	expect(learned("checkpoint", 2 * 60 * MIN)).toBe("  learned 2 as context filled · 2h");
+	expect(learned("compact", 5 * MIN)).toBe("  learned 2 at compaction · 5m");
+	expect(learned("checkpoint", 2 * 60 * MIN)).toBe("  learned 2 at checkpoint · 2h");
 	expect(learned("idle", 24 * 60 * MIN)).toBe("  learned 2 while idle · 1d");
 	expect(learned("session_end", 10_000)).toBe("  learned 2 at session end · now");
 	expect(learned("manual", MIN)).toBe("  learned 2 on request · 1m");
-	expect(learned("sweep", MIN)).toBe("  learned 2 from a past session · 1m");
+	expect(learned("sweep", MIN)).toBe("  learned 2 from past work · 1m");
 	// An event named like an Object method is still just an unknown event.
 	expect(learned("toString", MIN)).toBe("  learned 2 on toString · 1m");
 	expect(learned("prompt", MIN)).toBe("  learned 2 on prompt · 1m");
@@ -92,7 +95,7 @@ test("a checkpoint learn names its threshold when memorq sends it; a failed revi
 	const learned = (pct?: number) =>
 		body(memoryLines(state({ learned: { count: 2, trigger: "checkpoint", at: NOW - 3 * MIN, pct } }), 0, 36, NOW))[1];
 	expect(learned(80)).toBe("  learned 2 at 80% context · 3m");
-	expect(learned()).toBe("  learned 2 as context filled · 3m");
+	expect(learned()).toBe("  learned 2 at checkpoint · 3m");
 	expect(learnPhrase("checkpoint", 65)).toBe("at 65% context");
 	expect(learnPhrase("ship", 65)).toBe("after git push");
 	expect(body(memoryLines(state({ review: { dueInSessions: 2, failed: "model timed out" } }), 0, 36, NOW))[1]).toBe("  last review failed");
@@ -124,7 +127,7 @@ test("memorq's own types, as it exports them, are states orqi accepts", () => {
 	// A pct that is not a number is ignored, not fatal.
 	expect(isMemorqState(state({ learned: { count: 1, trigger: "checkpoint", at: NOW, pct: "80" as never } }))).toBe(true);
 	expect(body(memoryLines(state({ learned: { count: 1, trigger: "checkpoint", at: NOW, pct: "80" as never } }), 0, 36, NOW))[1]).toBe(
-		"  learned 1 as context filled · now",
+		"  learned 1 at checkpoint · now",
 	);
 });
 
@@ -173,6 +176,29 @@ test("a long learned line cuts the trigger, never the age", () => {
 		NOW,
 	)[2]!;
 	expect(cut.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toBe("  learned 12 on from-another-… · 59m");
+});
+
+test("every trigger, with a two-digit count, fits whole in the panel line and the trajectory row at 36 columns", () => {
+	const learns: { trigger: Trigger; pct?: number }[] = [
+		{ trigger: "ship" },
+		{ trigger: "compact" },
+		{ trigger: "checkpoint" },
+		{ trigger: "checkpoint", pct: 80 },
+		{ trigger: "idle" },
+		{ trigger: "session_end" },
+		{ trigger: "manual" },
+		{ trigger: "sweep" },
+	];
+	for (const { trigger, pct } of learns) {
+		const phrase = learnPhrase(trigger, pct);
+		const panel = memoryLines(state({ learned: { count: 12, trigger, at: NOW - 59 * MIN, pct } }), 0, 36, NOW)[2]!;
+		expect(bare(panel).trimEnd()).toBe(`  learned 12 ${phrase} · 59m`);
+		const trajectory = new Trajectory();
+		trajectory.memory("learned 12", phrase, NOW);
+		const row = bare(minimapRow(trajectory.steps[0]!, 36, true));
+		expect(visibleWidth(row)).toBe(36);
+		expect(row.trimEnd()).toBe(`▌◇ memory learned 12 ${phrase}`);
+	}
 });
 
 test("a state is only taken when every field the section reads has the right shape", () => {

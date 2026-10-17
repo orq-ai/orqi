@@ -18,6 +18,9 @@ import type { Door } from "./router.ts";
 
 export type { Door };
 export type Role = "user" | "assistant" | "tool" | "subagent" | "route" | "memory";
+
+/** /cost's row for what memorq's learns spent. */
+export const MEMORY_ROW = "memory (learns)";
 export type Status = "running" | "ok" | "error";
 
 export interface StepUsage {
@@ -354,19 +357,24 @@ export class Trajectory {
 		return sumUsage(this.steps);
 	}
 
-	/** Per physical model: calls, tokens, cost. What /cost prints. */
+	/**
+	 * Per physical model: calls, tokens, cost. What /cost prints. memorq's learns run outside this
+	 * process on a model orqi does not see, so they share one row (`MEMORY_ROW`) and /cost still adds
+	 * up to `totals()`.
+	 */
 	byModel(): Map<string, StepUsage & { calls: number }> {
 		const rows = new Map<string, StepUsage & { calls: number }>();
 		const visit = (steps: Step[]) => {
 			for (const step of steps) {
-				if (step.usage && step.model && step.role !== "subagent") {
-					const row = rows.get(step.model) ?? { calls: 0, input: 0, output: 0, cacheRead: 0, cost: 0 };
+				const key = step.role === "memory" ? MEMORY_ROW : step.model;
+				if (step.usage && key && step.role !== "subagent") {
+					const row = rows.get(key) ?? { calls: 0, input: 0, output: 0, cacheRead: 0, cost: 0 };
 					row.calls++;
 					row.input += step.usage.input;
 					row.output += step.usage.output;
 					row.cacheRead += step.usage.cacheRead;
 					row.cost += step.usage.cost;
-					rows.set(step.model, row);
+					rows.set(key, row);
 				}
 				if (step.children) visit(step.children);
 			}

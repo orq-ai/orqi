@@ -48,13 +48,14 @@ const KINDS = new Set(["notes", "rules", "skills"]);
 
 const TRIGGER: Record<string, string> = {
 	ship: "after git push",
-	compact: "after compaction",
-	// memorq's state does not carry the threshold, so the line names the moment rather than a percentage.
-	checkpoint: "as context filled",
+	// Each phrase leaves `learned 12 <phrase>` within the trajectory row's 25 cells.
+	compact: "at compaction",
+	// `at <pct>% context` when memorq sends the threshold (learnPhrase).
+	checkpoint: "at checkpoint",
 	idle: "while idle",
 	session_end: "at session end",
 	manual: "on request",
-	sweep: "from a past session",
+	sweep: "from past work",
 };
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);

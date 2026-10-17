@@ -378,15 +378,17 @@ export function orqHarness(deps: HarnessDeps) {
 			return memorqState.enabled === "off" ? "off · /memory" : undefined;
 		};
 		/**
-		 * The newest learn already in the trajectory. A learn is recorded once: memorq republishes the same
-		 * `learned` on every change and answers each `memorq:state?`, and a resume replays the entries.
+		 * The learns already in the trajectory, by `at|trigger|count`. A learn is recorded once: memorq
+		 * republishes the same `learned` on every change and answers each `memorq:state?`, and a resume
+		 * replays the entries; a different learn that arrives out of order is still recorded.
 		 */
-		let lastLearnAt = Number.NEGATIVE_INFINITY;
+		const learnsSeen = new Set<string>();
+		const learnKey = (learned: Learned) => `${learned.at}|${learned.trigger}|${learned.count}`;
 		/** Set once session_start has rebuilt the trajectory: a learn published before that waits for it. */
 		let branchLoaded = false;
 		const recordLearn = (learned: Learned | undefined) => {
-			if (!branchLoaded || !learned || learned.at <= lastLearnAt) return;
-			lastLearnAt = learned.at;
+			if (!branchLoaded || !learned || learnsSeen.has(learnKey(learned))) return;
+			learnsSeen.add(learnKey(learned));
 			const step = learnStep(learned);
 			trajectory.memory(step.label, step.detail, learned.at, step.usage);
 			try {
@@ -850,7 +852,8 @@ export function orqHarness(deps: HarnessDeps) {
 			pi.events.emit("memorq:host", host);
 			trajectory.fromMessages(branchMessages(ctx));
 			// Learns already on this branch are not recorded again; one memorq published before now is.
-			for (const step of trajectory.steps) if (step.role === "memory") lastLearnAt = Math.max(lastLearnAt, step.ts);
+			for (const entry of ctx.sessionManager.getBranch() as any[])
+				if (entry.type === "custom" && entry.customType === MEMORY_ENTRY && isLearned(entry.data)) learnsSeen.add(learnKey(entry.data));
 			branchLoaded = true;
 			recordLearn(memorqState?.learned);
 			traces.length = 0;
@@ -1006,8 +1009,13 @@ export function orqHarness(deps: HarnessDeps) {
 		// ── routing ───────────────────────────────────────────────────────────
 		let routeShown = true;
 		pi.registerEntryRenderer<Learned>(MEMORY_ENTRY, (entry, _options, theme) => {
-			if (!isLearned(entry.data)) return undefined;
-			return new Text(theme.fg("dim", learnLine(entry.data)), 1, 0);
+			// A render never throws: an entry that cannot be drawn draws nothing.
+			try {
+				if (!isLearned(entry.data)) return undefined;
+				return new Text(theme.fg("dim", learnLine(entry.data)), 1, 0);
+			} catch {
+				return undefined;
+			}
 		});
 		pi.registerEntryRenderer<Decision>(ROUTE_ENTRY, (entry, _options, theme) => {
 			if (!routeShown || !entry.data) return undefined;
