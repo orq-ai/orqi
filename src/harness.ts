@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { isAgentModel } from "./agents.ts";
 import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
@@ -17,7 +18,7 @@ import {
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
-import { isNoteRead, memoryLines, noteRoots, type MemorqState } from "./memory-section.ts";
+import { isMemorqState, isNoteRead, memoryLines, noteRoots, readPath, type MemorqState } from "./memory-section.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
@@ -318,24 +319,51 @@ export function orqHarness(deps: HarnessDeps) {
 		// Subscribed at load, not at session_start: memorq, a path extension, loads first and may publish
 		// before orqi's session_start runs; pi drops these subscriptions with this instance.
 		let memorqState: MemorqState | undefined;
-		/** A memorq that registers its commands is loaded (read at session start, never in a render). */
+		/** The same three folders with symlinks resolved, worked out when a state arrives. */
+		let realStores: MemorqState["stores"] | undefined;
+		// Read at session start, never in a render: whether a memorq that registers commands is loaded,
+		// whether ORQ_NOTES=off turned it off, and the machine roots a note can be read from.
 		let memorqLoaded = false;
+		let notesOff = false;
+		let roots = noteRoots();
+		let realRoots = roots;
 		let noteReads = 0;
 		/** `read` paths by tool call: tool_execution_end carries no args. */
 		const readPaths = new Map<string, string>();
+		/** A path with its symlinks resolved, or the path itself when it cannot be (missing, or empty). */
+		const real = (path: string) => {
+			if (!path) return path;
+			try {
+				return realpathSync(path);
+			} catch {
+				return path;
+			}
+		};
 		/** Why the memory section cannot show, or undefined when it can. */
 		const memoryUnavailable = () => {
-			if (process.env.ORQ_NOTES === "off") return "off: ORQ_NOTES=off";
+			if (notesOff) return "off: ORQ_NOTES=off";
 			if (!memorqState) return memorqLoaded ? "update memorq" : "install memorq";
 			return memorqState.enabled === "off" ? "off · /memory" : undefined;
 		};
 		pi.events.on("memorq:state", (data) => {
-			const state = data as MemorqState | undefined;
-			// A payload this renderer cannot read is ignored rather than drawn.
-			if (!state || typeof state.notes !== "number" || !state.stores || typeof state.stores !== "object") return;
-			memorqState = state;
+			// The bus is untyped: a payload this renderer cannot read is ignored, and the last good one stays.
+			if (!isMemorqState(data)) return;
+			memorqState = data;
+			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
 			render();
 		});
+		/** A finished `read` that opened a note, by its own path or, through a symlink, by the real one. Subagents' count too. */
+		const countNoteRead = (toolCallId: string, isError: boolean, cwd: string) => {
+			const path = readPaths.get(toolCallId);
+			readPaths.delete(toolCallId);
+			if (!path || isError || !memorqState) return;
+			const hit =
+				isNoteRead(path, memorqState.stores, roots, cwd) ||
+				isNoteRead(real(readPath(path, cwd)), realStores ?? memorqState.stores, realRoots, cwd);
+			if (!hit) return;
+			noteReads++;
+			render();
+		};
 		// ── teach state: the card lives in the panel, never the transcript ──
 		// On by default (prefs.sections.tips): the cards are the harness explaining the platform; /tips off hides them
 		// (shown as "tips"; "teach" is the code name and the old command).
@@ -746,6 +774,9 @@ export function orqHarness(deps: HarnessDeps) {
 			} catch {
 				memorqLoaded = false;
 			}
+			notesOff = process.env.ORQ_NOTES === "off";
+			roots = noteRoots();
+			realRoots = roots.map(real);
 			pi.events.emit("memorq:state?", undefined);
 			trajectory.fromMessages(branchMessages(ctx));
 			traces.length = 0;
@@ -787,20 +818,15 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("message_end", (event) => trajectory.message(event.message as any));
 		pi.on("turn_start", (_event, ctx) => ctx.ui.setWorkingMessage(isAgentModel(ctx.model?.id) ? `${ctx.model!.id.slice(6)}` : "thinking"));
 		pi.on("tool_execution_start", (event, ctx) => {
+			if (event.toolName === "read" && typeof event.args?.path === "string") readPaths.set(event.toolCallId, event.args.path);
 			if (event.parentToolCallId) return;
 			trajectory.toolStart(event.toolCallId, event.toolName, event.args ?? {});
-			if (event.toolName === "read" && typeof event.args?.path === "string") readPaths.set(event.toolCallId, event.args.path);
 			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : shortTool(event.toolName));
 		});
 		pi.on("tool_execution_end", (event, ctx) => {
+			countNoteRead(event.toolCallId, event.isError, ctx.cwd);
 			if (event.parentToolCallId) return;
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
-			const path = readPaths.get(event.toolCallId);
-			readPaths.delete(event.toolCallId);
-			if (path && !event.isError && memorqState && isNoteRead(path, memorqState.stores, noteRoots(), ctx.cwd)) {
-				noteReads++;
-				render();
-			}
 			syncWidgets(ctx);
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
 		});

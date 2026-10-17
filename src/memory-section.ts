@@ -8,6 +8,7 @@
  * because the two are separate pi extensions that share only the bus.
  */
 
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { sectionLines } from "./inspector-rows.ts";
@@ -41,14 +42,49 @@ const KINDS = new Set(["notes", "rules", "skills"]);
 
 const TRIGGER: Record<string, string> = {
 	ship: "after last git push",
-	compact: "after last compaction",
+	compact: "after compaction",
 	// memorq's state does not carry the threshold, so the line names the moment rather than a percentage.
 	checkpoint: "as context filled",
 	idle: "while idle",
 	session_end: "at session end",
 	manual: "on request",
-	sweep: "from an earlier session",
+	sweep: "from a past session",
 };
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+const absent = (value: unknown) => value === undefined || value === null;
+
+/**
+ * Whether a `memorq:state` payload has every field the section reads, in the
+ * shape it reads it. The bus is untyped and memorq is a separate package with
+ * its own release cycle: a payload that fails this is ignored, not drawn.
+ */
+export function isMemorqState(data: unknown): data is MemorqState {
+	if (!isObject(data)) return false;
+	const { notes, usedThisTurn, stores, review, learned, paused, enabled } = data;
+	if (typeof notes !== "number" || typeof usedThisTurn !== "number" || typeof paused !== "boolean") return false;
+	if (enabled !== "on" && enabled !== "readonly" && enabled !== "off") return false;
+	if (!isObject(stores) || !["notes", "rules", "skills"].every((kind) => typeof stores[kind] === "string")) return false;
+	if (!absent(review)) {
+		if (!isObject(review)) return false;
+		const running = review.running === true && typeof review.notes === "number";
+		if (!running && typeof review.dueInSessions !== "number") return false;
+	}
+	if (!absent(learned)) {
+		if (!isObject(learned)) return false;
+		if (typeof learned.count !== "number" || typeof learned.at !== "number" || typeof learned.trigger !== "string") return false;
+	}
+	return true;
+}
+
+/** `learned <count> <trigger> · <age>` in `width` cells: the trigger is what gives way, never the age. */
+function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number, now: number): string {
+	const head = `learned ${learned.count} `;
+	const tail = ` · ${age(Math.max(0, now - learned.at))}`;
+	const trigger = Object.hasOwn(TRIGGER, learned.trigger) ? TRIGGER[learned.trigger]! : `on ${learned.trigger}`;
+	const room = Math.max(1, width - visibleWidth(head) - visibleWidth(tail));
+	return `${head}${truncateToWidth(trigger, room, "…")}${tail}`;
+}
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -75,10 +111,8 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 	const body = [`${plural(state.notes, "note")} for this repo`];
 	if (state.usedThisTurn > 0) body.push(`using ${state.usedThisTurn} this turn${reads > 0 ? ` · read ${reads}` : ""}`);
 	else if (reads > 0) body.push(`read ${reads} this session`);
-	if (state.learned) {
-		const { count, trigger, at } = state.learned;
-		body.push(`learned ${count} ${TRIGGER[trigger] ?? `on ${trigger}`} · ${age(Math.max(0, now - at))}`);
-	}
+	// The body is indented two cells by sectionLines.
+	if (state.learned) body.push(learnedLine(state.learned, width - 2, now));
 	if (state.paused) body.push("learning paused · /memory");
 	else if (state.enabled === "readonly") body.push("read-only · learns nothing");
 	else if (state.review && "running" in state.review) body.push(`reviewing ${state.review.notes} notes…`);
@@ -94,8 +128,15 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 /** `inner` lies inside `dir` (not the folder itself). */
 function under(dir: string, inner: string): string[] | undefined {
 	const rel = relative(dir, inner);
-	if (!rel || rel.startsWith("..") || isAbsolute(rel)) return undefined;
+	if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
 	return rel.split(sep);
+}
+
+/** A `read` tool's path as pi's read tool resolves it: a leading `@` dropped, `~` expanded, relative to `cwd`. */
+export function readPath(path: string, cwd: string): string {
+	let p = path.startsWith("@") ? path.slice(1) : path;
+	if (p === "~" || p.startsWith("~/")) p = join(homedir(), p.slice(1));
+	return resolve(cwd, p);
 }
 
 /**
@@ -105,13 +146,11 @@ function under(dir: string, inner: string): string[] | undefined {
  * ~/.memorq, plus the legacy ~/.orq/knowledge) count as `<root>/<key>/<kind>/…`.
  * A repo folder (`<repo>/.memorq`, or a legacy `<repo>/.orq/knowledge`) is
  * always the write folder for its kind, so it arrives through `stores`.
- * The path is resolved as pi's read tool does (a leading `@` dropped, `~`
- * expanded, relative to `cwd`); no realpath, no git call.
+ * The path is resolved as pi's read tool does (`readPath`); no realpath and no
+ * git call here: the caller tests the real path as well, off the render path.
  */
 export function isNoteRead(path: string, stores: MemorqState["stores"], roots: string[], cwd = process.cwd()): boolean {
-	let p = path.startsWith("@") ? path.slice(1) : path;
-	if (p === "~" || p.startsWith("~/")) p = join(homedir(), p.slice(1));
-	const file = resolve(cwd, p);
+	const file = readPath(path, cwd);
 	if (Object.values(stores).some((dir) => dir && under(resolve(cwd, dir), file))) return true;
 	return roots.some((root) => {
 		const parts = under(resolve(root), file);

@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isNoteRead, memoryLines, type MemorqState } from "./memory-section.ts";
+import { isMemorqState, isNoteRead, memoryLines, type MemorqState } from "./memory-section.ts";
 
 const MIN = 60_000;
 const NOW = Date.parse("2026-10-17T12:00:00Z");
@@ -65,12 +65,14 @@ test("the full session: used this turn, read, learned after a git push, the next
 test("every trigger reads as words, and the age as m, h or d", () => {
 	const learned = (trigger: string, ago: number) =>
 		body(memoryLines(state({ learned: { count: 2, trigger, at: NOW - ago } }), 0, 60, NOW))[1];
-	expect(learned("compact", 5 * MIN)).toBe("  learned 2 after last compaction · 5m");
+	expect(learned("compact", 5 * MIN)).toBe("  learned 2 after compaction · 5m");
 	expect(learned("checkpoint", 2 * 60 * MIN)).toBe("  learned 2 as context filled · 2h");
 	expect(learned("idle", 24 * 60 * MIN)).toBe("  learned 2 while idle · 1d");
 	expect(learned("session_end", 10_000)).toBe("  learned 2 at session end · now");
 	expect(learned("manual", MIN)).toBe("  learned 2 on request · 1m");
-	expect(learned("sweep", MIN)).toBe("  learned 2 from an earlier session · 1m");
+	expect(learned("sweep", MIN)).toBe("  learned 2 from a past session · 1m");
+	// An event named like an Object method is still just an unknown event.
+	expect(learned("toString", MIN)).toBe("  learned 2 on toString · 1m");
 	expect(learned("prompt", MIN)).toBe("  learned 2 on prompt · 1m");
 });
 
@@ -92,11 +94,51 @@ test("outside a git repository memorq publishes empty stores: the section says m
 	expect(body(memoryLines(outside, 0, 36, NOW))).toEqual(["  not a git repo · nothing to learn"]);
 });
 
-test("a long line is fitted to the width", () => {
-	const lines = memoryLines(state({ learned: { count: 12, trigger: "from-a-harness-with-a-very-long-event-name", at: NOW } }), 0, 36, NOW);
-	for (const line of lines) expect(visibleWidth(line)).toBe(36);
-	// Truncation closes its ellipsis with a colour reset.
-	expect(lines[2]!.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toMatch(/^ {2}learned 12 on from-a-harness.*…$/);
+test("a long learned line cuts the trigger, never the age", () => {
+	const triggers = [
+		"ship",
+		"compact",
+		"checkpoint",
+		"idle",
+		"session_end",
+		"manual",
+		"sweep",
+		"from-a-harness-with-a-very-long-event-name",
+	];
+	for (const trigger of triggers) {
+		const line = memoryLines(state({ learned: { count: 12, trigger, at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
+		expect(visibleWidth(line)).toBe(36);
+		expect(line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toEndWith(" · 59m");
+	}
+	const cut = memoryLines(state({ learned: { count: 12, trigger: "ship", at: NOW - 59 * MIN } }), 0, 36, NOW)[2]!;
+	expect(cut.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).toBe("  learned 12 after last git p… · 59m");
+});
+
+test("a state is only taken when every field the section reads has the right shape", () => {
+	const good = state({ learned: { count: 2, trigger: "ship", at: NOW }, review: { dueInSessions: 2 } });
+	expect(isMemorqState(good)).toBe(true);
+	expect(isMemorqState(state({ review: { running: true, notes: 4 } }))).toBe(true);
+	expect(isMemorqState({ ...good, learned: undefined, review: undefined })).toBe(true);
+	for (const bad of [
+		undefined,
+		null,
+		"state",
+		{ ...good, notes: "47" },
+		{ ...good, usedThisTurn: undefined },
+		{ ...good, stores: null },
+		{ ...good, stores: { notes: 1, rules: "", skills: "" } },
+		{ ...good, stores: { notes: "", rules: "" } },
+		{ ...good, review: "soon" },
+		{ ...good, review: { dueInSessions: "2" } },
+		{ ...good, review: { running: true } },
+		{ ...good, learned: 2 },
+		{ ...good, learned: { count: "2", trigger: "ship", at: NOW } },
+		{ ...good, learned: { count: 2, trigger: "ship", at: "today" } },
+		{ ...good, learned: { count: 2, trigger: 7, at: NOW } },
+		{ ...good, enabled: "maybe" },
+		{ ...good, paused: "no" },
+	])
+		expect(isMemorqState(bad)).toBe(false);
 });
 
 test("a read counts when it opens a note, rule or skill wherever memorq keeps it", () => {
@@ -120,6 +162,9 @@ test("a read counts when it opens a note, rule or skill wherever memorq keeps it
 	expect(isNoteRead(`${home}/orq-ai__orqi/notes`, machine(), roots, repo)).toBe(false);
 	expect(isNoteRead("src/main.ts", inRepo, roots, repo)).toBe(false);
 	expect(isNoteRead(`${repo}/.memorq-not/notes/a.md`, inRepo, roots, repo)).toBe(false);
+	// A name that merely starts with two dots is inside; climbing out is not.
+	expect(isNoteRead(`${repo}/.memorq/notes/..a.md`, inRepo, roots, repo)).toBe(true);
+	expect(isNoteRead(`${repo}/.memorq/notes/../../src/x.md`, inRepo, roots, repo)).toBe(false);
 	// Outside a repo the stores are empty strings, which must not match the working directory.
 	expect(isNoteRead("src/main.ts", { notes: "", rules: "", skills: "" }, roots, repo)).toBe(false);
 });

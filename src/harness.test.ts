@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import { startupTheme, VERSION } from "./branding.ts";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -476,9 +476,18 @@ function harnessOn(agentDir: string, options: { bus?: ReturnType<typeof fakeBus>
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
 	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
 	const bus = options.bus ?? fakeBus();
+	// pi drops an instance's bus subscriptions with it: stop() does the same.
+	const unsubscribe: (() => void)[] = [];
 	const pi = {
 		on: (name: string, handler: any) => handlers.set(name, handler),
-		events: bus,
+		events: {
+			on: (channel: string, handler: (data: unknown) => void) => {
+				const off = bus.on(channel, handler);
+				unsubscribe.push(off);
+				return off;
+			},
+			emit: bus.emit,
+		},
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: () => {},
 		registerShortcut: () => {},
@@ -529,8 +538,11 @@ function harnessOn(agentDir: string, options: { bus?: ReturnType<typeof fakeBus>
 		},
 	};
 	const start = async () => handlers.get("session_start")!({ reason: "startup" }, ctx);
-	/** End the session as /reload does, which stops the sampling timer session_start began. */
-	const stop = async () => handlers.get("session_shutdown")!({ reason: "reload" }, { ...ctx, mode: "print" });
+	/** End the session as /reload does: the sampling timer stops and pi drops this instance's subscriptions. */
+	const stop = async () => {
+		await handlers.get("session_shutdown")!({ reason: "reload" }, { ...ctx, mode: "print" });
+		for (const off of unsubscribe.splice(0)) off();
+	};
 	/** The inspector's memory section as drawn, or [] when it is not. */
 	const memory = () => {
 		const lines = opened.inspector!.render(38).map((line) => bare(line).slice(1, -1).trimEnd());
@@ -539,9 +551,9 @@ function harnessOn(agentDir: string, options: { bus?: ReturnType<typeof fakeBus>
 		const end = lines.findIndex((line, i) => i > at && !line.startsWith("  "));
 		return lines.slice(at + 1, end < 0 ? undefined : end).map((line) => line.trim());
 	};
-	const read = async (id: string, path: string, isError = false) => {
-		await handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "read", args: { path } }, ctx);
-		await handlers.get("tool_execution_end")!({ toolCallId: id, toolName: "read", isError, durationMs: 1 }, ctx);
+	const read = async (id: string, path: string, isError = false, parentToolCallId?: string) => {
+		await handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "read", args: { path }, parentToolCallId }, ctx);
+		await handlers.get("tool_execution_end")!({ toolCallId: id, toolName: "read", isError, durationMs: 1, parentToolCallId }, ctx);
 	};
 	return { commands, ctx, notices, opened, handlers, bus, start, stop, memory, read };
 }
@@ -738,10 +750,78 @@ test("a read of a note counts, wherever memorq keeps it; other reads and failed 
 		await h.read("r4", "src/main.ts");
 		await h.read("r5", "/home/me/.memorq/orq-ai__orqi/notes/missing.md", true);
 		expect(h.memory()[1]).toBe("using 3 this turn · read 3");
+		// A subagent opening a note is a read too.
+		await h.read("r6", "/home/me/.memorq/orq-ai__orqi/notes/b.md", false, "subagent-1");
+		expect(h.memory()[1]).toBe("using 3 this turn · read 4");
 	} finally {
 		await h.stop();
 		if (home === undefined) delete process.env.ORQ_NOTES_HOME;
 		else process.env.ORQ_NOTES_HOME = home;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a malformed memorq:state is ignored and the last good one stays drawn", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState());
+		for (const bad of [
+			null,
+			{ ...memorqState(), stores: { notes: 1, rules: "", skills: "" } },
+			{ ...memorqState(), review: "soon" },
+			{ ...memorqState(), learned: { count: 2, trigger: "ship" } },
+			{ ...memorqState(), notes: "many" },
+		]) {
+			h.bus.emit("memorq:state", bad);
+			expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+		}
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a note read through a symlink counts, whichever side of the link the store names", async () => {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "orqi-memory-")));
+	const real = join(dir, "real-store");
+	mkdirSync(join(real, "notes"), { recursive: true });
+	writeFileSync(join(real, "notes", "a.md"), "a");
+	symlinkSync(real, join(dir, "linked-store"));
+	const stores = (root: string) => ({ notes: join(root, "notes"), rules: join(root, "rules"), skills: join(root, "skills") });
+	try {
+		const viaReal = harnessOn(dir, { cwd: dir });
+		await viaReal.start();
+		viaReal.bus.emit("memorq:state", memorqState({ stores: stores(real) }));
+		await viaReal.read("r1", join(dir, "linked-store", "notes", "a.md"));
+		expect(viaReal.memory()[1]).toBe("using 3 this turn · read 1");
+		await viaReal.stop();
+		const viaLink = harnessOn(dir, { cwd: dir });
+		await viaLink.start();
+		viaLink.bus.emit("memorq:state", memorqState({ stores: stores(join(dir, "linked-store")) }));
+		await viaLink.read("r1", join(real, "notes", "a.md"));
+		expect(viaLink.memory()[1]).toBe("using 3 this turn · read 1");
+		await viaLink.stop();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("ORQ_NOTES=off is read at session start, not in a render", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const before = process.env.ORQ_NOTES;
+	delete process.env.ORQ_NOTES;
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		process.env.ORQ_NOTES = "off";
+		await h.commands.get("panel")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[2]).toBe("[ ] memory  · install memorq");
+	} finally {
+		await h.stop();
+		if (before === undefined) delete process.env.ORQ_NOTES;
+		else process.env.ORQ_NOTES = before;
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -761,6 +841,8 @@ test("/reload and /new: the next instance asks again and draws the fresh state",
 		await next.start();
 		expect(bus.sent.filter((channel) => channel === "memorq:state?").length).toBe(2);
 		expect(next.memory()[0]).toBe("13 notes for this repo");
+		// The old instance is gone from the bus: it keeps what it last drew.
+		expect(first.memory()[0]).toBe("12 notes for this repo");
 		await next.stop();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
