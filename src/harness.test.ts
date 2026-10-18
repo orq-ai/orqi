@@ -1005,7 +1005,8 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 		await h.start();
 		expect(hosts).toHaveLength(2);
 		const host = hosts[1];
-		expect(Object.keys(host).sort()).toEqual(["panel", "pickModel"]);
+		expect(Object.keys(host).sort()).toEqual(["contextPercent", "panel", "pickModel"]);
+		expect(host.contextPercent).toEqual(expect.any(Function));
 		expect(host.panel.shown()).toBe(true);
 		host.panel.set(false);
 		expect(host.panel.shown()).toBe(false);
@@ -1017,6 +1018,29 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 		expect(await host.pickModel("openai/gpt-5")).toBeUndefined();
 	} finally {
 		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a closed session's memorq host never returns its old context percentage", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-host-stale-context-"));
+	const h = harnessOn(dir);
+	const hosts: any[] = [];
+	let stopped = false;
+	h.bus.on("memorq:host", (host) => hosts.push(host));
+	try {
+		await h.start();
+		(h.ctx as any).model = { id: "openai/gpt-5", contextWindow: 1_000 };
+		(h.ctx as any).getContextUsage = () => ({ tokens: 100, contextWindow: 1_000 });
+		await h.handlers.get("agent_end")!({}, h.ctx);
+		h.bus.emit("memorq:host?", undefined);
+		const host = hosts.at(-1)!;
+		expect(host.contextPercent()).toBe(10);
+		await h.stop();
+		stopped = true;
+		expect(host.contextPercent()).toBeUndefined();
+	} finally {
+		if (!stopped) await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -1958,7 +1982,8 @@ test("the gate: a verb table, unknown never benign, every server tool has a know
 
 test("the gate asks before a one-way call, remembers 'this turn' until the answer lands, and blocks without a UI", async () => {
 	const trajectory = new Trajectory();
-	const gate = orqGate(trajectory);
+	const decisions: string[] = [];
+	const gate = orqGate(trajectory, () => decisions.push("decision"));
 	const call = (id: string, tool: string, input: Record<string, unknown> = {}) => {
 		trajectory.toolStart(id, `mcp__orq__${tool}`, input);
 		return { toolCallId: id, toolName: `mcp__orq__${tool}`, input };
@@ -1983,17 +2008,21 @@ test("the gate asks before a one-way call, remembers 'this turn' until the answe
 	expect(denied).toEqual({ block: true, reason: "The user refused this one-way call (delete_dataset). Ask before trying again." });
 	expect(asked[0]).toBe('delete_dataset · one-way: cannot be undone\n{"api_key":"•••","dataset_id":"01M4"}');
 	expect(trajectory.steps.at(-1)?.gate).toBe("denied");
+	expect(decisions).toEqual(["decision"]);
 	// Allow once asks again next time; allow for this turn does not, until the turn ends.
 	expect(await gate.onToolCall(call("d2", "delete_dataset"), ui(ALLOW_ONCE))).toBeUndefined();
 	expect(await gate.onToolCall(call("d3", "delete_dataset"), ui(ALLOW_TURN))).toBeUndefined();
 	expect(await gate.onToolCall(call("d4", "delete_skill"), ui(undefined))).toBeUndefined();
 	expect(asked).toHaveLength(3);
 	expect(trajectory.steps.at(-1)?.gate).toBe("allowed");
+	expect(decisions).toEqual(["decision", "decision", "decision"]);
 	gate.endTurn();
 	expect((await gate.onToolCall(call("d5", "delete_skill"), ui(undefined)))?.block).toBe(true);
+	expect(decisions).toEqual(["decision", "decision", "decision", "decision"]);
 	// One-shot: nobody to ask, so the call is blocked and the model says how to confirm.
 	const oneShot = await gate.onToolCall(call("d6", "delete_dataset"), { hasUI: false, ui: {} as any });
 	expect(oneShot?.reason).toContain("rerun orqi interactively");
+	expect(decisions).toEqual(["decision", "decision", "decision", "decision"]);
 	// Not an orq tool: not the gate's business.
 	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: {} }, ui(undefined))).toBeUndefined();
 });

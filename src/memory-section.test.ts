@@ -82,6 +82,7 @@ test("every trigger reads as words, and the age as m, h or d", () => {
 	expect(learned("compact", 5 * MIN)).toBe("  learned 2 at compaction · 5m");
 	expect(learned("checkpoint", 2 * 60 * MIN)).toBe("  learned 2 at checkpoint · 2h");
 	expect(learned("idle", 24 * 60 * MIN)).toBe("  learned 2 while idle · 1d");
+	expect(learned("decision", MIN)).toBe("  learned 2 after decision · 1m");
 	expect(learned("session_end", 10_000)).toBe("  learned 2 at session end · now");
 	expect(learned("manual", MIN)).toBe("  learned 2 on request · 1m");
 	expect(learned("sweep", MIN)).toBe("  learned 2 from past work · 1m");
@@ -117,7 +118,7 @@ test("a checkpoint learn names its threshold when memorq sends it; a failed revi
 test("memorq's own types are states orqi accepts, and orqi's host is memorq's", () => {
 	// A hand copy of memorq's exported types. Re-copy them from orq-ai/orq-knowledge-notes
 	// integrations/pi/state.ts (copied from main at 756f87d) whenever memorq changes its payload.
-	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "session_end" | "manual" | "sweep";
+	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
 	interface ProducerState {
 		version: string;
 		notes: number;
@@ -175,6 +176,7 @@ test("a long learned line cuts the trigger, never the age", () => {
 		"compact",
 		"checkpoint",
 		"idle",
+		"decision",
 		"session_end",
 		"manual",
 		"sweep",
@@ -205,6 +207,7 @@ test("every trigger, with a two-digit count, fits whole in the panel line and th
 		{ trigger: "checkpoint" },
 		{ trigger: "checkpoint", pct: 80 },
 		{ trigger: "idle" },
+		{ trigger: "decision" },
 		{ trigger: "session_end" },
 		{ trigger: "manual" },
 		{ trigger: "sweep" },
@@ -242,6 +245,7 @@ test("a learn that wrote nothing reads as nothing new, everywhere it is drawn, w
 		{ trigger: "checkpoint" },
 		{ trigger: "checkpoint", pct: 80 },
 		{ trigger: "idle" },
+		{ trigger: "decision" },
 		{ trigger: "session_end" },
 		{ trigger: "manual" },
 		{ trigger: "sweep" },
