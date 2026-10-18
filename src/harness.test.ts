@@ -30,7 +30,7 @@ import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
-import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate } from "./gate.ts";
+import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate, toolGate } from "./gate.ts";
 import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
 import { brandBuiltinCommands, bugHint, bugIssueUrl, ORQI_ISSUES_URL, redirectPiBugCommand } from "./bug.ts";
 
@@ -2023,8 +2023,19 @@ test("the gate asks before a one-way call, remembers 'this turn' until the answe
 	const oneShot = await gate.onToolCall(call("d6", "delete_dataset"), { hasUI: false, ui: {} as any });
 	expect(oneShot?.reason).toContain("rerun orqi interactively");
 	expect(decisions).toEqual(["decision", "decision", "decision", "decision"]);
-	// Not an orq tool: not the gate's business.
-	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: {} }, ui(undefined))).toBeUndefined();
+	// Other local tools remain outside the gate; Bash is now explicitly gated.
+	expect(await gate.onToolCall({ toolCallId: "other", toolName: "other", input: {} }, ui(undefined))).toBeUndefined();
+});
+
+test("auto mode allows Bash only in an interactive session", async () => {
+	const calls: unknown[][] = [];
+	const gate = toolGate({ gate: (...args: unknown[]) => calls.push(args) }, undefined, "auto");
+	const bash = { toolCallId: "b", toolName: "bash", input: { command: "git status" } };
+	expect(await gate.onToolCall(bash, { hasUI: true, ui: {} as any })).toBeUndefined();
+	expect(calls.at(-1)).toEqual(["b", "one_way", "allowed"]);
+
+	const headless = toolGate({ gate: () => {} }, undefined, "auto");
+	expect((await headless.onToolCall(bash, { hasUI: false, ui: {} as any }))?.block).toBe(true);
 });
 
 test("pi built-ins are branded as orqi", () => {
