@@ -56,16 +56,19 @@ export function toolGate(
 	onDecision: () => void = () => {},
 	permissionMode: PermissionMode = "prompt",
 ) {
-	let turnAllowed = false;
+	let bashAllowedForTurn = false;
+	let oneWayOrqAllowedForTurn = false;
 
 	const ask = async (
 		event: ToolCall,
 		ctx: ToolContext,
 		label: string,
 		details: unknown,
+		allowedForTurn: () => boolean,
+		allowForTurn: () => void,
 		refusal = label,
 	): Promise<ToolCallEventResult | undefined> => {
-		if (turnAllowed) {
+		if (allowedForTurn()) {
 			trajectory.gate(event.toolCallId, "one_way", "allowed");
 			return undefined;
 		}
@@ -79,7 +82,7 @@ export function toolGate(
 		trajectory.gate(event.toolCallId, "one_way", "waiting");
 		const choice = await ctx.ui.select(`${label}\n${canonical(maskSecrets(details))}`, [ALLOW_ONCE, ALLOW_TURN, DENY]);
 		if (choice === ALLOW_ONCE || choice === ALLOW_TURN) {
-			if (choice === ALLOW_TURN) turnAllowed = true;
+			if (choice === ALLOW_TURN) allowForTurn();
 			trajectory.gate(event.toolCallId, "one_way", "allowed");
 			onDecision();
 			return undefined;
@@ -91,7 +94,8 @@ export function toolGate(
 
 	return {
 		endTurn: () => {
-			turnAllowed = false;
+			bashAllowedForTurn = false;
+			oneWayOrqAllowedForTurn = false;
 		},
 		onToolCall: async (event: ToolCall, ctx: ToolContext): Promise<ToolCallEventResult | undefined> => {
 			if (event.toolName === "bash") {
@@ -99,7 +103,17 @@ export function toolGate(
 					trajectory.gate(event.toolCallId, "one_way", "allowed");
 					return undefined;
 				}
-				return ask(event, ctx, "bash · command", event.input, "the Bash command");
+				return ask(
+					event,
+					ctx,
+					"bash · command",
+					event.input,
+					() => bashAllowedForTurn,
+					() => {
+						bashAllowedForTurn = true;
+					},
+					"the Bash command",
+				);
 			}
 			if (!event.toolName.startsWith(TOOL_PREFIX)) return undefined;
 			const tool = bareName(event.toolName);
@@ -108,7 +122,17 @@ export function toolGate(
 				trajectory.gate(event.toolCallId, door);
 				return undefined;
 			}
-			return ask(event, ctx, `${tool} · one-way: cannot be undone`, event.input, `this one-way call (${tool})`);
+			return ask(
+				event,
+				ctx,
+				`${tool} · one-way: cannot be undone`,
+				event.input,
+				() => oneWayOrqAllowedForTurn,
+				() => {
+					oneWayOrqAllowedForTurn = true;
+				},
+				`this one-way call (${tool})`,
+			);
 		},
 	};
 }

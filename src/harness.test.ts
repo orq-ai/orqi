@@ -2027,6 +2027,16 @@ test("the gate asks before a one-way call, remembers 'this turn' until the answe
 	expect(await gate.onToolCall({ toolCallId: "other", toolName: "other", input: {} }, ui(undefined))).toBeUndefined();
 });
 
+test("allowing Bash for this turn does not allow an irreversible Orq call", async () => {
+	const choices = [ALLOW_TURN, undefined];
+	const gate = toolGate({ gate: () => {} });
+	const ui = { hasUI: true, ui: { select: async () => choices.shift() } as any };
+	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: { command: "git status" } }, ui)).toBeUndefined();
+	expect((await gate.onToolCall({ toolCallId: "d", toolName: "mcp__orq__delete_dataset", input: { dataset_id: "01M" } }, ui))?.block).toBe(
+		true,
+	);
+});
+
 test("auto mode allows Bash only in an interactive session", async () => {
 	const calls: unknown[][] = [];
 	const gate = toolGate({ gate: (...args: unknown[]) => calls.push(args) }, undefined, "auto");

@@ -29,7 +29,10 @@ export function takePermissionModeFlag(argv: string[]): PermissionModeFlag {
 			kept.push(arg);
 			continue;
 		}
-		const value = arg === "--permission-mode" ? argv[++i] : arg.slice(18);
+		const value = arg === "--permission-mode" ? argv[i + 1] : arg.slice(18);
+		if (arg === "--permission-mode" && (!value || value.startsWith("-")))
+			return { argv, mode, error: "--permission-mode requires prompt or auto" };
+		if (arg === "--permission-mode") i++;
 		if (seen) return { argv, mode, error: "--auto or --permission-mode may be given only once" };
 		if (value !== "prompt" && value !== "auto") return { argv, mode, error: "--permission-mode must be prompt or auto" };
 		mode = value;

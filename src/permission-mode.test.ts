@@ -19,5 +19,6 @@ test("--auto is the shorthand for auto permission mode", () => {
 test("rejects duplicate and invalid permission modes", () => {
 	expect(takePermissionModeFlag(["orqi", "--auto", "--permission-mode=prompt"]).error).toContain("only once");
 	expect(takePermissionModeFlag(["orqi", "--permission-mode", "bypass"]).error).toContain("prompt or auto");
-	expect(takePermissionModeFlag(["orqi", "--permission-mode"]).error).toContain("prompt or auto");
+	expect(takePermissionModeFlag(["orqi", "--permission-mode"]).error).toContain("requires prompt or auto");
+	expect(takePermissionModeFlag(["orqi", "--permission-mode", "--auto"]).error).toContain("requires prompt or auto");
 });

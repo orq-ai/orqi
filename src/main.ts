@@ -10,8 +10,8 @@
  *   orqi --session <id>  resume a session (id, id prefix or .jsonl path)
  *   orqi --version       print the version and exit
  *   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
-  orqi --permission-mode=<prompt|auto>  control local command confirmations
-  orqi --auto  shorthand for --permission-mode=auto
+   orqi --permission-mode=<prompt|auto>  control local command confirmations
+   orqi --auto  shorthand for --permission-mode=auto
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -137,8 +137,8 @@ if (oneShot === "--help" || oneShot === "-h") {
   orqi "<prompt>"      one-shot, prints the answer and exits
   orqi --version       print the version and exit
   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
-  orqi --permission-mode=<prompt|auto>  control local command confirmations
-  orqi --auto  shorthand for --permission-mode=auto
+   orqi --permission-mode=<prompt|auto>  control local command confirmations
+   orqi --auto  shorthand for --permission-mode=auto
   orqi update          replace this binary with the latest release
   orqi plugin install <source>   install plugin (skills+MCP)
   orqi plugin list               list installed plugins
