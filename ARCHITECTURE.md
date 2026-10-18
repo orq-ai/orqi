@@ -122,9 +122,12 @@ under its own row, replayed on resume and exported by `/trajectory`.
 `/context` opens the same split as a table with the levers that move it. On quit, an exit summary of
 the session prints above pi's resume hint.
 
-Before an orq tool runs, `src/gate.ts` reads its door off the verb: reads are benign,
-`create_`/`update_` are two-way and only recorded, `delete_`/`submit_`/`invoke_` and any verb not
-in the table are one-way and wait for the user in a dialog (allow once, allow for this turn, deny).
+Before a tool runs, `src/gate.ts` applies the session's permission mode. Local Bash commands
+wait for the user in a dialog (allow once, allow for this turn, deny), unless an interactive TUI
+started with `--permission-mode=auto` (or `--auto`); headless runs still block Bash because nobody
+can confirm it. Orq tools read their door off the verb: reads are benign, `create_`/`update_` are
+two-way and only recorded, while `delete_`/`submit_`/`invoke_` and any verb not in the table are
+one-way and always wait for the dialog.
 
 `/trace` reads the router's `x-orq-trace-id` header off each response and asks `list_spans` for the
 spans, leading with the `auto-router` span when a smart router answered: that is how platform

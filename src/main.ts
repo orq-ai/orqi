@@ -10,6 +10,8 @@
  *   orqi --session <id>  resume a session (id, id prefix or .jsonl path)
  *   orqi --version       print the version and exit
  *   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
+   orqi --permission-mode=<prompt|auto>  control local command confirmations
+   orqi --auto  shorthand for --permission-mode=auto
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -63,7 +65,8 @@ import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
-import { createLocalFileTools } from "./local-tools.ts";
+import { createLocalTools } from "./local-tools.ts";
+import { takePermissionModeFlag } from "./permission-mode.ts";
 import { createAskUserTool } from "./ask-user.ts";
 import { createSubagentTool } from "./subagent.ts";
 import { runUpdate } from "./update.ts";
@@ -102,6 +105,14 @@ if (serverFlag.error) {
 process.argv = serverFlag.argv;
 if (serverFlag.server) process.env.ORQ_SERVER = serverFlag.server;
 
+const permissionFlag = takePermissionModeFlag(process.argv);
+if (permissionFlag.error) {
+	console.error(permissionFlag.error);
+	process.exit(2);
+}
+process.argv = permissionFlag.argv;
+const permissionMode = permissionFlag.mode;
+
 // `orqi --session <id>` resumes a session (the command pi's quit hint names);
 // anything else in argv[2] is a one-shot prompt.
 const sessionArg = process.argv[2] === "--session" ? (process.argv[3] ?? "") : undefined;
@@ -126,6 +137,8 @@ if (oneShot === "--help" || oneShot === "-h") {
   orqi "<prompt>"      one-shot, prints the answer and exits
   orqi --version       print the version and exit
   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
+   orqi --permission-mode=<prompt|auto>  control local command confirmations
+   orqi --auto  shorthand for --permission-mode=auto
   orqi update          replace this binary with the latest release
   orqi plugin install <source>   install plugin (skills+MCP)
   orqi plugin list               list installed plugins
@@ -525,12 +538,12 @@ const routing = registerRouting(
 	process.env.ORQI_ROUTE_LOG === "1" ? join(AGENT_DIR, "routes.jsonl") : undefined,
 );
 const model = pickModel(models);
-// `edit` retains pi's native before/after diff preview. Deliberately do not add
-// `bash` or `write`: targeted edits are inspectable, while shell execution and
-// whole-file replacement need a separate product decision.
-const localFileTools = createLocalFileTools(process.cwd());
+// `edit` retains pi's native before/after diff preview. Bash is exposed through
+// the permission gate; whole-file replacement remains excluded because targeted
+// edits are inspectable.
+const localTools = createLocalTools(process.cwd());
 const customTools = [
-	...localFileTools,
+	...localTools,
 	createAskUserTool(),
 	createSubagentTool({
 		model,
@@ -671,7 +684,7 @@ const makeServices = async () => {
 					memorq: () => (memorqPackage ? "installed" : "none"),
 					// MCP tools arrive after their connection completes; local tools,
 					// ask_user and subagent are registered synchronously through `customTools`.
-					toolCount: () => localFileTools.length + 2 + mcp.toolNames().length,
+					toolCount: () => localTools.length + 2 + mcp.toolNames().length,
 					// Slash commands cannot run tools in pi, so they make one direct
 					// call - after waiting for any session renewal in flight, so the
 					// short-lived connection never carries a token about to expire.
@@ -695,6 +708,7 @@ const makeServices = async () => {
 					workspace: () => header.workspace,
 					refreshCatalogue,
 					routing,
+					permissionMode,
 				}),
 			],
 		},
@@ -760,6 +774,7 @@ function statusLine(connection: string, note = bootNote): string {
 		welcome && !credential ? undefined : models.note,
 		// A plugin newer than the binary shipped with; silent drift would otherwise be
 		// invisible until someone diffed behaviour against a colleague's machine.
+		permissionMode === "auto" ? "permissions auto" : undefined,
 		plugin.note,
 	]
 		.filter(Boolean)

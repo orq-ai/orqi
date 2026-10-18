@@ -40,7 +40,8 @@ import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
-import { orqGate } from "./gate.ts";
+import { toolGate } from "./gate.ts";
+import type { PermissionMode } from "./permission-mode.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { registerViewCommands } from "./harness-commands.ts";
@@ -61,6 +62,8 @@ export interface HarnessDeps {
 	project?: () => string | undefined;
 	/** `orq/auto`: its pool and decision feed. */
 	routing?: Routing;
+	/** Whether local Bash commands wait for confirmation or run automatically. */
+	permissionMode?: PermissionMode;
 	/** pi's model runtime (orq models only), for the picker orqi offers memorq; the session ctx has only the registry. */
 	modelRuntime?: ModelRuntime;
 	/** Whether memorq is installed as a package this session loads (src/memorq-detect.ts). */
@@ -1012,7 +1015,7 @@ export function orqHarness(deps: HarnessDeps) {
 		// pi's own MCP handler only waits for the server, so a block here still wins.
 		// A one-way dialog needs the keys /panel focus would otherwise swallow, so
 		// focus is released the moment the gate starts waiting.
-		const gate = orqGate(
+		const gate = toolGate(
 			{
 				gate: (toolCallId, door, verdict) => {
 					if (verdict === "waiting" && minimapFocused) {
@@ -1029,6 +1032,7 @@ export function orqHarness(deps: HarnessDeps) {
 					// A stale Pi handle after session replacement cannot notify memorq; the gate verdict still stands.
 				}
 			},
+			deps.permissionMode,
 		);
 		pi.on("tool_call", (event, ctx) => {
 			// ask_user's dialog needs the same keys, for the same reason.

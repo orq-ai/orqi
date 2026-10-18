@@ -1,15 +1,16 @@
 /**
- * The one-way gate: an orq tool call that cannot be undone waits for the user.
+ * The tool permission gate.
  *
- * The verdict comes from the tool's verb, not from the server: the orq MCP
- * server declares no annotations, and a classifier call per tool call would
- * sit in front of every read. A verb nobody listed is never benign, so a new
- * server tool asks before it runs until it is added here. Two-way calls are
- * recorded, not stopped; the exit summary counts them.
+ * Irreversible Orq MCP calls always wait for the user. Local Bash commands do
+ * too unless the interactive session started in `--permission-mode=auto`.
+ * A verb nobody listed is never benign, so a new server tool asks before it
+ * runs until it is added here. Two-way calls are recorded, not stopped; the
+ * exit summary counts them.
  */
 
 import type { ExtensionContext, ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 import { bareName, TOOL_PREFIX } from "./mcp.ts";
+import type { PermissionMode } from "./permission-mode.ts";
 import { canonical, type Door, type Step } from "./trajectory.ts";
 
 const VERBS: [RegExp, Door][] = [
@@ -41,23 +42,79 @@ export const ALLOW_ONCE = "Allow once";
 export const ALLOW_TURN = "Allow for this turn";
 export const DENY = "Deny";
 
+type ToolCall = Pick<ToolCallEvent, "toolCallId" | "toolName" | "input">;
+type ToolContext = Pick<ExtensionContext, "hasUI" | "ui">;
+
 /**
- * The `tool_call` handler and the per-turn memo. `endTurn` runs on
- * `agent_end`: "allow for this turn" never outlives the answer it was given for.
+ * The `tool_call` handler and its per-turn memo. `endTurn` runs on `agent_end`,
+ * so an "allow for this turn" decision never outlives the answer it was given
+ * for. `auto` applies only to interactive local Bash commands: headless runs
+ * still have no person who can authorize a command.
  */
-export function orqGate(
+export function toolGate(
 	trajectory: { gate(toolCallId: string, door: Door, gate?: Step["gate"]): void },
 	onDecision: () => void = () => {},
+	permissionMode: PermissionMode = "prompt",
 ) {
-	let turnAllowed = false;
+	let bashAllowedForTurn = false;
+	let oneWayOrqAllowedForTurn = false;
+
+	const ask = async (
+		event: ToolCall,
+		ctx: ToolContext,
+		label: string,
+		details: unknown,
+		allowedForTurn: () => boolean,
+		allowForTurn: () => void,
+		refusal = label,
+	): Promise<ToolCallEventResult | undefined> => {
+		if (allowedForTurn()) {
+			trajectory.gate(event.toolCallId, "one_way", "allowed");
+			return undefined;
+		}
+		if (!ctx.hasUI) {
+			trajectory.gate(event.toolCallId, "one_way", "denied");
+			return {
+				block: true,
+				reason: `${label} requires confirmation and this run has no one to confirm it. Tell the user to rerun orqi interactively.`,
+			};
+		}
+		trajectory.gate(event.toolCallId, "one_way", "waiting");
+		const choice = await ctx.ui.select(`${label}\n${canonical(maskSecrets(details))}`, [ALLOW_ONCE, ALLOW_TURN, DENY]);
+		if (choice === ALLOW_ONCE || choice === ALLOW_TURN) {
+			if (choice === ALLOW_TURN) allowForTurn();
+			trajectory.gate(event.toolCallId, "one_way", "allowed");
+			onDecision();
+			return undefined;
+		}
+		trajectory.gate(event.toolCallId, "one_way", "denied");
+		onDecision();
+		return { block: true, reason: `The user refused ${refusal}. Ask before trying again.` };
+	};
+
 	return {
 		endTurn: () => {
-			turnAllowed = false;
+			bashAllowedForTurn = false;
+			oneWayOrqAllowedForTurn = false;
 		},
-		onToolCall: async (
-			event: Pick<ToolCallEvent, "toolCallId" | "toolName" | "input">,
-			ctx: Pick<ExtensionContext, "hasUI" | "ui">,
-		): Promise<ToolCallEventResult | undefined> => {
+		onToolCall: async (event: ToolCall, ctx: ToolContext): Promise<ToolCallEventResult | undefined> => {
+			if (event.toolName === "bash") {
+				if (permissionMode === "auto" && ctx.hasUI) {
+					trajectory.gate(event.toolCallId, "one_way", "allowed");
+					return undefined;
+				}
+				return ask(
+					event,
+					ctx,
+					"bash · command",
+					event.input,
+					() => bashAllowedForTurn,
+					() => {
+						bashAllowedForTurn = true;
+					},
+					"the Bash command",
+				);
+			}
 			if (!event.toolName.startsWith(TOOL_PREFIX)) return undefined;
 			const tool = bareName(event.toolName);
 			const door = doorOf(tool);
@@ -65,32 +122,20 @@ export function orqGate(
 				trajectory.gate(event.toolCallId, door);
 				return undefined;
 			}
-			if (turnAllowed) {
-				trajectory.gate(event.toolCallId, door, "allowed");
-				return undefined;
-			}
-			if (!ctx.hasUI) {
-				trajectory.gate(event.toolCallId, door, "denied");
-				return {
-					block: true,
-					reason: `${tool} is a one-way call (it cannot be undone) and this run has no one to confirm it. Tell the user to rerun orqi interactively to confirm.`,
-				};
-			}
-			trajectory.gate(event.toolCallId, door, "waiting");
-			const choice = await ctx.ui.select(`${tool} · one-way: cannot be undone\n${canonical(maskSecrets(event.input))}`, [
-				ALLOW_ONCE,
-				ALLOW_TURN,
-				DENY,
-			]);
-			if (choice === ALLOW_ONCE || choice === ALLOW_TURN) {
-				if (choice === ALLOW_TURN) turnAllowed = true;
-				trajectory.gate(event.toolCallId, door, "allowed");
-				onDecision();
-				return undefined;
-			}
-			trajectory.gate(event.toolCallId, door, "denied");
-			onDecision();
-			return { block: true, reason: `The user refused this one-way call (${tool}). Ask before trying again.` };
+			return ask(
+				event,
+				ctx,
+				`${tool} · one-way: cannot be undone`,
+				event.input,
+				() => oneWayOrqAllowedForTurn,
+				() => {
+					oneWayOrqAllowedForTurn = true;
+				},
+				`this one-way call (${tool})`,
+			);
 		},
 	};
 }
+
+/** Compatibility name for extensions importing the original MCP-only gate. */
+export const orqGate = toolGate;
