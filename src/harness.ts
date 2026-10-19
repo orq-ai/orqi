@@ -392,6 +392,7 @@ export function orqHarness(deps: HarnessDeps) {
 				if (run !== gitRun) return;
 				git = status.code === 0 && gitDir ? gitBadges(status.stdout, gitOperation(gitDir)) : undefined;
 			} catch {
+				if (run !== gitRun) return; // a newer refresh owns the result
 				git = undefined;
 			}
 			render();

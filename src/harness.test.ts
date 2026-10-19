@@ -498,6 +498,29 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 	expect(notices).toContain("Refreshed 1 enabled models and 0 managed agents.");
 });
 
+test("footer git badges: a refresh that fails after a newer one finished leaves the newer badges", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-footer-git-"));
+	const calls: { args: string[]; ok: (out: { stdout: string; code: number }) => void; fail: (error: Error) => void }[] = [];
+	const exec = (_command: string, args: string[]) =>
+		new Promise<{ stdout: string; code: number }>((ok, fail) => calls.push({ args, ok, fail }));
+	const h = harnessOn(dir, { exec });
+	try {
+		await h.start(); // refresh 1 waits on rev-parse
+		h.branchChanged(); // refresh 2 starts behind it
+		calls[1]!.ok({ stdout: dir, code: 0 });
+		await Bun.sleep(0);
+		calls[2]!.ok({ stdout: "# branch.head main\n1 .M N... 100644 100644 100644 a b src/x.ts\n", code: 0 });
+		await Bun.sleep(0);
+		expect(h.footer()).toContain("~1");
+		calls[0]!.fail(new Error("spawn failed")); // the older refresh dies late
+		await Bun.sleep(0);
+		expect(h.footer()).toContain("~1");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 /** A fake of pi's in-process event bus: what the harness and memorq share. */
 function fakeBus() {
 	const listeners = new Map<string, Set<(data: unknown) => void>>();
@@ -532,6 +555,8 @@ function harnessOn(
 		modelRuntime?: unknown;
 		now?: () => number;
 		settingsManager?: SettingsManager;
+		/** pi.exec, for the footer's git badges; absent, every call throws. */
+		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
 	} = {},
 ) {
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
@@ -566,6 +591,7 @@ function harnessOn(
 		getThinkingLevel: () => "off",
 		getAllTools: () => [],
 		getActiveTools: () => [],
+		...(options.exec ? { exec: options.exec } : {}),
 	};
 	orqHarness({
 		agentDir,
@@ -581,6 +607,8 @@ function harnessOn(
 	const notices: string[] = [];
 	const widgets = new Map<string, unknown>();
 	const opened: { panel?: Panel; inspector?: { render(width: number): string[] } } = {};
+	let footer: { render(width: number): string[] } | undefined;
+	let branchChanged: (() => void) | undefined;
 	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
 	const ctx = {
 		mode: "tui",
@@ -597,10 +625,13 @@ function harnessOn(
 			setWorkingMessage: () => {},
 			onTerminalInput: () => () => {},
 			setFooter: (factory: any) => {
-				factory({ requestRender: () => {} }, plainTheme, {
-					onBranchChange: () => () => {},
+				footer = factory({ requestRender: () => {} }, plainTheme, {
+					onBranchChange: (callback: () => void) => {
+						branchChanged = callback;
+						return () => {};
+					},
 					getExtensionStatuses: () => new Map(),
-					getGitBranch: () => undefined,
+					getGitBranch: () => (options.exec ? "main" : undefined),
 				});
 			},
 			custom: (factory: any, options?: any) => {
@@ -637,7 +668,25 @@ function harnessOn(
 			.inspector!.render(38)
 			.map((line) => bare(line).slice(1, -1).trimEnd())
 			.filter((line) => /^[ ▌][^─\s] (user|assist|agent|tool|sub|route|memory) /.test(line));
-	return { commands, ctx, notices, opened, handlers, bus, start, stop, memory, read, entries, renderers, branch, rows, widgets };
+	return {
+		commands,
+		ctx,
+		notices,
+		opened,
+		handlers,
+		bus,
+		start,
+		stop,
+		memory,
+		read,
+		entries,
+		renderers,
+		branch,
+		rows,
+		widgets,
+		footer: () => footer!.render(200).join("\n"),
+		branchChanged: () => branchChanged!(),
+	};
 }
 
 /** The rows of a selectable panel as drawn, without the box. */
