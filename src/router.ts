@@ -260,8 +260,13 @@ export function policy(input: PolicyInput, floor = confidenceFloor()): { tier: T
 		return { tier: "medium", why: `fallback: ${why}`, fallback: true };
 	}
 	if (input.door && input.door !== "benign") return { tier: "hard", why: `door: ${input.door}`, arrow: "▲" };
-	const top = Math.max(...TIERS.map((tier) => (input.classified && !("error" in input.classified) ? (input.classified[tier] ?? 0) : 0)));
-	if (state?.tier && top < floor) return { tier: state.tier, why: `unsure ${top.toFixed(2).replace(/^0/, "")}: stays` };
+	const probabilities = input.classified;
+	// A choice answer without probabilities has no confidence to judge: route on it as before.
+	const answered = TIERS.some((tier) => probabilities[tier] !== undefined);
+	const top = Math.max(...TIERS.map((tier) => probabilities[tier] ?? 0));
+	// What the previous turn named: in a dry run that is `would`, not the default that answered.
+	const previous = state?.would?.tier ?? state?.tier;
+	if (answered && previous && top < floor) return { tier: previous, why: `unsure ${top.toFixed(2).replace(/^0/, "")}: stays` };
 	return { tier: tierOf(input.classified) };
 }
 

@@ -586,3 +586,37 @@ test("the route line in a dry run", () => {
 		}),
 	).toBe("route › easy → fast (dry run) █▁▁   easy 1.00 · medium .00 · hard .00   → gpt-5.6-terra · would gpt-5.6-luna");
 });
+
+test("review: an unsure follow-up in a dry run stays on what the previous turn named, as a live run would", async () => {
+	let answer: Record<Tier, number> = { easy: 0, medium: 0, hard: 1 };
+	const models = new Map(CATALOGUE.map((m) => [m.id, { id: m.id, provider: "orq" }]));
+	let virtual: any;
+	const runtime = {
+		getModel: (_p: string, id: string) => models.get(id),
+		registerProvider: () => {},
+		registerVirtualModel: (v: any) => (virtual = v),
+	};
+	const decider = createDecider(
+		undefined,
+		(async () =>
+			new Response(
+				JSON.stringify({ answers: { difficulty: { type: "choice", choice: "x", probabilities: answer, confidence: 1 } } }),
+			)) as unknown as typeof fetch,
+	);
+	const routing = registerRouting(runtime, CATALOGUE, "openai/gpt-5.6-terra", undefined, decider);
+	const seen: Decision[] = [];
+	routing.onDecision((d) => seen.push(d));
+	routing.dryRun = true;
+	const first = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "prove it" }] });
+	expect(seen.at(-1)!.would?.tier).toBe("hard");
+	answer = { easy: 0.4, medium: 0.35, hard: 0.25 };
+	await virtual.route({ reason: "user", thinkingLevel: "medium", state: first.state, messages: [{ role: "user", content: "yes, do it" }] });
+	expect(seen.at(-1)!.would).toEqual({ tier: "hard", model: "openai/gpt-5.6-sol" });
+	expect(seen.at(-1)!.why).toBe("unsure .40: stays");
+});
+
+test("review: a choice answer without probabilities never triggers the unsure rule", () => {
+	expect(
+		policy({ reason: "user", text: "x", state: { tier: "hard", model: "m" }, classified: {} as Record<Tier, number> }, 0.5).why,
+	).toBeUndefined();
+});

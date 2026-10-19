@@ -2855,6 +2855,9 @@ test("/route explain says how orq/auto decides in plain words; /route questions 
 		expect(explained).not.toMatch(/RES-\d|general_v2|evaluatorq|smart-router/);
 		expect(explained).toContain("orq/auto picks a model for each message you send");
 		expect(explained).toContain("easy goes to fast, medium to default, hard to frontier");
+		// Creating or updating changes state too, and goes to frontier like a delete does.
+		expect(explained).toContain("A message that changes something");
+		expect(explained).toContain("(creates, updates, deletes or sends) goes to frontier");
 		expect(explained).toContain("models   fast gpt-5.6-luna (auto)");
 		expect(explained).toContain("decider  typesafe/jev-latest");
 		expect(explained).toContain("/route questions");
