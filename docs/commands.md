@@ -52,7 +52,7 @@ The orq plugin adds its own commands too: `/quickstart`, `/traces`, `/analytics`
 | `/reconnect` | Retries the orq connection with the current credentials |
 | `/doctor` | Checks config, sign-in and reachability, problems first |
 | `/update` | Checks for a newer orqi release |
-| `/plugin` | Manages plugins: `/plugin list`, `/plugin update` |
+| `/plugin` | Manages plugins: `/plugin list`, and `/plugin update [source]`, which shows progress in the footer and reloads when done. Outside a session: `orqi plugin update`, or `orqi update --extensions` |
 | `/mcp` | Inspects and reconnects the orq MCP server |
 | `/bug` | Opens a prefilled issue on orq-ai/orqi for you to submit |
 

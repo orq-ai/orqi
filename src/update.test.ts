@@ -22,6 +22,7 @@ import { checksumLine, parseChecksum, sha256Hex, sidecar } from "./checksum.ts";
 import {
 	assetName,
 	checkDue,
+	extensionsUpdate,
 	formatStatus,
 	installMethod,
 	isNewer,
@@ -1103,4 +1104,17 @@ test("bun run dist writes a sidecar per tarball, in the format shasum -c reads",
 	expect(source).toContain('from "../src/checksum.ts"');
 	expect(source).toContain("checksumLine(sha256Hex(");
 	expect(source).toContain("sidecar(archive)");
+});
+
+test("`orqi update --extensions`, the command pi's package notice names, is `orqi plugin update`", () => {
+	const bin = ["bun", "boot.ts"];
+	expect(extensionsUpdate([...bin, "update", "--extensions"])).toEqual([...bin, "plugin", "update"]);
+	// Anything else is orqi's own update, or a prompt, and passes through untouched.
+	for (const argv of [
+		[...bin, "update"],
+		[...bin, "update", "--check"],
+		[...bin, "update", "--extensions", "x"],
+		[...bin, "--extensions"],
+	])
+		expect(extensionsUpdate(argv)).toEqual(argv);
 });
