@@ -630,3 +630,31 @@ test("review: orq/auto advertises the smallest output limit of its three models,
 	routing.pick("easy", "anthropic/claude-opus-5");
 	expect(registered.at(-1).maxTokens).toBe(32_000);
 });
+
+test("review: a dry run names the model that would really answer, and clipMiddle never exceeds a small limit", async () => {
+	const models = new Map(CATALOGUE.filter((m) => m.id !== "openai/gpt-5.6-luna").map((m) => [m.id, { id: m.id, provider: "orq" }]));
+	let virtual: any;
+	const runtime = {
+		getModel: (_p: string, id: string) => models.get(id),
+		registerProvider: () => {},
+		registerVirtualModel: (v: any) => (virtual = v),
+	};
+	const decider = createDecider(
+		undefined,
+		(async () =>
+			new Response(
+				JSON.stringify({
+					answers: { difficulty: { type: "choice", choice: "easy", probabilities: { easy: 1, medium: 0, hard: 0 }, confidence: 1 } },
+				}),
+			)) as unknown as typeof fetch,
+	);
+	const routing = registerRouting(runtime, CATALOGUE, "openai/gpt-5.6-terra", undefined, decider);
+	const seen: Decision[] = [];
+	routing.onDecision((d) => seen.push(d));
+	routing.dryRun = true;
+	// luna is the fast slot but cannot be resolved: a live run would fall back to default, so no "would" at all.
+	await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "hi" }] });
+	expect(seen.at(-1)!.would).toBeUndefined();
+	expect(clipMiddle("x".repeat(100), 10).length).toBeLessThanOrEqual(10);
+	expect(clipMiddle("x".repeat(100), 0)).toBe("");
+});

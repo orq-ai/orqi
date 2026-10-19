@@ -301,7 +301,9 @@ export const PROMPT_CHARS = 16_000;
 export function clipMiddle(text: string, max: number): string {
 	if (text.length <= max) return text;
 	const marker = (omitted: number) => `\n\n[… ${omitted} characters omitted …]\n\n`;
-	const budget = Math.max(0, max - marker(text.length).length);
+	// Too small a limit for the marker: the start alone, still within it.
+	if (marker(text.length).length >= max) return text.slice(0, Math.max(0, max));
+	const budget = max - marker(text.length).length;
 	const head = Math.ceil(budget / 2);
 	const tail = budget - head;
 	return `${text.slice(0, head)}${marker(text.length - head - tail)}${text.slice(text.length - tail)}`;
@@ -496,17 +498,22 @@ export function registerRouting(
 				classified,
 				door: door?.door,
 			});
-			// A dry run answers on the default slot; retries still escalate, or an overflow would fail the turn.
-			const dry = routing.dryRun && request.reason === "user" && decision.tier !== "medium";
+			const resolve = (rung: Tier) =>
+				runtime.getModel("orq", pool()[rung]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
+			const named = resolve(decision.tier);
+			// A dry run answers on the default slot, and says so only when a live run would have answered on another
+			// model; retries still escalate, or an overflow would fail the turn.
+			const fallback = resolve("medium");
+			const dry = routing.dryRun && request.reason === "user" && !!named && named.id !== fallback?.id;
 			const tier: Tier = dry ? "medium" : decision.tier;
-			const model = runtime.getModel("orq", pool()[tier]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
+			const model = dry ? fallback : named;
 			if (!model) throw new Error(`orq/auto: no model for the ${tier} rung (${pool()[tier]})`);
 			const changed = request.reason === "user" || (request.reason === "retry" && decision.arrow);
 			if (!changed) return { model, thinkingLevel: request.thinkingLevel };
 			const next: RouteState = {
 				tier,
 				model: model.id,
-				...(dry ? { would: { tier: decision.tier, model: pool()[decision.tier] } } : {}),
+				...(dry && named ? { would: { tier: decision.tier, model: named.id } } : {}),
 				...(classified && !("error" in classified) ? { probabilities: classified } : {}),
 				...(decision.why ? { why: decision.why } : {}),
 				...(cost !== undefined ? { cost } : {}),
