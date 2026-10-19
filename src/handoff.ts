@@ -117,17 +117,21 @@ export function registerHandoff(pi: ExtensionAPI, host: HandoffHost) {
 						{ systemPrompt: SYSTEM_PROMPT, messages: [user] },
 						{ signal: loader.signal, cacheRetention: "none", sessionId: uuidv7() },
 					)
-					.then((response) =>
-						done(
-							response.stopReason === "aborted"
-								? null
-								: response.content
-										.filter((c): c is { type: "text"; text: string } => c.type === "text")
-										.map((c) => c.text)
-										.join("\n"),
-						),
-					)
+					.then((response) => {
+						if (response.stopReason === "aborted") return done(null);
+						const text = response.content
+							.filter((c): c is { type: "text"; text: string } => c.type === "text")
+							.map((c) => c.text)
+							.join("\n")
+							.trim();
+						if (response.stopReason === "error" || !text) {
+							ctx.ui.notify(`/handoff got no draft from ${model.id}${response.errorMessage ? `: ${response.errorMessage}` : "."}`, "error");
+							return done(null);
+						}
+						done(text);
+					})
 					.catch((error) => {
+						if (loader.signal.aborted) return;
 						ctx.ui.notify(`/handoff failed: ${(error as Error).message}`, "error");
 						done(null);
 					});
@@ -136,23 +140,27 @@ export function registerHandoff(pi: ExtensionAPI, host: HandoffHost) {
 			if (draft === null) return;
 
 			// A reference, not a summary: the plan file is the source of truth.
-			const withPlan = existsSync(plan) ? `${draft.trim()}\n\nThe plan for this work is at ${plan}; read it before starting.` : draft;
+			const withPlan = existsSync(plan) ? `${draft}\n\nThe plan for this work is at ${plan}; read it before starting.` : draft;
 			const prompt = await ctx.ui.editor("Edit the handoff; enter opens the fresh session", withPlan);
 			if (prompt === undefined) return;
 
 			await ctx.waitForIdle();
 			const on = host.planning();
-			await ctx.newSession({
-				parentSession,
-				// A handoff from plan mode stays read-only, whatever the launch said.
-				setup: async (sessionManager) => {
-					sessionManager.appendCustomEntry(PLAN_ENTRY, { on });
-				},
-				withSession: async (fresh) => {
-					fresh.ui.setEditorText(prompt);
-					fresh.ui.notify("Handoff ready: enter to start.", "info");
-				},
-			});
+			try {
+				await ctx.newSession({
+					parentSession,
+					// A handoff from plan mode stays read-only, whatever the launch said.
+					setup: async (sessionManager) => {
+						sessionManager.appendCustomEntry(PLAN_ENTRY, { on });
+					},
+					withSession: async (fresh) => {
+						fresh.ui.setEditorText(prompt);
+						fresh.ui.notify("Handoff ready: enter to start.", "info");
+					},
+				});
+			} catch (error) {
+				ctx.ui.notify(`/handoff failed: ${(error as Error).message}. This session is unchanged.`, "error");
+			}
 		},
 	});
 }
