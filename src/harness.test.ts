@@ -1503,7 +1503,7 @@ test("/tips off flips the tips row and the inspector omits the section", async (
 		await commands.get("panel")!("", ctx);
 		expect(panelRows(opened.panel!).at(-1)).toBe("[ ] tips");
 		const sections: InspectorSection[] = SECTIONS.map((id) => ({ id, title: id, lines: () => [] }));
-		expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "context", "memory"]);
+		expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "context", "routing", "memory"]);
 		// /teach is the same switch.
 		await commands.get("teach")!("", ctx);
 		expect(readPrefs(dir).sections.tips).toBe(true);
@@ -2788,15 +2788,22 @@ test("/route models sets a slot by typing: this session, --save into orqi.json, 
 });
 
 test("an old route entry replays without would; a dry one names both", () => {
-	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra" })).toEqual({ label: "medium", detail: "→ default · gpt-5.6-terra" });
-	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra", fallback: true })).toEqual({
+	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra" })).toMatchObject({
+		label: "medium",
+		detail: "→ default · gpt-5.6-terra",
+	});
+	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra", fallback: true })).toMatchObject({
 		label: "medium (fallback)",
 		detail: "→ default · gpt-5.6-terra",
 	});
 	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra", would: { tier: "easy", model: "openai/gpt-5.6-luna" } })).toEqual({
 		label: "easy (dry)",
 		detail: "→ default · gpt-5.6-terra · would fast",
+		mark: { named: "easy", would: "openai/gpt-5.6-luna" },
 	});
+	// The routing section's mark: an unsure stay and a retry's escalation are told apart from a pick.
+	expect(routeRow({ tier: "hard", model: "m", why: "unsure .40: stays", reason: "user" }).mark).toEqual({ named: "hard", unsure: true });
+	expect(routeRow({ tier: "hard", model: "m", reason: "retry", arrow: "↑" }).mark).toEqual({ named: "hard", retry: true });
 });
 
 test("/route dry on|off switches it for the session and says so", async () => {

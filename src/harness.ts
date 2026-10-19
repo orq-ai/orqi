@@ -44,13 +44,14 @@ import {
 	type MemorqHost,
 	type MemorqState,
 } from "./memory-section.ts";
+import { routingLines, routingStats } from "./routing-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
 import { COMPACT_AT_MAX, COMPACT_AT_MIN, isCompactAt, readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
-import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
+import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type RouteMark, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { toolGate } from "./gate.ts";
 import { registerHandoff } from "./handoff.ts";
@@ -177,9 +178,22 @@ export function routeLine(
  * A routing decision as a trajectory row, live or replayed: `easy` / `→ fast · luna`, and in a dry run
  * `easy (dry)` / `→ default · terra · would fast`. An entry written before dry runs has no `would`.
  */
-export function routeRow(d: Pick<Decision, "tier" | "model" | "arrow" | "fallback" | "would">): { label: string; detail: string } {
+export function routeRow(
+	d: Pick<Decision, "tier" | "model"> & Partial<Pick<Decision, "arrow" | "fallback" | "would" | "why" | "reason">>,
+): {
+	label: string;
+	detail: string;
+	mark: RouteMark;
+} {
 	const named = d.would?.tier ?? d.tier;
 	return {
+		// What the routing section counts: the rung named, a dry run's model, an unsure stay, a retry's escalation.
+		mark: {
+			named,
+			...(d.would ? { would: d.would.model } : {}),
+			...(d.why?.startsWith("unsure") ? { unsure: true } : {}),
+			...(d.reason === "retry" ? { retry: true } : {}),
+		},
 		label: `${named}${d.would ? " (dry)" : ""}${d.arrow ? ` ${d.arrow}` : ""}${d.fallback ? " (fallback)" : ""}`,
 		detail: `→ ${SLOTS[d.tier] ?? d.tier} · ${shortModel(d.model)}${d.would ? ` · would ${SLOTS[d.would.tier]}` : ""}`,
 	};
@@ -844,6 +858,19 @@ export function orqHarness(deps: HarnessDeps) {
 				note: () => (waitingForMemorq() ? "loading…" : undefined),
 				hidden: memorqAbsent,
 			},
+			{
+				id: "routing",
+				title: "routing",
+				lines: (w) =>
+					routingLines(routingStats(trajectory.steps, priceOf, deps.routing?.pool.medium ?? "", deps.routing?.dryRun ?? false), w),
+				// Only while orq/auto picks the model, or once it has routed this session.
+				hidden: () =>
+					!deps.routing ||
+					!(
+						(ctxRef?.model?.provider === "orq" && ctxRef.model.id === "auto") ||
+						trajectory.steps.some((step) => step.role === "route" && step.route)
+					),
+			},
 			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
 			{
 				id: "tips",
@@ -1315,8 +1342,8 @@ export function orqHarness(deps: HarnessDeps) {
 		const stopDecisions = deps.routing?.onDecision((decision) => {
 			const usage = decision.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: decision.cost } : undefined;
 			// A fallback is the default rung, not a judgement: say so where the decision is listed.
-			const { label, detail } = routeRow(decision);
-			trajectory.route(label, detail, usage, decision.latencyMs, decision.classifier);
+			const { label, detail, mark } = routeRow(decision);
+			trajectory.route(label, detail, usage, decision.latencyMs, decision.classifier, mark);
 			if (decision.reason === "user") picks[decision.would?.tier ?? decision.tier] += 1;
 			try {
 				pi.appendEntry(ROUTE_ENTRY, decision);
@@ -1876,12 +1903,13 @@ function branchMessages(ctx: ExtensionContext): any[] {
 		if (entry.type === "message") return [entry.message];
 		if (entry.type === "custom" && entry.customType === ROUTE_ENTRY && entry.data) {
 			const d = entry.data as Decision;
-			const { label, detail } = routeRow(d);
+			const { label, detail, mark } = routeRow(d);
 			return [
 				{
 					role: "route",
 					label,
 					detail,
+					route: mark,
 					usage: d.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: d.cost } : undefined,
 					durationMs: d.latencyMs,
 					model: d.classifier,

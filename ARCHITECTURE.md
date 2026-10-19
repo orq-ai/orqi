@@ -103,9 +103,11 @@ the same steps. Prices come from the workspace catalogue (`million_tokens_*` in 
 the footer's cost and pi's `/session` are real numbers rather than zero.
 
 The side panel is the inspector: the trajectory on top (one row per step, the mouse wheel scrolls
-it), then up to five sections, in this order: signals (a tool called three times with the same
+it), then up to six sections, in this order: signals (a tool called three times with the same
 arguments in one turn, errors, irreversible calls), the context split (system prompt, tool schemas,
 skills index, messages, as characters over four, measured after each run and never in a render),
+routing (while `orq/auto` routes: picks per slot, model switches and the cache they lost, the
+decider's calls, and an estimated saving against the default model, `src/routing-section.ts`),
 memory (what memorq last published, below), process (orqi's resident memory, sampled every 5 s off
 the render path: now, the last minute, the peak) and tips (`/tips off` hides it; `/teach` is the old
 name). Each section is an `InspectorSection` in `src/harness.ts`; bare `/panel` lists them with a

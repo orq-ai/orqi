@@ -24,8 +24,8 @@ test("prefs default, survive garbage, round-trip and ignore unknown ids", () => 
 });
 
 test("the draw order ends with tips, and process starts off", () => {
-	expect(SECTIONS).toEqual(["signals", "context", "memory", "process", "tips"]);
-	expect(DEFAULT_SECTIONS).toEqual({ signals: true, context: true, memory: true, process: false, tips: true });
+	expect(SECTIONS).toEqual(["signals", "context", "routing", "memory", "process", "tips"]);
+	expect(DEFAULT_SECTIONS).toEqual({ signals: true, context: true, routing: true, memory: true, process: false, tips: true });
 });
 
 test("orqi.json that is missing, unreadable or the wrong shape reads as the defaults", () => {

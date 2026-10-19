@@ -15,14 +15,15 @@
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type SectionId = "signals" | "context" | "memory" | "process" | "tips";
+export type SectionId = "signals" | "context" | "routing" | "memory" | "process" | "tips";
 
 /** Draw order under the trajectory. Tips last: the panel ends above the editor, and a short terminal clips it from the bottom. */
-export const SECTIONS: readonly SectionId[] = ["signals", "context", "memory", "process", "tips"];
+export const SECTIONS: readonly SectionId[] = ["signals", "context", "routing", "memory", "process", "tips"];
 
 export const DEFAULT_SECTIONS: Readonly<Record<SectionId, boolean>> = Object.freeze({
 	signals: true,
 	context: true,
+	routing: true,
 	memory: true,
 	process: false,
 	tips: true,

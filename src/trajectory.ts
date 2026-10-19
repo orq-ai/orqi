@@ -51,9 +51,19 @@ export interface Step {
 	/** Full text, for the peek view and the export. */
 	text?: string;
 	children?: Step[];
+	/** On a route step: what orq/auto decided, which the routing section counts. */
+	route?: RouteMark;
 	/** The gate's verdict on an orq tool call. Session-local: a resume does not rebuild it. */
 	door?: Door;
 	gate?: "waiting" | "allowed" | "denied";
+}
+
+/** A routing decision in brief: the rung it named, the model a dry run would have used, whether it was an unsure stay or a retry. */
+export interface RouteMark {
+	named: "easy" | "medium" | "hard";
+	would?: string;
+	unsure?: boolean;
+	retry?: boolean;
 }
 
 export interface ContextSample {
@@ -195,6 +205,7 @@ export class Trajectory {
 				durationMs?: number;
 				model?: string;
 				timestamp?: number;
+				route?: RouteMark;
 			};
 			this.push({
 				role: message.role as "route" | "memory",
@@ -205,6 +216,7 @@ export class Trajectory {
 				usage: route.usage,
 				durationMs: route.durationMs,
 				model: route.model,
+				...(route.route ? { route: route.route } : {}),
 			});
 			return;
 		}
@@ -341,8 +353,8 @@ export class Trajectory {
 	}
 
 	/** A routing decision (`orq/auto`), shown before the turn's reply. */
-	route(label: string, detail: string, usage?: StepUsage, durationMs?: number, model?: string): void {
-		this.push({ role: "route", label, detail, status: "ok", ts: Date.now(), usage, durationMs, model });
+	route(label: string, detail: string, usage?: StepUsage, durationMs?: number, model?: string, mark?: RouteMark): void {
+		this.push({ role: "route", label, detail, status: "ok", ts: Date.now(), usage, durationMs, model, ...(mark ? { route: mark } : {}) });
 		this.changed();
 	}
 

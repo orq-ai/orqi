@@ -222,6 +222,16 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   do. A pick whose prices run backwards (fast dearer than frontier) is warned about, never refused. The
   virtual model's context window and output limit are the smallest of the three, because any of them
   may answer and a picked one can be another provider's.
+- **The routing section's saving is an estimate that counts the cache both ways.** It is read off the
+  trajectory alone (each route step carries a `route` mark, replayed from the `orqi-route` entry), so
+  a resume shows the same numbers. A switch's cost is the prefix the previous request already sent,
+  re-read at full input price instead of the cache price. "Saved vs default" re-prices every answer's
+  tokens at the default model's prices with the cache one model would have kept (a switch's re-read
+  prefix counts as cached), less what was spent and what the decider cost; in a dry run it is what
+  the would-be models would have cost, a switch between them read uncached. Output length is taken
+  as the same and cache expiry and write prices are not modelled, so the line says `~`. A model with
+  no catalogue price drops the line rather than show a wrong number. The section hides itself unless
+  `orq/auto` is the model or something was routed this session.
 - **A dry run still pays for the decider.** `/route dry on` (or `ORQI_ROUTE_DRY_RUN=1`) asks the
   decider on every user turn and answers on the default slot, so a user can see what `orq/auto` would
   have picked (the route line's `· would <model>`, `/route explain`'s per-slot counts) before trusting
@@ -433,7 +443,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/panel focus` is on, so the
   editor never loses the keyboard otherwise.
 - **Inspector sections are a registry, and the choice lives in `<agentDir>/orqi.json`.** Each section
-  (signals, context, memory, process, tips, in that order: tips last, because a short terminal clips
+  (signals, context, routing, memory, process, tips, in that order: tips last, because a short terminal clips
   the panel from the bottom) is an `InspectorSection` whose `lines()` is a pure renderer over state
   already measured. Which ones draw is orqi's own small file (`src/prefs.ts`), not pi's
   `settings.json` (pi's SettingsManager has no setter for a key it does not know) and not the
