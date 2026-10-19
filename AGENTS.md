@@ -403,6 +403,21 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   off, so the RAM readout an upgrade used to show is gone until `/panel` turns it on. The file is
   read forgivingly (missing, unreadable or odd means the defaults; unknown ids are ignored) and each
   toggle rereads it and changes only its own id, so two orqi windows keep each other's choices.
+- **`/compact-at` moves pi's reserve, it does not compact.** pi compacts once the context passes
+  `window - compaction.reserveTokens` (16384 by default, about 92% of 200k), and its SettingsManager
+  has no setter for the reserve, nor pi's `/settings` a slot for an extension. So the percent lives in
+  `orqi.json` (`compactAt`, 30 to 95) and `applyCompactAt` in `src/harness.ts` turns it into a reserve
+  for the selected model's window, in memory only, the way the theme is applied: written into pi's
+  global settings without marking them modified, so it survives pi's `save()` and is never written to
+  `settings.json`. It runs again on every `model_select`, because the window moves with the model.
+  Unset, it touches nothing, so a session without it is pi's own; `off` puts back the reserve read
+  right before the first override. A trusted project's own `compaction.reserveTokens` wins, since pi's
+  next `save()` would bring it back anyway, and the command says so.
+  pi keeps owning compaction: mid-run checks, overflow recovery, and the `session_before_compact` that
+  memorq learns on. A package that replaces pi's compaction (pi-auto-compact) writes its own entries
+  and never fires that event, so memorq would miss them. Under `orq/auto` the reserve is sized on the
+  hard rung's window while pi measures the rung that answered, so a smaller-window rung compacts later
+  than the percent.
 - **orqi does not carry memorq, and only mentions memory once memorq is there.** memorq
   (orq-ai/orq-knowledge-notes, a pi package) ships on its own schedule and is not something every orqi
   user can install, so orqi never tells anyone to install it: with no memorq, `/panel` has no memory

@@ -713,6 +713,7 @@ const makeServices = async () => {
 					refreshCatalogue,
 					routing,
 					permissionMode,
+					settingsManager,
 				}),
 			],
 		},
