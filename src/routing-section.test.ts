@@ -119,3 +119,25 @@ test("a resumed session rebuilds the same marks, so the section shows the same n
 	] as never);
 	expect(trajectory.steps.filter((step) => step.role === "route").map((step) => step.route)).toEqual([{ named: "easy" }, undefined]);
 });
+
+test("review: a retry alone is routing activity, and a dry run prices a retry's answer at the model that answered it", () => {
+	const onlyRetry = routingStats(
+		[route(1, "hard", { retry: true }), answer(1, "openai/gpt-5.6-terra", 1_000, 0)],
+		priceOf,
+		"openai/gpt-5.6-terra",
+		false,
+	);
+	expect(onlyRetry.routed).toBe(true);
+	expect(onlyRetry.picks).toEqual({ easy: 0, medium: 0, hard: 0 });
+	// Dry run: the first answer failed on default and a retry escalated; that retry's answer cost what it cost.
+	const steps = [
+		route(1, "easy", { would: "openai/gpt-5.6-luna" }),
+		answer(1, "openai/gpt-5.6-terra", 10_000, 0),
+		route(1, "hard", { retry: true }),
+		answer(1, "openai/gpt-5.6-terra", 10_000, 10_000),
+	];
+	const stats = routingStats(steps, priceOf, "openai/gpt-5.6-terra", true);
+	// Spent on terra: 0.0212 + 0.0232. Would-be: luna 0.00212, then the retry on terra after a switch
+	// from luna, so its 20k prompt is read uncached: 0.0412.
+	expect(stats.saved).toBeCloseTo(0.0444 - (0.00212 + 0.0412), 9);
+});

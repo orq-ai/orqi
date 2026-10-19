@@ -46,16 +46,16 @@ const cost = (price: Price, cached: number, uncached: number, output: number) =>
 export function routingStats(steps: Step[], priceOf: (id: string) => Price | undefined, baseline: string, dry: boolean): RoutingStats {
 	const picks: Record<Rung, number> = { easy: 0, medium: 0, hard: 0 };
 	let unsure = 0;
-	const would = new Map<number, string>();
+	let marks = 0;
 	let calls = 0;
 	let ms = 0;
 	let deciderCost = 0;
 	let decider: string | undefined;
 	for (const step of steps) {
 		if (step.role !== "route" || !step.route) continue;
+		marks += 1;
 		if (!step.route.retry) picks[step.route.named] += 1;
 		if (step.route.unsure) unsure += 1;
-		if (step.route.would) would.set(step.turn, step.route.would);
 		if (step.durationMs !== undefined) {
 			calls += 1;
 			ms += step.durationMs;
@@ -70,7 +70,14 @@ export function routingStats(steps: Step[], priceOf: (id: string) => Price | und
 	let priced = true;
 	let prev: Step | undefined;
 	let prevOther: string | undefined;
+	// In a dry run, the model the current turn would have answered on. A retry escalated for real, so
+	// from a retry on, the turn's answers are priced as they were.
+	let would: { turn: number; model: string } | undefined;
 	for (const step of steps) {
+		if (step.role === "route" && step.route) {
+			would = !step.route.retry && step.route.would ? { turn: step.turn, model: step.route.would } : undefined;
+			continue;
+		}
 		if (step.role !== "assistant" || !step.usage || !step.model) continue;
 		const { input, cacheRead, output } = step.usage;
 		const prompt = input + cacheRead;
@@ -84,7 +91,7 @@ export function routingStats(steps: Step[], priceOf: (id: string) => Price | und
 		}
 		actual += step.usage.cost;
 		// The other run: everything on the default, or in a dry run the model each turn would have used.
-		const model = dry ? (would.get(step.turn) ?? step.model) : baseline;
+		const model = dry ? (would?.turn === step.turn ? would.model : step.model) : baseline;
 		const price = priceOf(model);
 		if (!price) priced = false;
 		else {
@@ -94,7 +101,8 @@ export function routingStats(steps: Step[], priceOf: (id: string) => Price | und
 		prevOther = model;
 		prev = step;
 	}
-	const routed = picks.easy + picks.medium + picks.hard > 0;
+	// A retry's escalation is routing too, though not a pick.
+	const routed = marks > 0;
 	const saved = !routed || !priced ? undefined : dry ? actual - other : other - actual - deciderCost;
 	return {
 		picks,
