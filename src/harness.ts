@@ -1184,7 +1184,9 @@ export function orqHarness(deps: HarnessDeps) {
 			} catch {
 				// A stale handle after /new: the step is in the trajectory regardless.
 			}
-			if (deps.routing?.decider.unavailable) ctxRef?.ui.setWidget(ROUTE_WIDGET, [deps.routing.decider.unavailable]);
+			// The line follows the decider: a refresh that cleared the 403 takes it down with the next decision.
+			const unavailable = deps.routing?.decider.unavailable;
+			ctxRef?.ui.setWidget(ROUTE_WIDGET, unavailable ? [unavailable] : undefined);
 		});
 		// orq/auto's calls are drawn with its decisions above; anyone else's (memorq) is a step of its own, so /cost counts it.
 		const stopDeciderCalls = deps.routing?.decider.onCall((call) => {
