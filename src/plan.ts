@@ -51,6 +51,9 @@ export interface ExitPlanDetails {
 	feedback?: string;
 }
 
+/** Plan mode on or off, persisted on every change so a resumed session keeps it. */
+export const PLAN_ENTRY = "orqi-plan";
+
 /** Where a session's plan lives: user-global, never in the repository. */
 export const planPath = (agentDir: string, sessionId: string) => join(agentDir, "plans", `${sessionId}.md`);
 
