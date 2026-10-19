@@ -124,6 +124,17 @@ test("the panel sits beside the content column and the editor and footer keep th
 	expect(children(column)).toEqual([transcript, notice]);
 	expect(children(bottom.component)).toEqual([editor, footer]);
 
+	// The panel's slot is the screen less the header and the editor and footer as last rendered.
+	const lines = (n: number) => ({ render: () => Array.from({ length: n }, () => "x"), invalidate() {} });
+	const sized = new VStack([
+		entry(transcript, { basis: 0, grow: 1, minSize: 1 }),
+		entry(new VStack([entry(notice), entry(lines(3), { minSize: 3 }), entry(lines(1))]), { minSize: 1 }),
+	]);
+	const root = composeLayout(sized, header, { component: panel, basis: 10, shrink: 0 });
+	expect(root.reserved()).toBe(2);
+	root.render(80);
+	expect(root.reserved()).toBe(2 + 3 + 1);
+
 	// A dock with no editor entry keeps the whole dock full width.
 	const plainDock = new VStack([entry(notice), entry(footer)]);
 	const noEditor = new VStack([entry(transcript, { basis: 0, grow: 1 }), entry(plainDock)]);
@@ -326,6 +337,11 @@ test("our commands never collide with a pi built-in", () => {
 	expect(registered).toContain("whatsnew");
 	expect(registered).toContain("trajectory");
 	expect(registered.filter((name) => builtins.has(name))).toEqual([]);
+	// The opening screen advertises only commands that exist.
+	const splash = headerLines({ name: "orqi", version: "v0", status: "", cwd: "~" }).join("\n");
+	const advertised = [...splash.replace(/\x1b\[[0-9;]*m/g, "").matchAll(/(?:^|\s)\/([a-z][a-z-]*)/g)].map((m) => m[1]!);
+	expect(advertised.length).toBeGreaterThan(10);
+	expect(advertised.filter((name) => !registered.includes(name) && !builtins.has(name))).toEqual([]);
 
 	// memorq's commands are memorq's: orqi must never take them (its own would win dispatch and hide
 	// memorq's screens), and pi must not own them either, or memorq's would be dropped.

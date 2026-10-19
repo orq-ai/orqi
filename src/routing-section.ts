@@ -1,5 +1,5 @@
 /**
- * The inspector's routing section: what orq/auto did this session, read off
+ * The sidebar's routing section: what orq/auto did this session, read off
  * the trajectory alone, so a resumed session shows the same numbers.
  *
  * - picks per slot (in a dry run, the picks it would have made)

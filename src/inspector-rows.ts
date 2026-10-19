@@ -1,5 +1,5 @@
 /**
- * The inspector's rows, pure: one row per trajectory step, so the shape of a
+ * The sidebar's rows, pure: one row per trajectory step, so the shape of a
  * session (who spoke, which tools ran, where a subagent went, what the router
  * picked) is visible at a glance while the transcript scrolls, then the
  * signals, context and teach sections below it.
@@ -7,7 +7,7 @@
  * Where they are drawn is `attachMinimap` in harness.ts: a fixed side column
  * beside the transcript in fullscreen, a non-capturing overlay on the right
  * edge in regular mode. Either way it shows by itself from 140 columns
- * (`MINIMAP_MIN_COLS`), and the editor keeps the keyboard until `/panel focus`.
+ * (`MINIMAP_MIN_COLS`), and the editor keeps the keyboard until `/sidebar focus`.
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";

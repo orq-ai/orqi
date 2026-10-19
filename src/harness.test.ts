@@ -229,7 +229,7 @@ test("the footer degrades by width band", () => {
 	expect(medium).not.toContain("44 tools");
 	const narrow = footerLine({ ...state, minimapHidden: true }, 96);
 	expect(narrow).not.toContain("think"); // effort needs the medium band
-	expect(narrow.startsWith(" orq.ai · acme · orq/auto → gpt-5.6-sol · inspector alt+i")).toBe(true);
+	expect(narrow.startsWith(" orq.ai · acme · orq/auto → gpt-5.6-sol · sidebar alt+s")).toBe(true);
 	expect(narrow).toContain("$0.113 · ctx ▇▇▇▁▁▁▁┊ 31% · main");
 	expect(narrow).not.toContain("↑88k");
 	expect(narrow).not.toContain("84k/272k");
@@ -598,7 +598,7 @@ function fakeBus() {
 /**
  * The harness on a fake pi: its commands and event handlers by name, a TUI ctx whose overlays are
  * recorded (the last one is the Panel a command opened), and `start()`, which runs session_start
- * and hands over the footer, so the inspector is attached as regular mode's overlay.
+ * and hands over the footer, so the sidebar is attached as regular mode's overlay.
  */
 function harnessOn(
 	agentDir: string,
@@ -670,7 +670,7 @@ function harnessOn(
 	})(pi as any);
 	const notices: string[] = [];
 	const widgets = new Map<string, unknown>();
-	const opened: { panel?: Panel; inspector?: { render(width: number): string[] } } = {};
+	const opened: { panel?: Panel; sidebar?: { render(width: number): string[] } } = {};
 	let footer: { render(width: number): string[] } | undefined;
 	let branchChanged: (() => void) | undefined;
 	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
@@ -701,7 +701,7 @@ function harnessOn(
 			custom: (factory: any, options?: any) => {
 				const component = factory({ requestRender: () => {} }, plainTheme, {}, () => {});
 				if (options?.overlayOptions && typeof options.overlayOptions === "function") {
-					opened.inspector = component;
+					opened.sidebar = component;
 					options.onHandle?.({});
 				} else opened.panel = component;
 				return Promise.resolve();
@@ -714,9 +714,9 @@ function harnessOn(
 		await handlers.get("session_shutdown")!({ reason: "reload" }, { ...ctx, mode: "print" });
 		for (const off of unsubscribe.splice(0)) off();
 	};
-	/** The inspector's memory section as drawn, or [] when it is not. */
+	/** The sidebar's memory section as drawn, or [] when it is not. */
 	const memory = () => {
-		const lines = opened.inspector!.render(38).map((line) => bare(line).slice(1, -1).trimEnd());
+		const lines = opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1).trimEnd());
 		const at = lines.findIndex((line) => line.startsWith(" ─ memory "));
 		if (at < 0) return [];
 		const end = lines.findIndex((line, i) => i > at && !line.startsWith("  "));
@@ -726,10 +726,10 @@ function harnessOn(
 		await handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "read", args: { path }, parentToolCallId }, ctx);
 		await handlers.get("tool_execution_end")!({ toolCallId: id, toolName: "read", isError, durationMs: 1, parentToolCallId }, ctx);
 	};
-	/** The inspector's trajectory rows as drawn. */
+	/** The sidebar's trajectory rows as drawn. */
 	const rows = () =>
 		opened
-			.inspector!.render(38)
+			.sidebar!.render(38)
 			.map((line) => bare(line).slice(1, -1).trimEnd())
 			.filter((line) => /^[ ▌][^─\s] (user|assist|agent|tool|sub|route|memory) /.test(line));
 	return {
@@ -767,29 +767,31 @@ const panelRows = (panel: Panel) =>
 				.trimEnd(),
 		);
 
-test("/panel lists the sections with their state and space toggles and persists", async () => {
+test("/sidebar lists the sections with their state and space toggles and persists", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
 	try {
 		const { commands, ctx, opened } = harnessOn(dir);
-		await commands.get("panel")!("", ctx);
+		await commands.get("sidebar")!("", ctx);
 		const panel = opened.panel!;
 		// No memorq anywhere: the list says nothing about memory.
-		expect(panelRows(panel)).toEqual(["[x] signals", "[x] context", "[ ] process", "[x] tips"]);
-		panel.handleInput("\x1b[B"); // down to context
+		expect(panelRows(panel)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[ ] process", "[x] tips"]);
+		panel.handleInput("\x1b[B");
+		panel.handleInput("\x1b[B"); // down past the trajectory to context
 		panel.handleInput(" ");
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(panelRows(panel)[1]).toBe("[ ] context");
+		expect(panelRows(panel)[2]).toBe("[ ] context");
 		expect(readPrefs(dir).sections.context).toBe(false);
 		// Space on the row below switches process, the row it shows, not the hidden memory section.
 		panel.handleInput("\x1b[B");
 		panel.handleInput(" ");
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(panelRows(panel)[2]).toBe("[x] process");
+		expect(panelRows(panel)[3]).toBe("[x] process");
 		expect(readPrefs(dir).sections).toMatchObject({ memory: true, process: true });
 		// An installed memorq that cannot show: its row is greyed and cannot be switched.
 		const installed = harnessOn(dir, { memorq: "installed" });
-		await installed.commands.get("panel")!("", installed.ctx);
-		expect(panelRows(installed.opened.panel!)[2]).toBe("[ ] memory  · update memorq");
+		await installed.commands.get("sidebar")!("", installed.ctx);
+		expect(panelRows(installed.opened.panel!)[3]).toBe("[ ] memory  · update memorq");
+		installed.opened.panel!.handleInput("\x1b[B");
 		installed.opened.panel!.handleInput("\x1b[B");
 		installed.opened.panel!.handleInput("\x1b[B");
 		installed.opened.panel!.handleInput(" ");
@@ -797,22 +799,22 @@ test("/panel lists the sections with their state and space toggles and persists"
 		expect(readPrefs(dir).sections.memory).toBe(true);
 		// The next session (what /new, /resume and a restart build) reads the choice back.
 		const next = harnessOn(dir);
-		await next.commands.get("panel")!("", next.ctx);
-		expect(panelRows(next.opened.panel!)[1]).toBe("[ ] context");
+		await next.commands.get("sidebar")!("", next.ctx);
+		expect(panelRows(next.opened.panel!)[2]).toBe("[ ] context");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
-test("/panel on|off shows or hides the inspector; anything else says how", async () => {
+test("/sidebar on|off shows or hides the sidebar; anything else says how", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
 	try {
 		const { commands, ctx, notices, opened } = harnessOn(dir);
-		await commands.get("panel")!("off", ctx);
-		await commands.get("panel")!("on", ctx);
+		await commands.get("sidebar")!("off", ctx);
+		await commands.get("sidebar")!("on", ctx);
 		expect(opened.panel).toBeUndefined(); // neither opens the section list
-		await commands.get("panel")!("sideways", ctx);
-		expect(notices.at(-1)).toContain("/panel on|off");
+		await commands.get("sidebar")!("sideways", ctx);
+		expect(notices.at(-1)).toContain("/sidebar on|off");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -823,8 +825,9 @@ test("orqi.json with unknown ids and garbage values: the harness starts on the d
 	try {
 		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { bogus: true, tips: "nah", process: true }, extra: [1] }));
 		const { commands, ctx, opened } = harnessOn(dir);
-		await commands.get("panel")!("", ctx);
-		expect(panelRows(opened.panel!)).toEqual(["[x] signals", "[x] context", "[x] process", "[x] tips"]);
+		await commands.get("sidebar")!("", ctx);
+		expect(panelRows(opened.panel!)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[x] process", "[x] tips"]);
+		opened.panel!.handleInput("\x1b[B");
 		opened.panel!.handleInput(" "); // signals off
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(JSON.parse(readFileSync(join(dir, "orqi.json"), "utf8"))).toEqual({
@@ -842,13 +845,14 @@ test("two orqi windows on one agent dir keep each other's panel choices", async 
 		const one = harnessOn(dir);
 		const two = harnessOn(dir);
 		await one.commands.get("tips")!("off", one.ctx);
-		await two.commands.get("panel")!("", two.ctx);
+		await two.commands.get("sidebar")!("", two.ctx);
+		two.opened.panel!.handleInput("\x1b[B");
 		two.opened.panel!.handleInput("\x1b[B"); // context
 		two.opened.panel!.handleInput(" ");
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(readPrefs(dir).sections).toEqual({ ...DEFAULT_SECTIONS, tips: false, context: false });
 		// The second window picked up the first one's choice when it saved.
-		expect(panelRows(two.opened.panel!)).toEqual(["[x] signals", "[ ] context", "[ ] process", "[ ] tips"]);
+		expect(panelRows(two.opened.panel!)).toEqual(["[x] trajectory", "[x] signals", "[ ] context", "[ ] process", "[ ] tips"]);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -861,11 +865,12 @@ test("a choice that cannot be saved still applies, and says why it was not saved
 		const blocked = join(dir, "not-a-dir");
 		writeFileSync(blocked, "");
 		const { commands, ctx, notices, opened } = harnessOn(blocked);
-		await commands.get("panel")!("", ctx);
+		await commands.get("sidebar")!("", ctx);
+		opened.panel!.handleInput("\x1b[B");
 		opened.panel!.handleInput(" "); // signals off
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(notices.at(-1)).toContain("Could not save the panel choice");
-		expect(panelRows(opened.panel!)[0]).toBe("[ ] signals");
+		expect(panelRows(opened.panel!)[1]).toBe("[ ] signals");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -893,12 +898,12 @@ test("the memory section waits for memorq: asked for at session start, drawn onc
 		await h.start();
 		// The bus has no replay: orqi asks, and memorq (loaded first) answers.
 		expect(h.bus.sent).toContain("memorq:state?");
-		await h.commands.get("panel")!("", h.ctx);
+		await h.commands.get("sidebar")!("", h.ctx);
 		expect(panelRows(h.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 		expect(h.memory()).toEqual([]);
 		h.bus.emit("memorq:state", memorqState());
-		await h.commands.get("panel")!("", h.ctx);
-		expect(panelRows(h.opened.panel!)[2]).toBe("[x] memory");
+		await h.commands.get("sidebar")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[3]).toBe("[x] memory");
 		expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
 	} finally {
 		await h.stop();
@@ -915,21 +920,21 @@ test("memorq with its commands but silent points at /doctor; ORQ_NOTES=off and a
 		const old = harnessOn(dir, { commands: ["memory-notes"], now: () => late.now });
 		await old.start();
 		late.now += 10_000;
-		await old.commands.get("panel")!("", old.ctx);
-		expect(panelRows(old.opened.panel!)[2]).toBe("[ ] memory  · not answering · /doctor");
+		await old.commands.get("sidebar")!("", old.ctx);
+		expect(panelRows(old.opened.panel!)[3]).toBe("[ ] memory  · not answering · /doctor");
 		await old.stop();
 
 		// ORQ_NOTES=off keeps an installed memorq from loading at all: the row says why.
 		process.env.ORQ_NOTES = "off";
 		const env = harnessOn(dir, { memorq: "installed" });
 		await env.start();
-		await env.commands.get("panel")!("", env.ctx);
-		expect(panelRows(env.opened.panel!)[2]).toBe("[ ] memory  · off: ORQ_NOTES=off");
+		await env.commands.get("sidebar")!("", env.ctx);
+		expect(panelRows(env.opened.panel!)[3]).toBe("[ ] memory  · off: ORQ_NOTES=off");
 		await env.stop();
 		// With no memorq installed, the variable changes nothing orqi shows.
 		const none = harnessOn(dir);
 		await none.start();
-		await none.commands.get("panel")!("", none.ctx);
+		await none.commands.get("sidebar")!("", none.ctx);
 		expect(panelRows(none.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 		await none.stop();
 		delete process.env.ORQ_NOTES;
@@ -937,8 +942,8 @@ test("memorq with its commands but silent points at /doctor; ORQ_NOTES=off and a
 		const off = harnessOn(dir);
 		await off.start();
 		off.bus.emit("memorq:state", memorqState({ enabled: "off" }));
-		await off.commands.get("panel")!("", off.ctx);
-		expect(panelRows(off.opened.panel!)[2]).toBe("[ ] memory  · off · /memory");
+		await off.commands.get("sidebar")!("", off.ctx);
+		expect(panelRows(off.opened.panel!)[3]).toBe("[ ] memory  · off · /memory");
 		expect(off.memory()).toEqual([]);
 		await off.stop();
 	} finally {
@@ -1033,7 +1038,7 @@ test("ORQ_NOTES=off is read at session start, not in a render", async () => {
 	try {
 		await h.start();
 		process.env.ORQ_NOTES = "off";
-		await h.commands.get("panel")!("", h.ctx);
+		await h.commands.get("sidebar")!("", h.ctx);
 		// Read at start, when it was unset: no memorq, no memory row, whatever the variable says now.
 		expect(panelRows(h.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 	} finally {
@@ -1177,7 +1182,7 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 		host.panel.set(false);
 		expect(host.panel.shown()).toBe(false);
 		expect(readPrefs(dir).sections.memory).toBe(false);
-		await h.commands.get("panel")!("", h.ctx);
+		await h.commands.get("sidebar")!("", h.ctx);
 		// No memorq installed in this harness, so no memory row, but the choice memorq made is saved.
 		expect(panelRows(h.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 		// No model runtime handed to this harness: the picker opens nothing and memorq writes nothing.
@@ -1354,9 +1359,10 @@ test("a silent memorq row: commands registered points at /doctor, installed with
 			const h = harnessOn(dir, { ...options, now: () => late.now } as never);
 			await h.start();
 			late.now += 10_000; // past the grace window a loaded memorq gets
-			await h.commands.get("panel")!("", h.ctx);
-			expect(panelRows(h.opened.panel!)[2]).toBe(`[ ] memory  · ${reason}`);
+			await h.commands.get("sidebar")!("", h.ctx);
+			expect(panelRows(h.opened.panel!)[3]).toBe(`[ ] memory  · ${reason}`);
 			// Space on the greyed row says what would make it available, and switches nothing.
+			h.opened.panel!.handleInput("\x1b[B");
 			h.opened.panel!.handleInput("\x1b[B");
 			h.opened.panel!.handleInput("\x1b[B");
 			h.opened.panel!.handleInput(" ");
@@ -1369,8 +1375,8 @@ test("a silent memorq row: commands registered points at /doctor, installed with
 		for (const options of [{ memorq: "none" }, {}] as const) {
 			const h = harnessOn(dir, options as never);
 			await h.start();
-			await h.commands.get("panel")!("", h.ctx);
-			expect(panelRows(h.opened.panel!)).toEqual(["[x] signals", "[x] context", "[ ] process", "[x] tips"]);
+			await h.commands.get("sidebar")!("", h.ctx);
+			expect(panelRows(h.opened.panel!)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[ ] process", "[x] tips"]);
 			expect(h.notices.join("\n")).not.toContain("install");
 			await h.stop();
 		}
@@ -1399,12 +1405,12 @@ test("after its session ends, the host memorq kept picks nothing and opens nothi
 	}
 });
 
-test("the tool-loop warning sits above the editor whenever the inspector's signals are not on screen", async () => {
+test("the tool-loop warning sits above the editor whenever the sidebar's signals are not on screen", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-signals-"));
 	const h = harnessOn(dir);
 	try {
 		await h.start();
-		await h.commands.get("panel")!("on", h.ctx); // the inspector is on screen
+		await h.commands.get("sidebar")!("on", h.ctx); // the sidebar is on screen
 		await h.handlers.get("message_end")!({ message: { role: "user", content: "go", timestamp: 1 } }, h.ctx);
 		const loop = async () => {
 			for (const id of ["a", "b", "c"]) {
@@ -1413,10 +1419,11 @@ test("the tool-loop warning sits above the editor whenever the inspector's signa
 			}
 		};
 		await loop();
-		// Signals on and the panel shown: the inspector says it, no widget.
+		// Signals on and the panel shown: the sidebar says it, no widget.
 		expect(h.widgets.get("orqi-signals")).toBeUndefined();
-		// Signals switched off in /panel: the warning comes back above the editor.
-		await h.commands.get("panel")!("", h.ctx);
+		// Signals switched off in /sidebar: the warning comes back above the editor.
+		await h.commands.get("sidebar")!("", h.ctx);
+		h.opened.panel!.handleInput("\x1b[B");
 		h.opened.panel!.handleInput(" ");
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(String(h.widgets.get("orqi-signals"))).toContain("tool loop: bash ×3");
@@ -1424,8 +1431,8 @@ test("the tool-loop warning sits above the editor whenever the inspector's signa
 		h.opened.panel!.handleInput(" ");
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(h.widgets.get("orqi-signals")).toBeUndefined();
-		await h.commands.get("panel")!("off", h.ctx);
-		expect(String(h.widgets.get("orqi-signals"))).toContain("alt+i for details");
+		await h.commands.get("sidebar")!("off", h.ctx);
+		expect(String(h.widgets.get("orqi-signals"))).toContain("alt+s for details");
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
@@ -1438,15 +1445,15 @@ test("a loaded memorq gets a few seconds to answer: loading, then not answering"
 	const h = harnessOn(dir, { commands: ["memory"], now: () => clock });
 	try {
 		await h.start();
-		await h.commands.get("panel")!("", h.ctx);
-		expect(panelRows(h.opened.panel!)[2]).toBe("[x] memory  · loading…");
+		await h.commands.get("sidebar")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[3]).toBe("[x] memory  · loading…");
 		expect(h.memory()).toEqual(["loading…"]);
 		clock += 4_000;
 		expect(h.memory()).toEqual(["loading…"]);
 		clock += 2_000; // past the grace window: memorq is loaded but silent
 		expect(h.memory()).toEqual([]);
-		await h.commands.get("panel")!("", h.ctx);
-		expect(panelRows(h.opened.panel!)[2]).toBe("[ ] memory  · not answering · /doctor");
+		await h.commands.get("sidebar")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[3]).toBe("[ ] memory  · not answering · /doctor");
 		// An answer, however late, is drawn.
 		h.bus.emit("memorq:state", memorqState());
 		expect(h.memory()[0]).toBe("47 notes for this repo");
@@ -1493,17 +1500,17 @@ test("/reload and /new: the next instance asks again and draws the fresh state",
 	}
 });
 
-test("/tips off flips the tips row and the inspector omits the section", async () => {
+test("/tips off flips the tips row and the sidebar omits the section", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
 	try {
 		const { commands, ctx, opened } = harnessOn(dir);
 		await commands.get("tips")!("off", ctx);
 		const prefs = readPrefs(dir);
 		expect(prefs.sections.tips).toBe(false);
-		await commands.get("panel")!("", ctx);
+		await commands.get("sidebar")!("", ctx);
 		expect(panelRows(opened.panel!).at(-1)).toBe("[ ] tips");
 		const sections: InspectorSection[] = SECTIONS.map((id) => ({ id, title: id, lines: () => [] }));
-		expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "context", "routing", "memory"]);
+		expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["trajectory", "signals", "context", "routing", "memory"]);
 		// /teach is the same switch.
 		await commands.get("teach")!("", ctx);
 		expect(readPrefs(dir).sections.tips).toBe(true);
@@ -2181,12 +2188,12 @@ test("teach: every orq tool has a concept, and a card is shown once per session"
 	expect(cardLine(first)).toContain(
 		hyperlink("https://docs.orq.ai/docs/observability/traces", "https://docs.orq.ai/docs/observability/traces"),
 	);
-	// The longest current docs path must still fit the compact inspector.
+	// The longest current docs path must still fit the compact sidebar.
 	const skillLines = cardLines({ concept: GLOSSARY.skill!, used: ["list_skills"] }, 32);
 	expect(skillLines.at(-1)).toBe(`docs  ${hyperlink("open", "https://docs.orq.ai/docs/integrations/code-assistants/skills")}`);
 	expect(skillLines.every((line) => visibleWidth(line) <= 32)).toBe(true);
 	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto" }, 200)).toBe(
-		// No tips (on by default, the inspector says so) and no thread id (/open opens it,
+		// No tips (on by default, the sidebar says so) and no thread id (/open opens it,
 		// the exit summary prints it): the header is who and where.
 		` ◌ orqi v${VERSION}  workspace acme · routing orq/auto`,
 	);
@@ -2944,7 +2951,7 @@ test("a resumed session's routing section counts the replayed decisions: the mar
 	const h = harnessOn(dir, { routing, catalogue, branch });
 	try {
 		await h.start();
-		const lines = h.opened.inspector!.render(38).map((line) => bare(line).slice(1, -1).trim());
+		const lines = h.opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1).trim());
 		const at = lines.findIndex((line) => line.startsWith("─ routing"));
 		expect(at).toBeGreaterThan(-1);
 		expect(lines[at + 1]).toBe("fast 1 · default 1 · frontier 0");

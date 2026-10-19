@@ -201,24 +201,24 @@ export function routeRow(
 
 const WORKSPACE_STATUS = "orq-workspace";
 
-/** What one inspector frame has already worked out, handed to every section it draws. */
+/** What one sidebar frame has already worked out, handed to every section it draws. */
 export interface SectionFrame {
 	signals: ReturnType<typeof signals>;
 }
 
 /**
- * One section of the inspector under the trajectory. `lines` is a pure renderer
+ * One section of the sidebar under the trajectory. `lines` is a pure renderer
  * over state already measured; `unavailable` names why it cannot show (memorq
- * not installed), which greys its row in /panel.
+ * not installed), which greys its row in /sidebar.
  */
 export interface InspectorSection {
 	id: SectionId;
 	title: string;
 	lines(width: number, frame: SectionFrame): string[];
 	unavailable?(): string | undefined;
-	/** A word for /panel's row while the section is still on: `loading…`. */
+	/** A word for /sidebar's row while the section is still on: `loading…`. */
 	note?(): string | undefined;
-	/** Left out of /panel's list and never drawn: memory, with no memorq anywhere. */
+	/** Left out of /sidebar's list and never drawn: memory, with no memorq anywhere. */
 	hidden?(): boolean;
 }
 
@@ -227,13 +227,13 @@ export function reserveFor(pct: number, window: number): number {
 	return Math.ceil((window * (100 - pct)) / 100);
 }
 
-/** The sections the inspector draws, in registry order: chosen in orqi.json and available. */
+/** The sections the sidebar draws, in registry order: chosen in orqi.json and available. */
 export function sectionsToDraw(sections: readonly InspectorSection[], prefs: Prefs): InspectorSection[] {
 	return sections.filter((section) => !section.hidden?.() && prefs.sections[section.id] && !section.unavailable?.());
 }
 
 /**
- * /panel's rows, one per section that is not hidden: `[x] context`, or `[ ] memory  · update memorq`,
+ * /sidebar's rows, one per section that is not hidden: `[x] context`, or `[ ] memory  · update memorq`,
  * greyed, for one that cannot show. `ids[i]` is the section on row `i`.
  */
 export function sectionRows(
@@ -254,6 +254,11 @@ export function sectionRows(
 
 type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: number; shrink?: number; minSize?: number };
 
+const HEADER_ROWS = 2;
+/** The sidebar's own lines: top border, trajectory title, summary, hint, bottom border. */
+const FRAME_CHROME = 5;
+const UNPATCHED = Symbol.for("orqi.layout.render");
+
 /**
  * orqi's fullscreen layout: the header on top, then the panel beside the content column, then the
  * editor and footer across the full width, so the footer is never cut short by the panel.
@@ -264,8 +269,13 @@ type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: nu
  * with the panel beside them instead of stretching under it. The editor is the dock's one entry with
  * `minSize: 3`. A dock without one keeps the whole dock full width; a root that is not
  * `VStack[transcript, dock]` falls back to the panel beside all of it, which narrows the footer.
+ *
+ * `reserved()` is the rows above and below the panel: the header plus the editor and footer as they
+ * last rendered. pi-tui gives a leaf component a width and no height, but it measures the lower
+ * stack (`basis: "auto"`) before it lays out the row the panel sits in, so this frame's count is
+ * already there when the panel renders. A multi-line editor shrinks the panel instead of clipping it.
  */
-export function composeLayout(inner: Component, header: Component, panel: StackEntryLike): VStack {
+export function composeLayout(inner: Component, header: Component, panel: StackEntryLike): VStack & { reserved(): number } {
 	const entries = (inner as { entries?: StackEntryLike[] }).entries;
 	const [transcript, dock] = entries?.length === 2 ? entries : [];
 	const dockEntries = (dock?.component as { entries?: StackEntryLike[] } | undefined)?.entries;
@@ -282,11 +292,25 @@ export function composeLayout(inner: Component, header: Component, panel: StackE
 			lower.push(dock);
 		}
 	}
-	return new VStack([
-		{ component: header, basis: 2, shrink: 0 },
+	// Patched on the instance, so pi-tui still lays the stack out as a stack. The fallback patches
+	// pi's own dock, so a later session or /reload wraps its original render, not the last wrapper.
+	let lowerRows = 0;
+	for (const entry of lower) {
+		const target = entry.component as Component & { [UNPATCHED]?: Component["render"] };
+		target[UNPATCHED] ??= target.render;
+		const render = target[UNPATCHED].bind(target);
+		target.render = (width: number) => {
+			const lines = render(width);
+			lowerRows = lines.length;
+			return lines;
+		};
+	}
+	const root = new VStack([
+		{ component: header, basis: HEADER_ROWS, shrink: 0 },
 		{ component: new HStack([{ component: column, grow: 1, shrink: 1, basis: 0 }, panel]), grow: 1, shrink: 1, basis: 0 },
 		...lower,
 	]);
+	return Object.assign(root, { reserved: () => HEADER_ROWS + lowerRows });
 }
 
 /** Marks orqi's HStack around pi's layout root, so a later session or /reload unwraps it instead of nesting. */
@@ -487,7 +511,7 @@ export function orqHarness(deps: HarnessDeps) {
 			render();
 		};
 		let split: ContextSplit | undefined;
-		// Which inspector sections show: orqi.json in the agent dir, read once per session (makeServices builds
+		// Which sidebar sections show: orqi.json in the agent dir, read once per session (makeServices builds
 		// this extension again for /new, /resume and /fork) and written whole on every toggle.
 		const prefs = readPrefs(deps.agentDir);
 		// pi's own global reserve, taken just before /compact-at first overrides it: `off` puts it back.
@@ -704,7 +728,7 @@ export function orqHarness(deps: HarnessDeps) {
 		let minimapSelected: number | undefined;
 		let minimapFocused = false;
 		let releaseKeys: (() => void) | undefined;
-		let sideRoot: unknown;
+		let sideRoot: ReturnType<typeof composeLayout> | undefined;
 		let overlay: OverlayHandle | undefined;
 		const minimapVisible = (cols = process.stdout.columns ?? 80) => minimapForced ?? cols >= MINIMAP_MIN_COLS;
 		const render = () => tuiRef?.requestRender();
@@ -844,9 +868,11 @@ export function orqHarness(deps: HarnessDeps) {
 			});
 		};
 
-		// ── the inspector ─────────────────────────────────────────────────────
+		// ── the sidebar ─────────────────────────────────────────────────────
 		/** The sections under the trajectory, in `SECTIONS` order (src/prefs.ts); orqi.json says which are drawn. */
 		const sections: InspectorSection[] = [
+			// Drawn by the frame itself (it fills the height the others leave); listed here so /sidebar offers it.
+			{ id: "trajectory", title: "trajectory", lines: () => [] },
 			{ id: "signals", title: "signals", lines: (w, frame) => signalLines(frame.signals, w) },
 			// Empty until the first measure: an empty section is skipped.
 			{ id: "context", title: "context", lines: (w) => (split ? contextLines(split, w) : []) },
@@ -879,8 +905,8 @@ export function orqHarness(deps: HarnessDeps) {
 			},
 		];
 		/**
-		 * The side panel, called the inspector on screen: a box as tall as the
-		 * screen, the trajectory (one row per step, `minimapRows`) on top and the
+		 * The sidebar: a box as tall as its
+		 * slot, the trajectory (one row per step, `minimapRows`) on top and the
 		 * teach, context and signals sections under it.
 		 */
 		const minimapView = (theme: { fg(token: string, text: string): string }): Component => {
@@ -919,12 +945,17 @@ export function orqHarness(deps: HarnessDeps) {
 				const found = signals(trajectory.steps, trajectory.turn);
 				// Under the trajectory: what needs attention, where the context goes, what memory knows,
 				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
+				const showTrajectory = prefs.sections.trajectory;
 				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
+					if (section.id === "trajectory") return [];
 					const lines = section.lines(inner, { signals: found });
 					return lines.length ? [{ id: section.id, lines }] : [];
 				});
 				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
-				const height = Math.max(3, (process.stdout.rows ?? 30) - 6 - below);
+				// The slot is the screen less what composeLayout keeps above and below it, or the overlay's
+				// margins (1 + 3) in regular mode. A frame taller than its slot loses its bottom: tips, the hint.
+				const slot = (process.stdout.rows ?? 30) - (sideRoot ? sideRoot.reserved() : 4);
+				const height = showTrajectory ? Math.max(3, slot - FRAME_CHROME - below) : 0;
 				const rows = minimapRows(
 					trajectory.steps,
 					inner,
@@ -945,19 +976,25 @@ export function orqHarness(deps: HarnessDeps) {
 							side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : id === "tips" && i === 0 && card ? "accent" : "muted", line)),
 						),
 				];
-				const title = " inspector ";
+				const title = " sidebar ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
 				const hint = minimapFocused
 					? "↑↓ move · enter peek · esc"
 					: minimapSelected !== undefined
 						? "scrolled back · wheel down follows"
-						: `alt+i · /panel focus · /tips ${prefs.sections.tips ? "off" : "on"}`;
+						: `alt+s · ${showTrajectory ? "/sidebar focus · " : ""}/tips ${prefs.sections.tips ? "off" : "on"}`; // focus walks the trajectory
+				// FRAME_CHROME counts the lines here that are neither trajectory rows nor sections.
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
-					side(theme.fg("dim", sectionLines("trajectory", [], inner)[0]!)),
-					...rows.map(side),
-					...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
-					...drawn.flatMap(paintSection),
+					...(showTrajectory
+						? [
+								side(theme.fg("dim", sectionLines("trajectory", [], inner)[0]!)),
+								...rows.map(side),
+								...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
+							]
+						: []),
+					// Without the trajectory above it, the first section needs no blank line to set it apart.
+					...drawn.flatMap(paintSection).slice(showTrajectory ? 0 : 1),
 					side(theme.fg("dim", fit(minimapSummary(trajectory.steps, trajectory.turn, trajectory.totals().cost, found.loop ? 1 : 0)))),
 					side(theme.fg("dim", fit(hint))),
 					theme.fg("border", `└${"─".repeat(inner)}┘`),
@@ -1025,7 +1062,11 @@ export function orqHarness(deps: HarnessDeps) {
 					visible: (viewport: { width: number }) => minimapVisible(viewport.width),
 				};
 				// The fixed header sits above both: who and where, while the footer says what and how much.
-				const wrapper = composeLayout(inner, headerView(theme as never), panelEntry) as VStack & { [SIDE]?: Component };
+				const wrapper: ReturnType<typeof composeLayout> & { [SIDE]?: Component } = composeLayout(
+					inner,
+					headerView(theme as never),
+					panelEntry,
+				);
 				wrapper[SIDE] = inner;
 				headerShown = true;
 				sideRoot = wrapper;
@@ -1195,11 +1236,11 @@ export function orqHarness(deps: HarnessDeps) {
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
 		});
 		/**
-		 * Without the side panel (regular mode, or hidden on a narrow terminal),
+		 * Without the sidebar (regular mode, or hidden on a narrow terminal),
 		 * teach and signals fall back to one dim widget line each above the
 		 * editor. Widgets, not entries, so /trajectory and a resume stay clean.
 		 */
-		// The fullscreen side panel or, in regular mode, the overlay that stands in for it.
+		// The fullscreen sidebar or, in regular mode, the overlay that stands in for it.
 		const panelShown = () => Boolean(sideRoot || overlay) && minimapVisible();
 		const syncWidgets = (ctx: ExtensionContext, teachLine?: string) => {
 			if (ctx.mode !== "tui") return;
@@ -1207,12 +1248,12 @@ export function orqHarness(deps: HarnessDeps) {
 			const dim = (line: string) => ctx.ui.theme.fg("dim", line);
 			ctx.ui.setWidget(
 				"orqi-signals",
-				// Above the editor whenever the inspector's signals are not on screen: panel hidden, or signals off in /panel.
+				// Above the editor whenever the sidebar's signals are not on screen: panel hidden, or signals off in /sidebar.
 				loop && !(panelShown() && prefs.sections.signals)
 					? [
 							ctx.ui.theme.fg(
 								"warning",
-								`⚠ tool loop: ${loop.tool} ×${loop.count} same args · ${panelShown() ? "/panel shows signals" : "alt+i for details"}`,
+								`⚠ tool loop: ${loop.tool} ×${loop.count} same args · ${panelShown() ? "/sidebar shows signals" : "alt+s for details"}`,
 							),
 						]
 					: undefined,
@@ -1224,7 +1265,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// The one-way gate. Registered here so its verdicts reach the trajectory;
 		// pi's own MCP handler only waits for the server, so a block here still wins.
-		// A one-way dialog needs the keys /panel focus would otherwise swallow, so
+		// A one-way dialog needs the keys /sidebar focus would otherwise swallow, so
 		// focus is released the moment the gate starts waiting.
 		const gate = toolGate(
 			{
@@ -1699,7 +1740,7 @@ export function orqHarness(deps: HarnessDeps) {
 			setSection(ctx, "tips", arg ? arg === "on" : !prefs.sections.tips);
 			ctx.ui.notify(
 				prefs.sections.tips
-					? `Tips on: a card follows the next relevant tool call, ${panelShown() ? "in the inspector" : "above the editor"}.`
+					? `Tips on: a card follows the next relevant tool call, ${panelShown() ? "in the sidebar" : "above the editor"}.`
 					: "Tips off.",
 			);
 			syncWidgets(ctx);
@@ -1755,7 +1796,7 @@ export function orqHarness(deps: HarnessDeps) {
 			},
 		});
 
-		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
+		pi.registerShortcut("alt+s", { description: "toggle the orqi sidebar", handler: () => toggleMinimap() });
 
 		// ── plan mode ─────────────────────────────────────────────────────────
 		pi.registerTool(
@@ -1816,19 +1857,19 @@ export function orqHarness(deps: HarnessDeps) {
 		/** What to do about a greyed memory row: the update, or where to look. */
 		const memoryHelp = (row: string) =>
 			row.endsWith("update memorq")
-				? "This memorq is too old for the side panel. Update it with /plugin update, then restart orqi."
+				? "This memorq is too old for the sidebar. Update it with /plugin update, then restart orqi."
 				: row.includes("ORQ_NOTES=off")
 					? "Memory is off for this shell: ORQ_NOTES=off. Unset it and restart orqi."
 					: row.includes("/doctor")
 						? "memorq is loaded but has not answered. /doctor checks python3, which it needs."
 						: "memorq turned memory off. /memory turns it back on.";
-		/** /panel's list: one row per section, space switches the selected one and saves the choice. */
+		/** /sidebar's list: one row per section, space switches the selected one and saves the choice. */
 		const showSections = (ctx: ExtensionContext) => {
 			let live: Panel | undefined;
 			const spec = (): PanelSpec => {
 				const { rows, disabled, ids } = sectionRows(sections, prefs);
 				return {
-					title: "side panel",
+					title: "sidebar",
 					rows,
 					selectable: true,
 					filterable: false,
@@ -1859,9 +1900,9 @@ export function orqHarness(deps: HarnessDeps) {
 			);
 		};
 
-		pi.registerCommand("panel", {
+		pi.registerCommand("sidebar", {
 			description:
-				"the inspector's sections: /panel picks which show, /panel on|off shows or hides it (alt+i), /panel focus moves through the trajectory with ↑↓ and enter",
+				"the sidebar's sections: /sidebar picks which show, /sidebar on|off shows or hides it (alt+s), /sidebar focus moves through the trajectory with ↑↓ and enter",
 			handler: async (args, ctx) => {
 				const arg = args.trim();
 				if (arg === "focus") {
@@ -1876,7 +1917,7 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				if (arg) {
-					ctx.ui.notify("usage: /panel (pick sections) · /panel on|off · /panel focus", "warning");
+					ctx.ui.notify("usage: /sidebar (pick sections) · /sidebar on|off · /sidebar focus", "warning");
 					return;
 				}
 				await showSections(ctx);

@@ -1,4 +1,4 @@
-/** Checks for the inspector's routing section: picks, switches, the cache they cost, and savings against the default model. */
+/** Checks for the sidebar's routing section: picks, switches, the cache they cost, and savings against the default model. */
 
 import { expect, test } from "bun:test";
 import { routingLines, routingStats } from "./routing-section.ts";

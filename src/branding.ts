@@ -93,8 +93,11 @@ export const SIGN_IN = [
 	"  or run `orq auth login` in another terminal; orqi picks it up on your next message.",
 ];
 
-/** The orqi views worth knowing on day one. */
-const VIEWS = "/learn · /route · /cost · /trace · /agents · /whatsnew · alt+i inspector";
+/** The orqi views worth knowing on day one: what the harness adds, then the workspace. Each fits 80 columns. */
+const VIEWS = [
+	"/plan · /handoff · /route · /context · /btw · /trajectory · alt+s sidebar",
+	"/agents · /trace · /overview · /garden · /cost · /skills · /learn · /whatsnew",
+];
 
 export const CHANGELOG_URL = "https://docs.orq.ai/docs/changelog/";
 
@@ -133,7 +136,7 @@ export function headerLines(info: HeaderInfo): string[] {
 		"",
 		...(info.signedOut ? SIGN_IN.map((line, i) => color(line, i === 0 ? TEXT : MUTED)) : PITCH.map((line) => color(line, MUTED))),
 	];
-	const footer = ["", `${indent}${color(VIEWS, MUTED)}`, `${indent}${color(HINTS, MUTED)}`];
+	const footer = ["", ...[...VIEWS, HINTS].map((line) => `${indent}${color(line, MUTED)}`)];
 	const logo = ORQI_LOGO.map((row) => {
 		return color(row, PULSE_ORANGE);
 	});

@@ -204,7 +204,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   scrapes `src/` to keep it that way. So the model `/decider` picks (pi's `/model` selector over the
   workspace's classifiers: enter for this session, ctrl+s to save) is the one every asker gets:
   `orq/auto` on each user turn, memorq through `host.decide`. The saved pick lives in `orqi.json`
-  beside the inspector sections; `ORQI_ROUTE_CLASSIFIER` outranks it, and a saved id this workspace
+  beside the sidebar sections; `ORQI_ROUTE_CLASSIFIER` outranks it, and a saved id this workspace
   lacks falls through to `CLASSIFIER_PREFERENCE` without being erased, as a saved theme does. A 403
   makes the decider unavailable for every asker until the pick or the catalogue changes. A pick made
   for the session (enter, or a save that failed) survives a catalogue refresh, `ORQI_ROUTE_CLASSIFIER`
@@ -246,9 +246,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (`unsure .40: stays`): a short follow-up such as "yes, do it" splits its vote, and dropping an hour
   of hard work to fast on it both answers worse and throws away the prompt cache. The door still
   wins over it, and the first turn of a session, with nothing to stay on, routes as before.
-- **Teach lives in the inspector (the side panel), never the transcript.** Users see it as "tips" (`/tips`; `/teach` stays an alias, and either one's choice is saved in `orqi.json`, below), the code keeps the name `teach`. Cards are not session
+- **Teach lives in the sidebar, never the transcript.** Users see it as "tips" (`/tips`; `/teach` stays an alias, and either one's choice is saved in `orqi.json`, below), the code keeps the name `teach`. Cards are not session
   entries, so `/trajectory` exports only the conversation and a resume shows no lessons. When the
-  panel is hidden (under 140 columns unless `alt+i` forces it, in fullscreen or as the regular-mode
+  panel is hidden (under 140 columns unless `alt+s` forces it, in fullscreen or as the regular-mode
   overlay) the card and a tool-loop warning fall back to one widget line above the editor, for the
   same reason. The glossary is static (`src/teach.ts`): no model call and no docs fetch per card,
   and each concept shows once per session.
@@ -392,8 +392,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   after `/new` crashed the process on `pi.getSettings()`. State that must survive a session lives
   in the factory closures (`orqCommands`), and the harness rebuilds from the branch. Renderers still
   wrap their work in try/catch: an exception in a render takes the TUI down.
-- **The inspector reaches into pi's fullscreen layout root.** It was the minimap until it grew
-  sections; its rows live in `inspector-rows.ts`, while `minimapView` and `attachMinimap` keep the old name. pi has no
+- **The sidebar reaches into pi's fullscreen layout root.** It was the minimap until it grew
+  sections, then the sidebar; its rows live in `inspector-rows.ts`, while `minimapView` and `attachMinimap` keep the old name. pi has no
   side-panel API, and an overlay covers the transcript's right edge, where prose wraps. In
   fullscreen the TUI has a `layoutRoot` (pi's chat viewport, `VStack[transcript, dock]`);
   `composeLayout` in `src/harness.ts` puts the panel, a fixed 38-column entry, beside the content
@@ -407,11 +407,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   is not `VStack[transcript, dock]` falls back to wrapping the whole root, which works but narrows
   the footer. The reach is guarded: without a `layoutRoot` (regular mode, or a pi that renamed it)
   the panel falls back to a non-capturing overlay. Either way it shows by itself from 140 columns
-  (`MINIMAP_MIN_COLS`); `alt+i` forces it on or off. The trajectory scrolls with the mouse wheel:
+  (`MINIMAP_MIN_COLS`); `alt+s` forces it on or off. The trajectory scrolls with the mouse wheel:
   fullscreen routes mouse events to the component under the pointer (`handleMouse`), and scrolling
   back to the newest step follows again. The footer factory is where the TUI is handed over, which
   is why it is attached there. The wrapper is marked with a symbol so the next session or `/reload`
-  unwraps it before wrapping again; without that, each `/reload` nested one more inspector. Ask
+  unwraps it before wrapping again; without that, each `/reload` nested one more sidebar. Ask
   upstream for a sidebar slot before building more on this.
 - **pi's `/login` → "Sign in with an account" lists `orq.ai`** (`src/oauth.ts`; the provider is named
   in `main.ts`, or pi would label it with the flow's `orq.ai (browser)`). `onlyOrq` also keeps
@@ -429,26 +429,27 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   mask), and a built-in cannot be overridden. `/key` and the first-run welcome use `MaskedInput`
   (`src/onboarding.ts`): dots and the last four characters, never the key, then the same storage and
   recovery as `/login orq`.
-- **A fixed header sits above the transcript, inside the same layout wrap as the inspector.** The
-  wrapper is `VStack(header, HStack(content column, inspector), editor + footer)`: the header says who and where
+- **A fixed header sits above the transcript, inside the same layout wrap as the sidebar.** The
+  wrapper is `VStack(header, HStack(content column, sidebar), editor + footer)`: the header says who and where
   (workspace, agent, project, routing, connection), the footer what and how much. Regular
   mode has no layout root, so the header becomes a widget above the editor there.
 - **A turn recorded at $0 is repriced from the catalogue.** A session that booted on the fallback
   model (no credential yet) holds a zero-price model object; after the first sign-in the commands
   extension re-selects the same model from the reloaded catalogue, and the trajectory reprices any
   zero-cost usage it already recorded.
-- **The inspector toggles on `alt+i`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle, and pi
-  binds no `alt+i`. `/panel on|off` does the same from the editor; bare `/panel` opens the section
-  list instead (it used to toggle, so the hints that said `/panel` now say `alt+i`). Focus for
-  ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/panel focus` is on, so the
+- **The sidebar toggles on `alt+s`, not `ctrl+t`.** `ctrl+t` is pi's thinking-block toggle, and pi
+  binds no `alt+s`. `/sidebar on|off` does the same from the editor; bare `/sidebar` opens the section
+  list instead. Focus for
+  ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/sidebar focus` is on, so the
   editor never loses the keyboard otherwise.
-- **Inspector sections are a registry, and the choice lives in `<agentDir>/orqi.json`.** Each section
-  (signals, context, routing, memory, process, tips, in that order: tips last, because a short terminal clips
-  the panel from the bottom) is an `InspectorSection` whose `lines()` is a pure renderer over state
-  already measured. Which ones draw is orqi's own small file (`src/prefs.ts`), not pi's
+- **Sidebar sections are a registry, and the choice lives in `<agentDir>/orqi.json`.** Each section
+  (trajectory, signals, context, routing, memory, process, tips, in that order: tips last, because a short
+  terminal clips the panel from the bottom) is an `InspectorSection` whose `lines()` is a pure renderer over state
+  already measured. The trajectory is the exception: the frame draws it into the height the others
+  leave, so its entry only puts it in `/sidebar`; off, the panel shrinks to its sections. Which ones draw is orqi's own small file (`src/prefs.ts`), not pi's
   `settings.json` (pi's SettingsManager has no setter for a key it does not know) and not the
   project's `.orqi/` (per repository, and read only when the project is trusted). Process starts
-  off, so the RAM readout an upgrade used to show is gone until `/panel` turns it on. The file is
+  off, so the RAM readout an upgrade used to show is gone until `/sidebar` turns it on. The file is
   read forgivingly (missing, unreadable or odd means the defaults; unknown ids are ignored) and each
   toggle rereads it and changes only its own id, so two orqi windows keep each other's choices.
 - **`/compact-at` moves pi's reserve, it does not compact.** pi compacts once the context passes
@@ -468,7 +469,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   compacts earlier than the percent.
 - **orqi does not carry memorq, and only mentions memory once memorq is there.** memorq
   (orq-ai/orq-knowledge-notes, a pi package) ships on its own schedule and is not something every orqi
-  user can install, so orqi never tells anyone to install it: with no memorq, `/panel` has no memory
+  user can install, so orqi never tells anyone to install it: with no memorq, `/sidebar` has no memory
   row and `/doctor` no memorq or python3 row. `src/memorq-detect.ts` tells the cases apart without
   asking memorq: its commands are registered (only a memorq new enough to publish its state registers
   any, so silence after a few seconds' grace is a failure: `not answering · /doctor`), a package whose

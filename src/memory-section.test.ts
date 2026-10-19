@@ -1,4 +1,4 @@
-/** Checks for the inspector's memory section: what memorq published, as lines, and which reads were of notes. */
+/** Checks for the sidebar's memory section: what memorq published, as lines, and which reads were of notes. */
 
 import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";

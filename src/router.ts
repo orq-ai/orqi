@@ -255,7 +255,7 @@ export function policy(input: PolicyInput, floor = confidenceFloor()): { tier: T
 		// No classifier answer: the keyword floor stands in for the door question.
 		const floor = floorOf(input.text);
 		if (floor) return { tier: "hard", why: `floor: ${floor}`, arrow: "▲" };
-		// Marked, so the route line and the inspector cannot pass it off as a classification.
+		// Marked, so the route line and the sidebar cannot pass it off as a classification.
 		const why = input.classified && "error" in input.classified ? input.classified.error : "no classifier";
 		return { tier: "medium", why: `fallback: ${why}`, fallback: true };
 	}
