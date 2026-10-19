@@ -24,11 +24,11 @@ import {
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
 	minimapRows,
-	minimapSummary,
 	peekLines,
 	processLines,
 	signalLines,
 	SPINNER,
+	trajectoryTitle,
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
@@ -257,8 +257,8 @@ type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: nu
 const HEADER_ROWS = 2;
 /** Why /sidebar greys the routing row: orq/auto is not picking the model and has not routed yet. */
 const ROUTING_OFF = "/model orq/auto";
-/** The sidebar's own lines: top border, trajectory title, summary, hint, bottom border. */
-const FRAME_CHROME = 5;
+/** The sidebar's own lines: top border, trajectory title, hint, bottom border. */
+const FRAME_CHROME = 4;
 const UNPATCHED = Symbol.for("orqi.layout.render");
 
 /**
@@ -991,14 +991,13 @@ export function orqHarness(deps: HarnessDeps) {
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					...(showTrajectory
 						? [
-								side(theme.fg("dim", sectionLines("trajectory", [], inner)[0]!)),
+								side(theme.fg("dim", trajectoryTitle(trajectory.steps.length, trajectory.turn, inner))),
 								...rows.map(side),
 								...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
 							]
 						: []),
 					// Without the trajectory above it, the first section needs no blank line to set it apart.
 					...drawn.flatMap(paintSection).slice(showTrajectory ? 0 : 1),
-					side(theme.fg("dim", fit(minimapSummary(trajectory.steps, trajectory.turn, trajectory.totals().cost, found.loop ? 1 : 0)))),
 					side(theme.fg("dim", fit(hint))),
 					theme.fg("border", `└${"─".repeat(inner)}┘`),
 				];
