@@ -538,6 +538,21 @@ test("footerLine: when nothing fits, the branch name is shortened and the git st
 	expect(visibleWidth(line)).toBeLessThanOrEqual(70);
 });
 
+test("footerLine: a wide-glyph branch shortens by display width and stays within the line", () => {
+	const state = {
+		input: 0,
+		output: 0,
+		cost: 0.1,
+		samples: [],
+		tools: 0,
+		branch: "機能/フッターのブランチ名はとても長い🚀🚀",
+		git: { badges: "~2" },
+	};
+	const line = footerLine({ ...state, workspace: "orq:acme", selection: "openai/gpt-5.6-terra" }, 60);
+	expect(line).toEndWith("… ~2 ");
+	expect(visibleWidth(line)).toBeLessThanOrEqual(60);
+});
+
 test("footer git badges: a refresh that fails after a newer one finished leaves the newer badges", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-footer-git-"));
 	const calls: { args: string[]; ok: (out: { stdout: string; code: number }) => void; fail: (error: Error) => void }[] = [];

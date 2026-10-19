@@ -164,9 +164,10 @@ function footerBand(state: FooterState, width: number, paint: Paint, wide: boole
 	if (!cut) return undefined;
 	// Nothing fits even in the narrowest band: shorten the branch name, not the git state after it.
 	const over = visibleWidth(l) + visibleWidth(sep) + visibleWidth(r) - width;
-	if (branch && over > 0 && branch.length - over - 1 >= 4) {
-		right[right.length - 1] = paint.dim(`${branch.slice(0, branch.length - over - 1)}…`) + badges;
-		return `${l}${sep}${right.join(sep)} `;
+	const room = branch ? visibleWidth(branch) - over - 1 : 0;
+	if (branch && over > 0 && room >= 4) {
+		right[right.length - 1] = paint.dim(`${truncateToWidth(branch, room, "")}…`) + badges;
+		return truncateToWidth(`${l}${sep}${right.join(sep)} `, width);
 	}
 	return truncateToWidth(`${l}${sep}${r}`, width);
 }
