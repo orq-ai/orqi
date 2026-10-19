@@ -1540,7 +1540,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerCommand("route", {
 			description:
-				"orq/auto routing: /route on|off shows the route line, /route explain the question and models, /route models picks the fast, default and frontier models, /route dry on|off shows its picks without following them, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
+				"orq/auto routing: /route on|off shows the route line, /route explain how it decides, /route questions what the decider is asked, /route models picks the fast, default and frontier models, /route dry on|off shows its picks without following them, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
 			handler: async (args, ctx) => {
 				const routing = deps.routing;
 				const arg = args.trim();
@@ -1612,28 +1612,47 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				const pool = TIERS.map((t: Tier) => `${SLOTS[t]} ${shortModel(routing.pool[t])} (${RUNG_SOURCE[routing.source(t)]})`).join(" · ");
-				if (arg === "explain" || arg === "") {
+				if (arg === "questions") {
 					ctx.ui.notify(
 						[
-							"route question (general_v2 · orq-smart-router RES-1619)",
+							"what the decider is asked about each message, word for word",
+							"how hard is it",
 							`  ${DIFFICULTY_QUESTION.instructions}`,
 							...Object.entries(DIFFICULTY_QUESTION.criteria).map(([tier, text]) => `  ${tier.padEnd(7)} ${text}`),
-							"door question (evaluatorq's door criteria, asked in the same call)",
+							"can it be undone",
 							`  ${DOOR_QUESTION.instructions}`,
 							...Object.entries(DOOR_QUESTION.criteria).map(([door, text]) => `  ${door.padEnd(7)} ${text}`),
-							`models   ${pool}`,
-							`dry run  ${routing.dryRun ? "on" : "off"}${picks.easy + picks.medium + picks.hard ? ` · this session's picks: ${TIERS.map((t) => `${SLOTS[t]} ${picks[t]}`).join(" · ")}` : ""}`,
-							`decider  ${routing.decider.id ?? "none"}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
-							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
-							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
-							"       cannot answer, a keyword floor (delete / auto_run / agent or evaluator changes) stands in;",
-							`       when its strongest answer is under ${confidenceFloor()} it is unsure, and the previous turn's slot answers`,
-							"select it with /model orq/auto, or ORQI_MODEL=orq/auto",
 						].join("\n"),
 					);
 					return;
 				}
-				ctx.ui.notify("usage: /route on|off|explain|models|dry on|off|classifier [id] [--save]|platform", "warning");
+				if (arg === "explain" || arg === "") {
+					const decider = routing.decider.id ?? "none";
+					const counted = picks.easy + picks.medium + picks.hard;
+					const onAuto = ctx.model?.provider === "orq" && ctx.model.id === "auto";
+					ctx.ui.notify(
+						[
+							"orq/auto picks a model for each message you send.",
+							`  1. The decider (${decider}) reads your newest message and answers two questions:`,
+							"     how hard is it (easy, medium or hard), and does it change something that cannot be undone?",
+							"  2. easy goes to fast, medium to default, hard to frontier. A message that deletes,",
+							"     overwrites or sends something goes to frontier.",
+							`  3. When the decider is unsure (its top answer under ${confidenceFloor()}), the previous message's model answers again.`,
+							"  4. Tool calls within one answer stay on its model. A retry after an overload or a too-long",
+							"     conversation moves up one.",
+							"  5. If the decider cannot answer, a few keywords (delete, auto_run, agent or evaluator changes)",
+							"     send the message to frontier; anything else goes to default.",
+							"",
+							`models   ${pool}`,
+							`decider  ${decider}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
+							`dry run  ${routing.dryRun ? "on" : "off"}${counted ? ` · this session's picks: ${TIERS.map((t) => `${SLOTS[t]} ${picks[t]}`).join(" · ")}` : ""}`,
+							"",
+							`change it: /route models · /decider · /route dry ${routing.dryRun ? "off" : "on"} · the exact questions: /route questions${onAuto ? "" : " · use it: /model orq/auto"}`,
+						].join("\n"),
+					);
+					return;
+				}
+				ctx.ui.notify("usage: /route on|off|explain|questions|models|dry on|off|classifier [id] [--save]|platform", "warning");
 			},
 		});
 

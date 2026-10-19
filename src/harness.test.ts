@@ -2820,6 +2820,8 @@ test("/route dry on|off switches it for the session and says so", async () => {
 		expect(h.notices.at(-1)).toContain("Dry run on: orq/auto still asks the decider but answers every turn on gpt-5.6-terra");
 		await route("explain", h.ctx);
 		expect(h.notices.at(-1)).toContain("dry run  on");
+		// The way back is offered, not the switch already thrown.
+		expect(h.notices.at(-1)).toContain("/route dry off");
 		await route("dry", h.ctx);
 		expect(h.notices.at(-1)).toContain("usage: /route dry on|off (now on)");
 		await route("dry off", h.ctx);
@@ -2829,6 +2831,40 @@ test("/route dry on|off switches it for the session and says so", async () => {
 		await h.stop();
 		if (env === undefined) delete process.env.ORQI_ROUTE_DRY_RUN;
 		else process.env.ORQI_ROUTE_DRY_RUN = env;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/route explain says how orq/auto decides in plain words; /route questions has the decider's exact wording", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-route-explain-"));
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6, cost: { input: 4, output: 20, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6, cost: { input: 2, output: 12, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1, cost: { input: 0.2, output: 1.2, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "typesafe/jev-latest", kind: "classifier" },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra");
+	const h = harnessOn(dir, { routing, catalogue });
+	const route = h.commands.get("route")!;
+	try {
+		await h.start();
+		await route("explain", h.ctx);
+		const explained = h.notices.at(-1)!;
+		// No ticket, eval or package names: those mean nothing to whoever reads this.
+		expect(explained).not.toMatch(/RES-\d|general_v2|evaluatorq|smart-router/);
+		expect(explained).toContain("orq/auto picks a model for each message you send");
+		expect(explained).toContain("easy goes to fast, medium to default, hard to frontier");
+		expect(explained).toContain("models   fast gpt-5.6-luna (auto)");
+		expect(explained).toContain("decider  typesafe/jev-latest");
+		expect(explained).toContain("/route questions");
+		await route("questions", h.ctx);
+		const questions = h.notices.at(-1)!;
+		expect(questions).toContain("Pick the least capable model tier");
+		expect(questions).toContain("Classify whether doing what this request asks can be undone");
+		expect(questions).not.toMatch(/RES-\d|general_v2|evaluatorq/);
+	} finally {
+		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
