@@ -132,7 +132,7 @@ export function registerHandoff(pi: ExtensionAPI, host: HandoffHost) {
 					})
 					.catch((error) => {
 						if (loader.signal.aborted) return;
-						ctx.ui.notify(`/handoff failed: ${(error as Error).message}`, "error");
+						ctx.ui.notify(`/handoff failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 						done(null);
 					});
 				return loader;
@@ -159,7 +159,7 @@ export function registerHandoff(pi: ExtensionAPI, host: HandoffHost) {
 					},
 				});
 			} catch (error) {
-				ctx.ui.notify(`/handoff failed: ${(error as Error).message}. This session is unchanged.`, "error");
+				ctx.ui.notify(`/handoff failed: ${error instanceof Error ? error.message : String(error)}. This session is unchanged.`, "error");
 			}
 		},
 	});
