@@ -10,7 +10,8 @@ import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, headerBar, hostLabel, sparkline, tokens } from "./footer.ts";
-import { exitSummary, orqHarness, repoOf, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
+import { exitSummary, orqHarness, repoOf, reserveFor, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
 	contextLines,
@@ -486,6 +487,7 @@ function harnessOn(
 		modelRuntime?: unknown;
 		now?: () => number;
 		permissionMode?: PermissionMode;
+		settingsManager?: SettingsManager;
 	} = {},
 ) {
 	const tools = new Map<string, any>();
@@ -519,7 +521,7 @@ function harnessOn(
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		setModel: async () => {},
 		getCommands: () => (options.commands ?? []).map((name) => ({ name, source: "extension" })),
-		getSettings: () => ({}),
+		getSettings: () => options.settingsManager?.getSettings() ?? {},
 		getThinkingLevel: () => "off",
 		getAllTools: () => [],
 		getActiveTools: () => [],
@@ -534,6 +536,7 @@ function harnessOn(
 		modelRuntime: options.modelRuntime as never,
 		now: options.now,
 		permissionMode: options.permissionMode,
+		settingsManager: options.settingsManager,
 	})(pi as any);
 	const notices: string[] = [];
 	const widgets = new Map<string, unknown>();
@@ -2284,6 +2287,48 @@ test("/plan switches read-only on and off, tells the model once each way, and pe
 	}
 });
 
+test("reserveFor turns a percent of the window into pi's reserve", () => {
+	expect(reserveFor(70, 200_000)).toBe(60_000);
+	expect(reserveFor(90, 128_000)).toBe(12_800);
+	// Rounded up, so pi never compacts later than the percent.
+	expect(reserveFor(70, 1_001)).toBe(301);
+});
+
+test("/compact-at moves pi's compaction reserve in memory, follows the model and saves the percent", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-compact-at-"));
+	try {
+		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ compactAt: 70 }));
+		const settings = SettingsManager.inMemory({ compaction: { reserveTokens: 20_000 } });
+		const h = harnessOn(dir, { settingsManager: settings });
+		const reserve = () => settings.getCompactionSettings(undefined).reserveTokens;
+		(h.ctx as any).model = { provider: "orq", id: "big", contextWindow: 200_000 };
+		await h.start();
+		expect(reserve()).toBe(60_000);
+		// Another setter saves: pi rebuilds its merged settings from the global ones, and the reserve survives.
+		settings.setQuietStartup(true);
+		expect(reserve()).toBe(60_000);
+		// A model with another window gets its own reserve.
+		const small = { provider: "orq", id: "small", contextWindow: 128_000 };
+		(h.ctx as any).model = small;
+		h.handlers.get("model_select")!({ model: small }, h.ctx);
+		expect(reserve()).toBe(38_400);
+		await h.commands.get("compact-at")!("90%", h.ctx);
+		expect(reserve()).toBe(12_800);
+		expect(readPrefs(dir).compactAt).toBe(90);
+		expect(h.notices.at(-1)).toBe(`Auto-compaction at 90% of the context window (${tokens(115_200)} of ${tokens(128_000)}).`);
+		await h.commands.get("compact-at")!("29", h.ctx);
+		expect(h.notices.at(-1)).toBe("usage: /compact-at 30-95|off");
+		expect(readPrefs(dir).compactAt).toBe(90);
+		// off puts back the reserve settings.json had.
+		await h.commands.get("compact-at")!("off", h.ctx);
+		expect(reserve()).toBe(20_000);
+		expect(readPrefs(dir).compactAt).toBeUndefined();
+		await h.stop();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("exit_plan saves the plan and only the user's approval leaves plan mode", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-"));
 	try {
@@ -2341,6 +2386,38 @@ test("exit_plan saves the plan and only the user's approval leaves plan mode", a
 		const headless = await run({ ...h.ctx, mode: "print" });
 		expect(text(headless)).toContain(planPath(dir, "s1"));
 		expect((await edit())?.block).toBe(true);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/** pi settings with a global and a trusted project file, in memory. */
+function settingsWith(global: object, project: object) {
+	const files: Record<string, string | undefined> = { global: JSON.stringify(global), project: JSON.stringify(project) };
+	return SettingsManager.fromStorage({
+		withLock: (scope: "global" | "project", fn: (current: string | undefined) => string | undefined) => {
+			const next = fn(files[scope]);
+			if (next !== undefined) files[scope] = next;
+		},
+	});
+}
+
+test("/compact-at unset leaves pi's settings alone, and a project's own reserve wins", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-compact-at-"));
+	try {
+		const settings = settingsWith({}, { compaction: { reserveTokens: 50_000 } });
+		const h = harnessOn(dir, { settingsManager: settings });
+		const reserve = () => settings.getCompactionSettings(undefined).reserveTokens;
+		(h.ctx as any).model = { provider: "orq", id: "big", contextWindow: 200_000 };
+		// No compactAt: the project's value stands, as it would without orqi.
+		await h.start();
+		expect(reserve()).toBe(50_000);
+		await h.commands.get("compact-at")!("70", h.ctx);
+		expect(reserve()).toBe(50_000);
+		expect(h.notices.at(-1)).toBe("Saved, but this project pins compaction.reserveTokens in .orqi/settings.json, and that wins here.");
+		await h.commands.get("compact-at")!("off", h.ctx);
+		expect(reserve()).toBe(50_000);
+		await h.stop();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

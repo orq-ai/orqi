@@ -66,7 +66,7 @@ import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
-import { createLocalTools } from "./local-tools.ts";
+import { createLocalTools, EXCLUDED_TOOLS } from "./local-tools.ts";
 import { takePermissionModeFlag } from "./permission-mode.ts";
 import { createAskUserTool } from "./ask-user.ts";
 import { createSubagentTool } from "./subagent.ts";
@@ -541,7 +541,7 @@ const routing = registerRouting(
 );
 const model = pickModel(models);
 // `edit` retains pi's native before/after diff preview. Bash is exposed through
-// the permission gate; whole-file replacement remains excluded because targeted
+// the permission gate; whole-file replacement (`EXCLUDED_TOOLS`) stays off because targeted
 // edits are inspectable.
 const localTools = createLocalTools(process.cwd());
 const customTools = [
@@ -711,6 +711,7 @@ const makeServices = async () => {
 					refreshCatalogue,
 					routing,
 					permissionMode,
+					settingsManager,
 				}),
 			],
 		},
@@ -812,6 +813,7 @@ try {
 			sessionManager: SessionManager.inMemory(),
 			model,
 			customTools,
+			excludeTools: EXCLUDED_TOOLS,
 		});
 		try {
 			session.subscribe((event: any) => {
@@ -837,7 +839,14 @@ try {
 			const fresh = first ? services : await makeServices();
 			first = false;
 			return {
-				...(await createAgentSessionFromServices({ services: fresh, sessionManager, sessionStartEvent, model, customTools })),
+				...(await createAgentSessionFromServices({
+					services: fresh,
+					sessionManager,
+					sessionStartEvent,
+					model,
+					customTools,
+					excludeTools: EXCLUDED_TOOLS,
+				})),
 				services: fresh,
 				diagnostics: fresh.diagnostics,
 			};

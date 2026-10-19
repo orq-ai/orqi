@@ -94,6 +94,7 @@ export const ORQI_COMMANDS = [
 	"tips",
 	"context",
 	"plan",
+	"compact-at",
 ] as const;
 
 /** Rejection rows the extension writes itself, as opposed to the server's verdicts. */
