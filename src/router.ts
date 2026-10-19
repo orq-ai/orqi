@@ -207,6 +207,15 @@ function parseCuts(value: string | undefined): [number, number] {
 	return Number.isFinite(a) && Number.isFinite(b) ? [a!, b!] : [0.5, 1.5];
 }
 
+/**
+ * Below this, the decider's strongest answer is a guess, and the previous turn's slot answers instead:
+ * "yes, do it" after an hour of hard work splits its vote and should not drop to fast. `0` turns it off.
+ */
+export function confidenceFloor(value = process.env.ORQI_ROUTE_CONFIDENCE): number {
+	const floor = Number(value);
+	return value !== undefined && value.trim() !== "" && Number.isFinite(floor) && floor >= 0 && floor <= 1 ? floor : 0.5;
+}
+
 /** A retry error that a bigger model would get past. */
 export function escalates(error: string | undefined): boolean {
 	return /overload|capacity|context|too long|maximum.*tokens|token limit/i.test(error ?? "");
@@ -229,7 +238,7 @@ export interface PolicyInput {
  * The rung for one request, and the words the route entry shows.
  * `classified` is only consulted on a user turn.
  */
-export function policy(input: PolicyInput): { tier: Tier; why?: string; arrow?: "▲" | "↑"; fallback?: true } {
+export function policy(input: PolicyInput, floor = confidenceFloor()): { tier: Tier; why?: string; arrow?: "▲" | "↑"; fallback?: true } {
 	const { reason, state } = input;
 	if (reason === "direct") return { tier: "easy", why: "summary" };
 	if (reason === "continuation") return { tier: state?.tier ?? "medium" };
@@ -249,6 +258,8 @@ export function policy(input: PolicyInput): { tier: Tier; why?: string; arrow?: 
 		return { tier: "medium", why: `fallback: ${why}`, fallback: true };
 	}
 	if (input.door && input.door !== "benign") return { tier: "hard", why: `door: ${input.door}`, arrow: "▲" };
+	const top = Math.max(...TIERS.map((tier) => (input.classified && !("error" in input.classified) ? (input.classified[tier] ?? 0) : 0)));
+	if (state?.tier && top < floor) return { tier: state.tier, why: `unsure ${top.toFixed(2).replace(/^0/, "")}: stays` };
 	return { tier: tierOf(input.classified) };
 }
 

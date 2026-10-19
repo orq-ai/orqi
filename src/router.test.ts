@@ -19,6 +19,7 @@ import {
 	registerRouting,
 	autoReason,
 	clipMiddle,
+	confidenceFloor,
 	priceWarning,
 	routePool,
 	tierOf,
@@ -468,4 +469,52 @@ test("long prompts keep their start and end", () => {
 	expect(clipped.startsWith("A".repeat(500))).toBe(true);
 	expect(clipped.endsWith("Z".repeat(500))).toBe(true);
 	expect(clipped).toMatch(/\[… \d+ characters omitted …\]/);
+});
+
+test("an unsure decider keeps the previous slot", () => {
+	const split = { easy: 0.4, medium: 0.35, hard: 0.25 };
+	expect(policy({ reason: "user", text: "yes, do it", state: { tier: "hard", model: "m" }, classified: split }, 0.5)).toEqual({
+		tier: "hard",
+		why: "unsure .40: stays",
+	});
+	// Confident: routes as today.
+	expect(
+		policy({ reason: "user", text: "hi", state: { tier: "hard", model: "m" }, classified: { easy: 1, medium: 0, hard: 0 } }, 0.5).tier,
+	).toBe("easy");
+	// 0 turns the rule off.
+	expect(policy({ reason: "user", text: "x", state: { tier: "hard", model: "m" }, classified: split }, 0).tier).toBe("medium");
+});
+
+test("unsure with nothing to stay on routes as today", () => {
+	expect(policy({ reason: "user", text: "x", classified: { easy: 0.4, medium: 0.35, hard: 0.25 } }, 0.5)).toEqual({ tier: "medium" });
+});
+
+test("the door beats an unsure difficulty", () => {
+	expect(
+		policy(
+			{
+				reason: "user",
+				text: "x",
+				state: { tier: "easy", model: "m" },
+				classified: { easy: 0.4, medium: 0.35, hard: 0.25 },
+				door: "one_way",
+			},
+			0.5,
+		).tier,
+	).toBe("hard");
+});
+
+test("no probabilities, no confidence rule", () => {
+	expect(
+		policy({ reason: "user", text: "delete the dataset", state: { tier: "easy", model: "m" }, classified: { error: "timed out" } }, 0.5)
+			.why,
+	).toBe("floor: destructive request");
+});
+
+test("ORQI_ROUTE_CONFIDENCE: a number in [0, 1], else 0.5", () => {
+	expect(confidenceFloor(undefined)).toBe(0.5);
+	expect(confidenceFloor("0.6")).toBe(0.6);
+	expect(confidenceFloor("0")).toBe(0);
+	expect(confidenceFloor("2")).toBe(0.5);
+	expect(confidenceFloor("high")).toBe(0.5);
 });

@@ -88,6 +88,7 @@ allows and one orq credential covers both the LLM and the tools.
 | `ORQI_TUI` | `regular` renders inline instead of fullscreen; the inspector then floats as an overlay instead of taking its own columns |
 | `ORQI_ROUTE_POOL` | Override `orq/auto`'s models, over any `/route models` pick (easy is fast, medium default, hard frontier): `easy=openai/gpt-5.6-luna,hard=anthropic/claude-opus-5` |
 | `ORQI_ROUTE_LOG` | `1` appends each routing decision to `~/.orqi/agent/routes.jsonl` (prompt hash, tier, probabilities, model, cost, latency, door) |
+| `ORQI_ROUTE_CONFIDENCE` | Below this (default `0.5`), the decider's strongest answer counts as unsure and `orq/auto` stays on the previous turn's model; `0` turns it off |
 | `ORQI_ROUTE_THRESHOLDS`, `ORQI_ROUTE_CLASSIFIER` | Expected-tier cut points (default `0.5,1.5`) and the decision model, over the one `/decider` saved (default `orq/decider-4b`, else `typesafe/jev-latest`, else the workspace's first classifier) |
 | `ORQI_TAG` | Sent as `X-ORQ-METADATA-tag` on every router call, so a workshop instructor can filter the Threads tab by it |
 | `ORQI_WORKSPACE` | Workspace key for Studio links (`/open`, `/trace`, `/garden`), for an API key that cannot read its own workspace's settings |

@@ -226,7 +226,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would delete
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
   runs when the classifier errors, 403s, times out, or the workspace has no classifier. A response
-  without a door answer has no opinion; the router does not invent one.
+  without a door answer has no opinion; the router does not invent one. When the strongest
+  difficulty answer is under `ORQI_ROUTE_CONFIDENCE` (0.5), the previous turn's slot answers instead
+  (`unsure .40: stays`): a short follow-up such as "yes, do it" splits its vote, and dropping an hour
+  of hard work to fast on it both answers worse and throws away the prompt cache. The door still
+  wins over it, and the first turn of a session, with nothing to stay on, routes as before.
 - **Teach lives in the inspector (the side panel), never the transcript.** Users see it as "tips" (`/tips`; `/teach` stays an alias, and either one's choice is saved in `orqi.json`, below), the code keeps the name `teach`. Cards are not session
   entries, so `/trajectory` exports only the conversation and a resume shows no lessons. When the
   panel is hidden (under 140 columns unless `alt+i` forces it, in fullscreen or as the regular-mode

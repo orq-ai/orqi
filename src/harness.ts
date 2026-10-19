@@ -56,6 +56,7 @@ import { toolGate } from "./gate.ts";
 import { createExitPlanTool, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import {
+	confidenceFloor,
 	DIFFICULTY_QUESTION,
 	DOOR_QUESTION,
 	priceWarning,
@@ -1589,7 +1590,8 @@ export function orqHarness(deps: HarnessDeps) {
 							`decider  ${routing.decider.id ?? "none"}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
 							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
 							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
-							"       cannot answer, a keyword floor (delete / auto_run / agent or evaluator changes) stands in",
+							"       cannot answer, a keyword floor (delete / auto_run / agent or evaluator changes) stands in;",
+							`       when its strongest answer is under ${confidenceFloor()} it is unsure, and the previous turn's slot answers`,
 							"select it with /model orq/auto, or ORQI_MODEL=orq/auto",
 						].join("\n"),
 					);
