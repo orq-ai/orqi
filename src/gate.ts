@@ -89,6 +89,7 @@ export function toolGate(
 		allowedForTurn: () => boolean,
 		allowForTurn: () => void,
 		refusal = label,
+		choices = [ALLOW_ONCE, ALLOW_TURN, DENY],
 	): Promise<ToolCallEventResult | undefined> => {
 		if (allowedForTurn()) {
 			trajectory.gate(event.toolCallId, "one_way", "allowed");
@@ -102,7 +103,7 @@ export function toolGate(
 			};
 		}
 		trajectory.gate(event.toolCallId, "one_way", "waiting");
-		const choice = await ctx.ui.select(`${label}\n${canonical(maskSecrets(details))}`, [ALLOW_ONCE, ALLOW_TURN, DENY]);
+		const choice = await ctx.ui.select(`${label}\n${canonical(maskSecrets(details))}`, choices);
 		if (choice === ALLOW_ONCE || choice === ALLOW_TURN) {
 			if (choice === ALLOW_TURN) allowForTurn();
 			trajectory.gate(event.toolCallId, "one_way", "allowed");
@@ -138,11 +139,13 @@ export function toolGate(
 					ctx,
 					planning ? "bash · plan mode: read-only commands only" : "bash · command",
 					event.input,
-					() => bashAllowedForTurn,
+					// While planning every command asks: a turn-wide yes, even one given before /plan, must not carry over.
+					() => !planning && bashAllowedForTurn,
 					() => {
 						bashAllowedForTurn = true;
 					},
 					"the Bash command",
+					planning ? [ALLOW_ONCE, DENY] : undefined,
 				);
 			}
 			if (!event.toolName.startsWith(TOOL_PREFIX)) return undefined;

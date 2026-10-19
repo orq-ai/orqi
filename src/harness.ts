@@ -1001,6 +1001,14 @@ export function orqHarness(deps: HarnessDeps) {
 				.at(-1) as { data?: { on?: boolean } } | undefined;
 			planning = planEntry ? planEntry.data?.on === true : deps.permissionMode === "plan";
 			planNotice = planning && !planEntry ? PLAN_ON : undefined;
+			// A launch with --plan is recorded like a switch, so a resume without the flag keeps plan mode.
+			if (planning && !planEntry) {
+				try {
+					pi.appendEntry(PLAN_ENTRY, { on: true });
+				} catch {
+					// A stale handle: the launch flag still holds for this session.
+				}
+			}
 			syncPlan(ctx);
 			if (ctx.mode === "tui" && !rssTimer) {
 				sampleRss();
@@ -1497,18 +1505,22 @@ export function orqHarness(deps: HarnessDeps) {
 						ctx.ui.notify("No plan in this session yet: /plan, then ask for one.", "warning");
 						return;
 					}
-					const plan = readFileSync(path, "utf8").trim();
-					await ctx.waitForIdle();
-					// The fresh session is not in plan mode, whatever the launch said: running the plan is the point.
-					await ctx.newSession({
-						parentSession: ctx.sessionManager.getSessionFile(),
-						setup: async (sessionManager) => {
-							sessionManager.appendCustomEntry(PLAN_ENTRY, { on: false });
-						},
-						withSession: async (fresh) => {
-							await fresh.sendUserMessage(runPrompt(path, plan));
-						},
-					});
+					try {
+						const plan = readFileSync(path, "utf8").trim();
+						await ctx.waitForIdle();
+						// The fresh session is not in plan mode, whatever the launch said: running the plan is the point.
+						await ctx.newSession({
+							parentSession: ctx.sessionManager.getSessionFile(),
+							setup: async (sessionManager) => {
+								sessionManager.appendCustomEntry(PLAN_ENTRY, { on: false });
+							},
+							withSession: async (fresh) => {
+								await fresh.sendUserMessage(runPrompt(path, plan));
+							},
+						});
+					} catch (error) {
+						ctx.ui.notify(`/plan run failed: ${(error as Error).message}. The plan is still at ${path}.`, "error");
+					}
 					return;
 				}
 				if (arg && arg !== "on" && arg !== "off") {

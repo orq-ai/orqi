@@ -150,9 +150,23 @@ export function createExitPlanTool(host: PlanHost) {
 			if (!plan) return result("exit_plan needs the plan text.", empty, true);
 			if (OPEN.test(plan))
 				return result("The plan still has a decision marked (open). Settle it with ask_user, then call exit_plan again.", empty, true);
+			if (!sliceCount(plan))
+				return result(
+					'The plan has no slices. Add a "## Slices" section with numbered lines, one small change each with how to verify it, then call exit_plan again.',
+					empty,
+					true,
+				);
 			const path = planPath(host.agentDir, ctx.sessionManager.getSessionId());
-			mkdirSync(join(host.agentDir, "plans"), { recursive: true });
-			writeFileSync(path, `${plan}\n`);
+			try {
+				mkdirSync(join(host.agentDir, "plans"), { recursive: true });
+				writeFileSync(path, `${plan}\n`);
+			} catch (error) {
+				return result(
+					`The plan could not be saved to ${path}: ${(error as Error).message}. Tell the user; plan mode stays on.`,
+					empty,
+					true,
+				);
+			}
 			if (ctx.mode !== "tui") {
 				// Like ask_user: a default answer would be consent nobody gave. The path goes to stderr for scripts.
 				process.stderr.write(`plan: ${path}\n`);

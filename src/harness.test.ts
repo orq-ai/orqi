@@ -32,7 +32,7 @@ import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step 
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 import { createDecider } from "./decider.ts";
 import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
-import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
+import { ALLOW_ONCE, ALLOW_TURN, DENY, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import { APPROVED, FRESH, NOT_PLANNING, PLAN_OFF, PLAN_ON, planPath } from "./plan.ts";
 import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
@@ -2340,6 +2340,21 @@ test("plan mode lets reads through, asks for every Bash command and blocks the r
 	// Bash asks while planning, and --auto does not apply: the mode is read on every call.
 	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: { command: "ls" } }, ui)).toBeUndefined();
 	expect(asked[0]).toStartWith("bash · plan mode");
+	// Planning offers no "for this turn", and a turn-wide yes given before /plan does not carry over.
+	const offered: string[][] = [];
+	const turnWide = toolGate({ gate: () => {} }, undefined, () => mode);
+	const pick = (answer: string) => ({
+		hasUI: true,
+		ui: { select: async (_t: string, options: string[]) => (offered.push(options), answer) } as any,
+	});
+	mode = "prompt";
+	await turnWide.onToolCall({ toolCallId: "t1", toolName: "bash", input: { command: "ls" } }, pick(ALLOW_TURN));
+	await turnWide.onToolCall({ toolCallId: "t2", toolName: "bash", input: { command: "ls" } }, pick(ALLOW_ONCE)); // memo: not asked
+	expect(offered).toHaveLength(1);
+	mode = "plan";
+	await turnWide.onToolCall({ toolCallId: "t3", toolName: "bash", input: { command: "rm x" } }, pick(ALLOW_ONCE));
+	expect(offered).toHaveLength(2);
+	expect(offered[1]).toEqual([ALLOW_ONCE, DENY]);
 	mode = "auto";
 	expect(await gate.onToolCall({ toolCallId: "b2", toolName: "bash", input: { command: "ls" } }, ui)).toBeUndefined();
 	expect(asked).toHaveLength(1);
@@ -2395,6 +2410,11 @@ test("/plan switches read-only on and off, tells the model once each way, and pe
 		expect((blocked as any)?.block).toBe(true);
 		await launched.start();
 		expect((launched.handlers.get("before_agent_start")!({}, launched.ctx) as any)?.message?.content).toBe(PLAN_ON);
+		// The launch is recorded like a switch: a resume without --plan keeps the mode.
+		expect(launched.entries).toContainEqual({ customType: "orqi-plan", data: { on: true } });
+		const reopened = harnessOn(dir, { branch: launched.branch });
+		await reopened.start();
+		expect(reopened.widgets.get("orqi-plan")).toBeDefined();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -2442,6 +2462,31 @@ test("/compact-at moves pi's compaction reserve in memory, follows the model and
 	}
 });
 
+test("/plan run with no plan, or a session that will not open, says so", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-"));
+	try {
+		const h = harnessOn(dir);
+		await h.start();
+		await h.commands.get("plan")!("run", h.ctx);
+		expect(h.notices.at(-1)).toContain("No plan in this session yet");
+		mkdirSync(join(dir, "plans"), { recursive: true });
+		writeFileSync(planPath(dir, "s1"), "# p\n## Slices\n1. x\n");
+		const failing = {
+			...h.ctx,
+			waitForIdle: async () => {},
+			sessionManager: { ...h.ctx.sessionManager, getSessionFile: () => undefined },
+			newSession: async () => {
+				throw new Error("disk full");
+			},
+		};
+		await h.commands.get("plan")!("run", failing);
+		expect(h.notices.at(-1)).toContain("/plan run failed: disk full");
+		expect(h.notices.at(-1)).toContain(planPath(dir, "s1"));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("exit_plan saves the plan and only the user's approval leaves plan mode", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-"));
 	try {
@@ -2476,6 +2521,18 @@ test("exit_plan saves the plan and only the user's approval leaves plan mode", a
 
 		expect(text(await run(h.ctx))).toBe(NOT_PLANNING);
 		await h.commands.get("plan")!("on", h.ctx);
+		const noSlices = await run(h.ctx, "# Just do it\n## Context\nlooks fine");
+		expect(noSlices.isError).toBe(true);
+		expect(text(noSlices)).toContain("no slices");
+		// An agent dir that cannot be written is an error the model can report, not a crash.
+		const blocked = join(dir, "not-a-dir");
+		writeFileSync(blocked, "");
+		const unwritable = harnessOn(blocked);
+		await unwritable.start();
+		await unwritable.commands.get("plan")!("on", unwritable.ctx);
+		const failed = await unwritable.tools.get("exit_plan")!.execute("x", { plan }, undefined, undefined, unwritable.ctx);
+		expect(failed.isError).toBe(true);
+		expect(text(failed)).toContain("could not be saved");
 		expect((await run(h.ctx, "# x\n## Decisions\n- auth? (open)")).isError).toBe(true);
 
 		// Feedback keeps plan mode on and goes back to the model.

@@ -188,7 +188,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   rather than trusted. Subagents' orq calls re-enter the gate through the parent's `executeTool`;
   `agent/<key>` is blocked because a managed agent runs its own tools server-side, and selecting an
   agent model switches plan mode off for the same reason. Bash always asks while planning, even
-  under `--auto`: a read-only command allowlist leaks (`find -delete`, `git branch -D`, `>`).
+  under `--auto`, with no "for this turn" choice (and a turn-wide yes given before `/plan` does not
+  carry over): a read-only command allowlist leaks (`find -delete`, `git branch -D`, `>`), so the
+  user judges each command.
   Decisions are asked with `ask_user`; approval is `exit_plan`'s own dialog and never `ask_user`,
   so leaving read-only is the harness acting on a keypress, not the model reading consent into an
   answer. `exit_plan` is always registered, so toggling the mode never changes the tool list (and
