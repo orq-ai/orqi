@@ -321,7 +321,7 @@ test("our commands never collide with a pi built-in", () => {
 		toolCount: () => 0,
 		callTool: async () => ({ text: "", isError: false }),
 		workspace: () => undefined,
-	})({ ...pi, registerShortcut: () => {} });
+	})({ ...pi, registerShortcut: () => {}, registerTool: () => {} });
 
 	expect(registered).toContain("whatsnew");
 	expect(registered).toContain("trajectory");

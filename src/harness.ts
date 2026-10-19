@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { isAgentModel } from "./agents.ts";
@@ -41,6 +41,7 @@ import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { toolGate } from "./gate.ts";
+import { createExitPlanTool, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
@@ -73,6 +74,8 @@ export interface HarnessDeps {
 }
 
 const ROUTE_ENTRY = "orqi-route";
+/** Plan mode on or off, persisted on every change so a resumed session keeps it. */
+const PLAN_ENTRY = "orqi-plan";
 /** How long a loaded memorq has to publish its first state before the section says it is not answering. */
 const MEMORQ_GRACE_MS = 5_000;
 /** A learn memorq reported, persisted so /trajectory exports it and a resume shows it. */
@@ -355,6 +358,35 @@ export function orqHarness(deps: HarnessDeps) {
 						]
 					: undefined,
 			);
+		};
+		/**
+		 * Plan mode: read-only until the user approves a plan (src/plan.ts). The gate reads it per call.
+		 * Seeded from the launch here, not only in session_start, because a one-shot run never starts a session.
+		 */
+		let planning = deps.permissionMode === "plan";
+		/** What the model is told on its next turn: plan mode just turned on, or off by hand. */
+		let planNotice: string | undefined = planning ? PLAN_ON : undefined;
+		const baseMode: PermissionMode = deps.permissionMode === "auto" ? "auto" : "prompt";
+		const syncPlan = (ctx: ExtensionContext | undefined) => {
+			if (ctx?.mode !== "tui") return;
+			const theme = ctx.ui.theme;
+			ctx.ui.setWidget(
+				"orqi-plan",
+				planning ? [`${theme.fg("warning", "▌ plan mode · read-only")}${theme.fg("dim", " · alt+p or /plan off to leave")}`] : undefined,
+			);
+		};
+		/** The model hears the switch on its next turn, unless `quiet`: an approval says it in the tool result. */
+		const setPlanning = (on: boolean, ctx: ExtensionContext | undefined, quiet = false) => {
+			if (planning === on) return;
+			planning = on;
+			planNotice = quiet ? undefined : on ? PLAN_ON : PLAN_OFF;
+			try {
+				pi.appendEntry(PLAN_ENTRY, { on });
+			} catch {
+				// A stale handle after /new: the mode still holds for this session.
+			}
+			syncPlan(ctx);
+			render();
 		};
 		let reserveTokens = 16_384;
 		let headerShown = false;
@@ -789,6 +821,7 @@ export function orqHarness(deps: HarnessDeps) {
 				project: deps.project?.(),
 				agent,
 				routing: model?.provider === "orq" && model.id === "auto" ? "orq/auto" : undefined,
+				plan: planning,
 				connected: !/not connected/.test(status),
 			};
 		};
@@ -902,6 +935,14 @@ export function orqHarness(deps: HarnessDeps) {
 		// ── events ────────────────────────────────────────────────────────────
 		pi.on("session_start", (_event, ctx) => {
 			ctxRef = ctx;
+			// Plan mode as this branch last left it; a session with no record starts as the launch said (--plan).
+			const planEntry = ctx.sessionManager
+				.getBranch()
+				.filter((entry) => entry.type === "custom" && entry.customType === PLAN_ENTRY)
+				.at(-1) as { data?: { on?: boolean } } | undefined;
+			planning = planEntry ? planEntry.data?.on === true : deps.permissionMode === "plan";
+			planNotice = planning && !planEntry ? PLAN_ON : undefined;
+			syncPlan(ctx);
 			if (ctx.mode === "tui" && !rssTimer) {
 				sampleRss();
 				rssTimer = setInterval(sampleRss, 5000);
@@ -1032,7 +1073,7 @@ export function orqHarness(deps: HarnessDeps) {
 					// A stale Pi handle after session replacement cannot notify memorq; the gate verdict still stands.
 				}
 			},
-			deps.permissionMode,
+			() => (planning ? "plan" : baseMode),
 		);
 		pi.on("tool_call", (event, ctx) => {
 			// ask_user's dialog needs the same keys, for the same reason.
@@ -1071,6 +1112,11 @@ export function orqHarness(deps: HarnessDeps) {
 				savedTools = undefined;
 				if (chatLevel && pi.getThinkingLevel() !== chatLevel) pi.setThinkingLevel(chatLevel);
 			}
+			// A managed agent runs its own tools server-side, where the gate cannot follow.
+			if (planning && isAgentModel(event.model.id)) {
+				setPlanning(false, ctx);
+				ctx.ui.notify("Plan mode is off: an agent runs its own tools, which plan mode cannot hold back.", "warning");
+			}
 			syncAgent(ctx);
 			measure(ctx);
 			render();
@@ -1095,6 +1141,12 @@ export function orqHarness(deps: HarnessDeps) {
 			if (savedTools) {
 				pi.setActiveTools(savedTools);
 				savedTools = undefined;
+			}
+			// Told once per switch, not every turn: the gate's block reasons remind it, and the prompt cache holds.
+			if (planNotice) {
+				const content = planNotice;
+				planNotice = undefined;
+				return { message: { customType: "orqi-plan-mode", content, display: false } };
 			}
 		});
 
@@ -1255,6 +1307,56 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
+
+		// ── plan mode ─────────────────────────────────────────────────────────
+		pi.registerTool(
+			createExitPlanTool({
+				agentDir: deps.agentDir,
+				planning: () => planning,
+				approve: () => setPlanning(false, ctxRef, true),
+			}),
+		);
+		const togglePlan = (on: boolean, ctx: ExtensionContext) => {
+			if (on && isAgentModel(ctx.model?.id)) {
+				ctx.ui.notify("Leave agent mode first (/agent off): an agent runs its own tools, which plan mode cannot hold back.", "warning");
+				return;
+			}
+			setPlanning(on, ctx);
+			ctx.ui.notify(on ? "Plan mode: read-only until you approve a plan." : "Plan mode off: changes are allowed again.", "info");
+		};
+		pi.registerShortcut("alt+p", { description: "toggle plan mode", handler: (ctx) => togglePlan(!planning, ctx) });
+		pi.registerCommand("plan", {
+			description:
+				"plan mode: read-only until you approve a plan. /plan toggles, /plan on|off, /plan run executes the approved plan in a fresh session",
+			handler: async (args, ctx) => {
+				const arg = args.trim();
+				if (arg === "run") {
+					const path = planPath(deps.agentDir, ctx.sessionManager.getSessionId());
+					if (!existsSync(path)) {
+						ctx.ui.notify("No plan in this session yet: /plan, then ask for one.", "warning");
+						return;
+					}
+					const plan = readFileSync(path, "utf8").trim();
+					await ctx.waitForIdle();
+					// The fresh session is not in plan mode, whatever the launch said: running the plan is the point.
+					await ctx.newSession({
+						parentSession: ctx.sessionManager.getSessionFile(),
+						setup: async (sessionManager) => {
+							sessionManager.appendCustomEntry(PLAN_ENTRY, { on: false });
+						},
+						withSession: async (fresh) => {
+							await fresh.sendUserMessage(runPrompt(path, plan));
+						},
+					});
+					return;
+				}
+				if (arg && arg !== "on" && arg !== "off") {
+					ctx.ui.notify("/plan takes on, off or run.", "warning");
+					return;
+				}
+				togglePlan(arg ? arg === "on" : !planning, ctx);
+			},
+		});
 
 		/** What to do about a greyed memory row: the update, or where to look. */
 		const memoryHelp = (row: string) =>

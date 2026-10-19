@@ -147,6 +147,8 @@ export interface HeaderBarState {
 	agent?: string;
 	/** `orq/auto` when routing is on. */
 	routing?: string;
+	/** Plan mode: read-only until a plan is approved. */
+	plan?: boolean;
 	connected: boolean;
 	/** `orq plugin 3.10.0 (updated)` when a newer plugin is in use. */
 	plugin?: string;
@@ -166,6 +168,8 @@ export function headerBar(state: HeaderBarState, width: number, paint: Paint = p
 	const segments: string[] = [];
 	if (!state.connected) segments.push(paint.hot("not signed in · /login"));
 	else if (state.workspace) segments.push(label("workspace", state.workspace));
+	// Plan mode changes what any call may do: it stands out, and sits early so narrowing drops it last.
+	if (state.plan) segments.push(paint.hot("plan mode"));
 	// Agent mode changes who answers: the agent stands out, it is not just another fact.
 	if (state.agent) segments.push(`${paint.dim("agent")} ${paint.hot(state.agent)}`);
 	if (state.server) segments.push(label("server", state.server));

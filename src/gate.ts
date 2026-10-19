@@ -38,6 +38,26 @@ export function maskSecrets(value: unknown): unknown {
 	);
 }
 
+/** Tools that read and nothing else: what plan mode lets through besides benign orq calls. */
+const PLAN_READS = new Set(["read", "ask_user", "exit_plan", "web_search", "web_fetch"]);
+
+/**
+ * Why plan mode blocks a call, or undefined when it may run. An allowlist, so a
+ * plugin's tool nobody has looked at is blocked rather than trusted. Bash is not
+ * decided here: it always asks while planning.
+ */
+export function planBlock(toolName: string, input: Record<string, unknown> | undefined): string | undefined {
+	const blocked = (what: string) =>
+		`Plan mode is read-only: ${what}. Put the change in the plan and finish with exit_plan; it runs once the user approves.`;
+	if (PLAN_READS.has(toolName)) return undefined;
+	if (toolName === "subagent")
+		return String(input?.agent ?? "").startsWith("agent/")
+			? blocked("a managed agent runs its own tools, which may change things")
+			: undefined;
+	if (toolName.startsWith(TOOL_PREFIX) && doorOf(bareName(toolName)) === "benign") return undefined;
+	return blocked(`${toolName} is blocked`);
+}
+
 export const ALLOW_ONCE = "Allow once";
 export const ALLOW_TURN = "Allow for this turn";
 export const DENY = "Deny";
@@ -49,13 +69,15 @@ type ToolContext = Pick<ExtensionContext, "hasUI" | "ui">;
  * The `tool_call` handler and its per-turn memo. `endTurn` runs on `agent_end`,
  * so an "allow for this turn" decision never outlives the answer it was given
  * for. `auto` applies only to interactive local Bash commands: headless runs
- * still have no person who can authorize a command.
+ * still have no person who can authorize a command. The mode is read on every
+ * call, so `/plan` takes effect on the next tool call, mid-turn included.
  */
 export function toolGate(
 	trajectory: { gate(toolCallId: string, door: Door, gate?: Step["gate"]): void },
 	onDecision: () => void = () => {},
-	permissionMode: PermissionMode = "prompt",
+	permissionMode: PermissionMode | (() => PermissionMode) = "prompt",
 ) {
+	const mode = typeof permissionMode === "function" ? permissionMode : () => permissionMode;
 	let bashAllowedForTurn = false;
 	let oneWayOrqAllowedForTurn = false;
 
@@ -98,15 +120,23 @@ export function toolGate(
 			oneWayOrqAllowedForTurn = false;
 		},
 		onToolCall: async (event: ToolCall, ctx: ToolContext): Promise<ToolCallEventResult | undefined> => {
+			const planning = mode() === "plan";
+			if (planning && event.toolName !== "bash") {
+				const reason = planBlock(event.toolName, event.input);
+				if (reason) {
+					if (event.toolName.startsWith(TOOL_PREFIX)) trajectory.gate(event.toolCallId, doorOf(bareName(event.toolName)), "denied");
+					return { block: true, reason };
+				}
+			}
 			if (event.toolName === "bash") {
-				if (permissionMode === "auto" && ctx.hasUI) {
+				if (mode() === "auto" && ctx.hasUI) {
 					trajectory.gate(event.toolCallId, "one_way", "allowed");
 					return undefined;
 				}
 				return ask(
 					event,
 					ctx,
-					"bash · command",
+					planning ? "bash · plan mode: read-only commands only" : "bash · command",
 					event.input,
 					() => bashAllowedForTurn,
 					() => {

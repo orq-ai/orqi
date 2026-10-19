@@ -182,6 +182,21 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   purpose. A classifier per call was rejected: it would sit in front of every read. The system
   prompt no longer tells the model to ask before a delete; it tells it the dialog will. One-shot has
   no one to ask, so a one-way call is blocked there with a reason that says to rerun interactively.
+- **Plan mode is enforced by the gate, not by the prompt.** pi's own plan-mode example relies on
+  the prompt and a Bash allowlist; orqi's `planBlock` (`src/gate.ts`) is an allowlist of tools
+  instead, read per call, so `/plan` bites mid-turn and a plugin tool nobody reviewed is blocked
+  rather than trusted. Subagents' orq calls re-enter the gate through the parent's `executeTool`;
+  `agent/<key>` is blocked because a managed agent runs its own tools server-side, and selecting an
+  agent model switches plan mode off for the same reason. Bash always asks while planning, even
+  under `--auto`: a read-only command allowlist leaks (`find -delete`, `git branch -D`, `>`).
+  Decisions are asked with `ask_user`; approval is `exit_plan`'s own dialog and never `ask_user`,
+  so leaving read-only is the harness acting on a keypress, not the model reading consent into an
+  answer. `exit_plan` is always registered, so toggling the mode never changes the tool list (and
+  the prompt cache); outside plan mode it returns an error. The model is told about a switch once,
+  as a hidden message on the next turn, and the gate's block reasons remind it after that. The plan
+  goes to `<agentDir>/plans/<session>.md`, not the repo. "Execute in a fresh session" only prefills
+  `/plan run`, because `newSession` exists only on a command's context, not a tool's. Approval does
+  not pre-authorize one-way calls: the gate still asks for each.
 - **The door question rides beside difficulty, and the keyword floor is only its fallback.**
   `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would delete
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still

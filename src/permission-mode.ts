@@ -1,11 +1,17 @@
-/** Session-only tool-confirmation policy parsed before Pi sees its arguments. */
-export type PermissionMode = "prompt" | "auto";
+/**
+ * Session-only tool-confirmation policy parsed before Pi sees its arguments.
+ * `plan` is read-only: the gate blocks every change until the user approves a
+ * plan (src/plan.ts). `/plan` and alt+p switch it mid-session.
+ */
+export type PermissionMode = "prompt" | "auto" | "plan";
 
 export type PermissionModeFlag = {
 	argv: string[];
 	mode: PermissionMode;
 	error?: string;
 };
+
+const ONCE = "--auto, --plan or --permission-mode may be given only once";
 
 /**
  * Take orqi's permission flag out of argv. Pi's extension flags are registered
@@ -18,9 +24,9 @@ export function takePermissionModeFlag(argv: string[]): PermissionModeFlag {
 	let seen = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i]!;
-		if (arg === "--auto") {
-			if (seen) return { argv, mode, error: "--auto or --permission-mode may be given only once" };
-			mode = "auto";
+		if (arg === "--auto" || arg === "--plan") {
+			if (seen) return { argv, mode, error: ONCE };
+			mode = arg === "--auto" ? "auto" : "plan";
 			seen = true;
 			continue;
 		}
@@ -31,10 +37,11 @@ export function takePermissionModeFlag(argv: string[]): PermissionModeFlag {
 		}
 		const value = arg === "--permission-mode" ? argv[i + 1] : arg.slice(18);
 		if (arg === "--permission-mode" && (!value || value.startsWith("-")))
-			return { argv, mode, error: "--permission-mode requires prompt or auto" };
+			return { argv, mode, error: "--permission-mode requires prompt, auto or plan" };
 		if (arg === "--permission-mode") i++;
-		if (seen) return { argv, mode, error: "--auto or --permission-mode may be given only once" };
-		if (value !== "prompt" && value !== "auto") return { argv, mode, error: "--permission-mode must be prompt or auto" };
+		if (seen) return { argv, mode, error: ONCE };
+		if (value !== "prompt" && value !== "auto" && value !== "plan")
+			return { argv, mode, error: "--permission-mode must be prompt, auto or plan" };
 		mode = value;
 		seen = true;
 	}

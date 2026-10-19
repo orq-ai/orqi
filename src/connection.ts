@@ -93,6 +93,7 @@ export const ORQI_COMMANDS = [
 	"teach",
 	"tips",
 	"context",
+	"plan",
 ] as const;
 
 /** Rejection rows the extension writes itself, as opposed to the server's verdicts. */

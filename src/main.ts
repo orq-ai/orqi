@@ -10,8 +10,9 @@
  *   orqi --session <id>  resume a session (id, id prefix or .jsonl path)
  *   orqi --version       print the version and exit
  *   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
-   orqi --permission-mode=<prompt|auto>  control local command confirmations
-   orqi --auto  shorthand for --permission-mode=auto
+  orqi --permission-mode=<prompt|auto|plan>  control local command confirmations
+  orqi --auto          shorthand for --permission-mode=auto
+  orqi --plan          read-only until you approve a plan (/plan or alt+p in a session)
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -137,8 +138,9 @@ if (oneShot === "--help" || oneShot === "-h") {
   orqi "<prompt>"      one-shot, prints the answer and exits
   orqi --version       print the version and exit
   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
-   orqi --permission-mode=<prompt|auto>  control local command confirmations
-   orqi --auto  shorthand for --permission-mode=auto
+  orqi --permission-mode=<prompt|auto|plan>  control local command confirmations
+  orqi --auto          shorthand for --permission-mode=auto
+  orqi --plan          read-only until you approve a plan (/plan or alt+p in a session)
   orqi update          replace this binary with the latest release
   orqi plugin install <source>   install plugin (skills+MCP)
   orqi plugin list               list installed plugins
@@ -774,7 +776,7 @@ function statusLine(connection: string, note = bootNote): string {
 		welcome && !credential ? undefined : models.note,
 		// A plugin newer than the binary shipped with; silent drift would otherwise be
 		// invisible until someone diffed behaviour against a colleague's machine.
-		permissionMode === "auto" ? "permissions auto" : undefined,
+		permissionMode === "auto" ? "permissions auto" : permissionMode === "plan" ? "plan mode" : undefined,
 		plugin.note,
 	]
 		.filter(Boolean)
