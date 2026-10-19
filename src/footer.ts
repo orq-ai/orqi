@@ -107,8 +107,21 @@ export function shortModel(id: string): string {
  * one line, truncated on the right, never wrapped.
  */
 export function footerLine(state: FooterState, width: number, paint: Paint = plain): string {
-	const wide = width >= 120;
-	const medium = width >= 100;
+	// A band whose halves do not fit steps down to the next before anything is cut, so a long branch name
+	// keeps its git badges and gives up the sparkline and tool count first.
+	const bands: [wide: boolean, medium: boolean][] = [];
+	if (width >= 120) bands.push([true, true]);
+	if (width >= 100) bands.push([false, true]);
+	bands.push([false, false]);
+	for (const [wide, medium] of bands) {
+		const line = footerBand(state, width, paint, wide, medium);
+		if (line) return line;
+	}
+	const [wide, medium] = bands.at(-1)!;
+	return footerBand(state, width, paint, wide, medium, true)!;
+}
+
+function footerBand(state: FooterState, width: number, paint: Paint, wide: boolean, medium: boolean, cut = false): string | undefined {
 	const sep = paint.dim(" · ");
 	const left: string[] = [];
 	// The orq.ai mark leads, with the workspace beside it: "orq:acme" reads as "orq.ai · acme".
@@ -147,7 +160,7 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 	const r = `${right.join(sep)} `;
 	const gap = width - visibleWidth(l) - visibleWidth(r);
 	if (gap >= 2) return `${l}${" ".repeat(gap)}${r}`;
-	return truncateToWidth(`${l}${sep}${r}`, width);
+	return cut ? truncateToWidth(`${l}${sep}${r}`, width) : undefined;
 }
 
 /** Other extensions' statuses as one line under the footer, or nothing when there are none. */
@@ -234,6 +247,8 @@ export interface HeaderBarState {
 	agent?: string;
 	/** `orq/auto` when routing is on. */
 	routing?: string;
+	/** Plan mode: read-only until a plan is approved. */
+	plan?: boolean;
 	connected: boolean;
 	/** `orq plugin 3.10.0 (updated)` when a newer plugin is in use. */
 	plugin?: string;
@@ -253,6 +268,8 @@ export function headerBar(state: HeaderBarState, width: number, paint: Paint = p
 	const segments: string[] = [];
 	if (!state.connected) segments.push(paint.hot("not signed in · /login"));
 	else if (state.workspace) segments.push(label("workspace", state.workspace));
+	// Plan mode changes what any call may do: it stands out, and sits early so narrowing drops it last.
+	if (state.plan) segments.push(paint.hot("plan mode"));
 	// Agent mode changes who answers: the agent stands out, it is not just another fact.
 	if (state.agent) segments.push(`${paint.dim("agent")} ${paint.hot(state.agent)}`);
 	if (state.server) segments.push(label("server", state.server));

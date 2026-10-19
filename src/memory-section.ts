@@ -8,6 +8,7 @@
  * because the two are separate pi extensions that share only the bus.
  */
 
+import type { ClassifierContext, ClassifierResult } from "@earendil-works/pi-ai";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -38,10 +39,12 @@ export interface MemorqState {
 	enabled: "on" | "readonly" | "off";
 }
 
-/** What orqi offers memorq: the memory row of /panel and the workspace's model picker. */
+/** What orqi offers memorq: the memory row of /panel, the workspace's model picker and the user's decider. */
 export interface MemorqHost {
 	panel: { shown(): boolean; set(shown: boolean): void };
 	pickModel(current: string): Promise<string | undefined>;
+	/** Ask the decision model the user picked with /decider; undefined when there is none or it cannot answer. Never rejects. */
+	decide?(context: ClassifierContext, signal?: AbortSignal): Promise<ClassifierResult | undefined>;
 	/** The percentage orqi measures from its own context split, when Pi cannot identify the model window. */
 	contextPercent?(): number | undefined;
 }

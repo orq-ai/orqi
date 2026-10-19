@@ -182,6 +182,34 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   purpose. A classifier per call was rejected: it would sit in front of every read. The system
   prompt no longer tells the model to ask before a delete; it tells it the dialog will. One-shot has
   no one to ask, so a one-way call is blocked there with a reason that says to rerun interactively.
+- **Plan mode is enforced by the gate, not by the prompt.** pi's own plan-mode example relies on
+  the prompt and a Bash allowlist; orqi's `planBlock` (`src/gate.ts`) is an allowlist of tools
+  instead, read per call, so `/plan` bites mid-turn and a plugin tool nobody reviewed is blocked
+  rather than trusted. Subagents' orq calls re-enter the gate through the parent's `executeTool`;
+  `agent/<key>` is blocked because a managed agent runs its own tools server-side, and selecting an
+  agent model switches plan mode off for the same reason. Bash always asks while planning, even
+  under `--auto`, with no "for this turn" choice (and a turn-wide yes given before `/plan` does not
+  carry over): a read-only command allowlist leaks (`find -delete`, `git branch -D`, `>`), so the
+  user judges each command.
+  Decisions are asked with `ask_user`; approval is `exit_plan`'s own dialog and never `ask_user`,
+  so leaving read-only is the harness acting on a keypress, not the model reading consent into an
+  answer. `exit_plan` is always registered, so toggling the mode never changes the tool list (and
+  the prompt cache); outside plan mode it returns an error. The model is told about a switch once,
+  as a hidden message on the next turn, and the gate's block reasons remind it after that. The plan
+  goes to `<agentDir>/plans/<session>.md`, not the repo. "Execute in a fresh session" only prefills
+  `/plan run`, because `newSession` exists only on a command's context, not a tool's. Approval does
+  not pre-authorize one-way calls: the gate still asks for each.
+- **One decider, picked like the chat model.** Every Decisions API call goes through
+  `decider.decide` (`src/decider.ts`), never `classifyWithOrq` with a model id of its own; a test
+  scrapes `src/` to keep it that way. So the model `/decider` picks (pi's `/model` selector over the
+  workspace's classifiers: enter for this session, ctrl+s to save) is the one every asker gets:
+  `orq/auto` on each user turn, memorq through `host.decide`. The saved pick lives in `orqi.json`
+  beside the inspector sections; `ORQI_ROUTE_CLASSIFIER` outranks it, and a saved id this workspace
+  lacks falls through to `CLASSIFIER_PREFERENCE` without being erased, as a saved theme does. A 403
+  makes the decider unavailable for every asker until the pick or the catalogue changes. A pick made
+  for the session (enter, or a save that failed) survives a catalogue refresh, `ORQI_ROUTE_CLASSIFIER`
+  included, until orqi restarts. Calls by
+  anyone but the router become trajectory steps, so `/cost` counts them; they are session-local.
 - **The door question rides beside difficulty, and the keyword floor is only its fallback.**
   `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would delete
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
@@ -424,7 +452,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   A payload that fails `isMemorqState` is ignored and the last good one stays drawn; any text from
   memorq that orqi draws goes through `printable()`. The types are a hand copy of memorq's
   `integrations/pi/state.ts`, and a test assigns memorq's to orqi's both ways: re-copy them when
-  memorq changes its payload. The host's `pickModel` and `panel.set` never throw back into memorq,
+  memorq changes its payload. The host's `pickModel`, `decide` (optional: the user's decider) and `panel.set` never throw back into memorq,
   and once orqi's session has ended its host opens nothing.
 - **A note read counts wherever memorq keeps it.** memorq's state names only the folder each kind is
   written to, and a kind written to the repository is still read from the machine store, so
@@ -436,10 +464,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `at|trigger|count`, seeded from the branch at session start; a learn published before that waits
   for it. orqi sees only the last learn of a session, so several that land while it is not
   listening collapse to the last one on resume.
-- **The model picker memorq gets is pi's own `/model` selector.** `src/model-picker.ts` builds pi's
-  exported `ModelSelectorComponent` over a proxy of the model runtime that lists only the
-  workspace's chat models (`getModels`, `getAvailableSnapshot`, `getAvailable`), so neither of the
-  selector's scopes offers an agent, a classifier or `orq/auto`. After bumping pi, recheck which
+- **The model picker memorq gets is pi's own `/model` selector, and so is `/decider`'s.** `src/model-picker.ts` builds pi's
+  exported `ModelSelectorComponent` over a proxy of the model runtime that lists one kind only
+  (`getModels`, `getAvailableSnapshot`, `getAvailable`): memorq gets the workspace's chat models, so
+  neither of the selector's scopes offers it an agent, a classifier or `orq/auto`; `/decider` gets the
+  `orq-decisions` classifiers, plus the selector's own ctrl+s and `· default` badge. After bumping pi, recheck which
   runtime methods `model-selector.js` reads: the test's runtime fake throws on any other.
 - **The ATIF export is `/trajectory`, not `/export trajectory`.** `/export` is a pi built-in (HTML),
   and pi drops colliding extension commands; the collision test now covers the harness too.

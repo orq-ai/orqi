@@ -10,8 +10,9 @@
  *   orqi --session <id>  resume a session (id, id prefix or .jsonl path)
  *   orqi --version       print the version and exit
  *   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
-   orqi --permission-mode=<prompt|auto>  control local command confirmations
-   orqi --auto  shorthand for --permission-mode=auto
+  orqi --permission-mode=<prompt|auto|plan>  control local command confirmations
+  orqi --auto          shorthand for --permission-mode=auto
+  orqi --plan          read-only until you approve a plan (/plan or alt+p in a session)
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -63,9 +64,11 @@ import { memorqInstalled } from "./memorq-detect.ts";
 import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, repointOrqModels, talkable } from "./model.ts";
 import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
+import { createDecider } from "./decider.ts";
+import { readPrefs } from "./prefs.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
-import { createLocalTools } from "./local-tools.ts";
+import { createLocalTools, EXCLUDED_TOOLS } from "./local-tools.ts";
 import { takePermissionModeFlag } from "./permission-mode.ts";
 import { createAskUserTool } from "./ask-user.ts";
 import { createSubagentTool } from "./subagent.ts";
@@ -137,8 +140,9 @@ if (oneShot === "--help" || oneShot === "-h") {
   orqi "<prompt>"      one-shot, prints the answer and exits
   orqi --version       print the version and exit
   orqi --server <url>  use and remember this orq host (also ORQ_SERVER)
-   orqi --permission-mode=<prompt|auto>  control local command confirmations
-   orqi --auto  shorthand for --permission-mode=auto
+  orqi --permission-mode=<prompt|auto|plan>  control local command confirmations
+  orqi --auto          shorthand for --permission-mode=auto
+  orqi --plan          read-only until you approve a plan (/plan or alt+p in a session)
   orqi update          replace this binary with the latest release
   orqi plugin install <source>   install plugin (skills+MCP)
   orqi plugin list               list installed plugins
@@ -536,10 +540,12 @@ const routing = registerRouting(
 	models.catalogue,
 	DEFAULT_MODEL,
 	process.env.ORQI_ROUTE_LOG === "1" ? join(AGENT_DIR, "routes.jsonl") : undefined,
+	// The one decider every Decisions call asks; /decider saves its pick in orqi.json.
+	createDecider(() => readPrefs(AGENT_DIR).decider),
 );
 const model = pickModel(models);
 // `edit` retains pi's native before/after diff preview. Bash is exposed through
-// the permission gate; whole-file replacement remains excluded because targeted
+// the permission gate; whole-file replacement (`EXCLUDED_TOOLS`) stays off because targeted
 // edits are inspectable.
 const localTools = createLocalTools(process.cwd());
 const customTools = [
@@ -775,7 +781,7 @@ function statusLine(connection: string, note = bootNote): string {
 		welcome && !credential ? undefined : models.note,
 		// A plugin newer than the binary shipped with; silent drift would otherwise be
 		// invisible until someone diffed behaviour against a colleague's machine.
-		permissionMode === "auto" ? "permissions auto" : undefined,
+		permissionMode === "auto" ? "permissions auto" : permissionMode === "plan" ? "plan mode" : undefined,
 		plugin.note,
 	]
 		.filter(Boolean)
@@ -811,6 +817,7 @@ try {
 			sessionManager: SessionManager.inMemory(),
 			model,
 			customTools,
+			excludeTools: EXCLUDED_TOOLS,
 		});
 		try {
 			session.subscribe((event: any) => {
@@ -836,7 +843,14 @@ try {
 			const fresh = first ? services : await makeServices();
 			first = false;
 			return {
-				...(await createAgentSessionFromServices({ services: fresh, sessionManager, sessionStartEvent, model, customTools })),
+				...(await createAgentSessionFromServices({
+					services: fresh,
+					sessionManager,
+					sessionStartEvent,
+					model,
+					customTools,
+					excludeTools: EXCLUDED_TOOLS,
+				})),
 				services: fresh,
 				diagnostics: fresh.diagnostics,
 			};

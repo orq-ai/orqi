@@ -44,13 +44,15 @@ orqi
 | `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, and the commands that own state: `/route /teach /panel /compact-at` |
 | `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /traces /analytics /overview /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
 | `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
-| `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
+| `src/gate.ts` | The one-way gate: a door per orq tool from its verb, the dialog before a call that cannot be undone, and plan mode's read-only allowlist |
+| `src/plan.ts` | Plan mode: what the model is told, the `exit_plan` tool and its approval dialog, where plans are saved |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
-| `src/prefs.ts` | `<agentDir>/orqi.json`: which inspector sections show and `/compact-at`'s percent, read forgivingly and written whole |
+| `src/prefs.ts` | `<agentDir>/orqi.json`: which inspector sections show, the saved decider and `/compact-at`'s percent, read forgivingly and written whole |
 | `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
 | `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
-| `src/model-picker.ts` | The model picker orqi offers memorq: pi's `/model` selector over the workspace's chat models only |
-| `src/router.ts` | `orq/auto` and the `orq-decisions` classifier provider: pool, policy, Decisions API adapter, route log |
+| `src/model-picker.ts` | pi's `/model` selector over one kind of workspace model: chat models for memorq, classifiers for `/decider` |
+| `src/decider.ts` | The decider: the one decision model every Decisions call asks (`/decider`, `orqi.json`, `ORQI_ROUTE_CLASSIFIER`), the API adapter and the `orq-decisions` provider |
+| `src/router.ts` | `orq/auto`: pool, policy, route log |
 | `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
 | `src/footer.ts` / `src/inspector-rows.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, the inspector's trajectory rows and its signals, context and teach sections, boxed overlay panels |
 | `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows, the detail view and the inspect view; the changelog parser |
@@ -115,7 +117,7 @@ Memory comes from memorq, a separate pi package (orq-ai/orq-knowledge-notes) tha
 carries nor installs. The two extensions share only pi's
 in-process event bus: memorq publishes `memorq:state` (notes, notes used this turn, the last learn,
 the next review, the folders it writes to) and asks `memorq:host?`; orqi answers with `memorq:host`
-(the panel row and the model picker) and asks `memorq:state?` at session start. The bus has no replay
+(the panel row, the model picker and `decide`, which asks the user's decider) and asks `memorq:state?` at session start. The bus has no replay
 and memorq loads before orqi's own extension, so neither side relies on an event sent before it was
 listening. Each learn becomes an `orqi-memory` session entry and a trajectory step, priced in `/cost`
 under its own row, replayed on resume and exported by `/trajectory`.
@@ -129,6 +131,14 @@ can confirm it. Orq tools read their door off the verb: reads are benign, `creat
 two-way and only recorded, while `delete_`/`submit_`/`invoke_` and any verb not in the table are
 one-way and always wait for the dialog.
 
+Plan mode (`/plan`, `alt+p`, `--plan`) is a third permission mode the gate reads on every call.
+It lets through reads only (`read`, `ask_user`, `web_*`, benign orq tools, the built-in subagents),
+asks for every Bash command whatever `--auto` said, and blocks everything else, including a tool it
+has never heard of. The model hands its plan over with `exit_plan` (`src/plan.ts`), whose dialog is
+the only way out besides the user switching it off: approve and run here, approve and run in a
+fresh session (`/plan run`), or keep planning with feedback. The plan is written to
+`<agentDir>/plans/<session>.md`.
+
 `/trace` reads the router's `x-orq-trace-id` header off each response and asks `list_spans` for the
 spans, leading with the `auto-router` span when a smart router answered: that is how platform
 routing becomes visible without a client-side classifier.
@@ -141,7 +151,8 @@ surfaces. **`orq/auto`** decides in the harness: `src/router.ts` registers a pi 
 model runtime (before any session, so it can be the boot model and subagents can resolve its rungs)
 plus an `orq-decisions` classifier provider over `POST /v3/router/decisions`.
 
-On a user turn it asks `orq/decider-4b` (`ORQI_ROUTE_CLASSIFIER` overrides) the `general_v2` difficulty question from
+On a user turn it asks the decider (`src/decider.ts`: the model `/decider` picked, else `orq/decider-4b`;
+`ORQI_ROUTE_CLASSIFIER` overrides both) the `general_v2` difficulty question from
 orq-smart-router (RES-1619) and cuts the expected tier (`p_medium + 2 p_hard`) at 0.5 and 1.5. Tool
 follow-ups and retries stay on the turn's model so the prompt cache holds; an overload or context
 overflow on retry moves one rung up. The same Decisions call asks the door question (evaluatorq's

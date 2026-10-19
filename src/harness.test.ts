@@ -30,8 +30,11 @@ import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
+import { createDecider } from "./decider.ts";
 import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
-import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate, toolGate } from "./gate.ts";
+import { ALLOW_ONCE, ALLOW_TURN, DENY, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
+import type { PermissionMode } from "./permission-mode.ts";
+import { APPROVED, FRESH, NOT_PLANNING, PLAN_OFF, PLAN_ON, planPath } from "./plan.ts";
 import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
 import { brandBuiltinCommands, bugHint, bugIssueUrl, ORQI_ISSUES_URL, redirectPiBugCommand } from "./bug.ts";
 
@@ -470,6 +473,7 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: () => {},
 		registerShortcut: () => {},
+		registerTool: () => {},
 		setModel: async (model: unknown) => {
 			selected = model;
 		},
@@ -496,6 +500,27 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 	expect(refreshed).toBe(1);
 	expect(selected).toBe(fresh);
 	expect(notices).toContain("Refreshed 1 enabled models and 0 managed agents.");
+});
+
+test("footerLine: a long branch keeps its git badges by dropping the sparkline and tools before cutting", () => {
+	const state = {
+		workspace: "orq:acme",
+		selection: "openai/gpt-5.6-terra",
+		thinking: "medium",
+		input: 71_000,
+		output: 10,
+		cost: 0.078,
+		context: { used: 35_000, window: 1_100_000 },
+		samples: [{ used: 1, window: 2 }] as never,
+		tools: 49,
+		branch: "arianpasquali/orqi-component-review",
+		git: { badges: "MERGING +2 ~1 ?1" },
+	};
+	const line = footerLine(state, 150);
+	expect(line).toEndWith(" arianpasquali/orqi-component-review MERGING +2 ~1 ?1 ");
+	expect(line).not.toContain("tools");
+	expect(visibleWidth(line)).toBe(150);
+	expect(footerLine({ ...state, branch: "main" }, 150)).toContain("49 tools");
 });
 
 test("footer git badges: a refresh that fails after a newer one finished leaves the newer badges", async () => {
@@ -554,11 +579,15 @@ function harnessOn(
 		memorq?: "installed" | "none";
 		modelRuntime?: unknown;
 		now?: () => number;
+		permissionMode?: PermissionMode;
+		routing?: unknown;
 		settingsManager?: SettingsManager;
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
 		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
 	} = {},
 ) {
+	const tools = new Map<string, any>();
+	const shortcuts = new Map<string, (ctx: any) => unknown>();
 	const commands = new Map<string, (args: string, ctx: any) => Promise<void>>();
 	const handlers = new Map<string, (event: any, ctx: any) => unknown>();
 	const renderers = new Map<string, (entry: any, options: any, theme: any) => any>();
@@ -584,7 +613,8 @@ function harnessOn(
 			entries.push({ customType, data });
 			branch.push({ type: "custom", customType, data, timestamp: new Date().toISOString() });
 		},
-		registerShortcut: () => {},
+		registerShortcut: (key: string, shortcut: any) => shortcuts.set(key, shortcut.handler),
+		registerTool: (tool: any) => tools.set(tool.name, tool),
 		setModel: async () => {},
 		getCommands: () => (options.commands ?? []).map((name) => ({ name, source: "extension" })),
 		getSettings: () => options.settingsManager?.getSettings() ?? {},
@@ -602,6 +632,8 @@ function harnessOn(
 		memorq: options.memorq ? () => options.memorq! : undefined,
 		modelRuntime: options.modelRuntime as never,
 		now: options.now,
+		permissionMode: options.permissionMode,
+		routing: options.routing as never,
 		settingsManager: options.settingsManager,
 	})(pi as any);
 	const notices: string[] = [];
@@ -686,6 +718,8 @@ function harnessOn(
 		widgets,
 		footer: () => footer!.render(200).join("\n"),
 		branchChanged: () => branchChanged!(),
+		tools,
+		shortcuts,
 	};
 }
 
@@ -1105,7 +1139,7 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 		await h.start();
 		expect(hosts).toHaveLength(2);
 		const host = hosts[1];
-		expect(Object.keys(host).sort()).toEqual(["contextPercent", "panel", "pickModel"]);
+		expect(Object.keys(host).sort()).toEqual(["contextPercent", "decide", "panel", "pickModel"]);
 		expect(host.contextPercent).toEqual(expect.any(Function));
 		expect(host.panel.shown()).toBe(true);
 		host.panel.set(false);
@@ -1116,10 +1150,120 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 		expect(panelRows(h.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 		// No model runtime handed to this harness: the picker opens nothing and memorq writes nothing.
 		expect(await host.pickModel("openai/gpt-5")).toBeUndefined();
+		// No routing handed to this harness: no decider, so memorq decides nothing, and nothing throws into it.
+		expect(await host.decide({ state: {}, questions: {} })).toBeUndefined();
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+/** orq/auto's routing as main.ts builds it, with a real decider over two classifiers and a canned Decisions API. */
+function routingOn(dir: string, fetchImpl: typeof fetch) {
+	const decider = createDecider(() => readPrefs(dir).decider, fetchImpl);
+	decider.resolve([
+		{ id: "orq/decider-4b", kind: "classifier" },
+		{ id: "typesafe/jev-latest", kind: "classifier" },
+	]);
+	return { pool: { easy: "e", medium: "m", hard: "h" }, decider, onDecision: () => () => {}, refresh: () => {} };
+}
+
+test("/decider switches for this session, --save keeps it in orqi.json, /route classifier is the same command", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-decider-"));
+	const saved = process.env.ORQI_ROUTE_CLASSIFIER;
+	delete process.env.ORQI_ROUTE_CLASSIFIER;
+	const routing = routingOn(dir, (async () => new Response("{}")) as unknown as typeof fetch);
+	const h = harnessOn(dir, { routing });
+	try {
+		await h.start();
+		expect(routing.decider.id).toBe("orq/decider-4b");
+		await h.commands.get("decider")!("typesafe/jev-latest", h.ctx);
+		expect(routing.decider).toMatchObject({ id: "typesafe/jev-latest", source: "session" });
+		expect(readPrefs(dir).decider).toBeUndefined();
+		expect(h.notices.at(-1)).toContain("orq/auto now asks typesafe/jev-latest (this session)");
+		await h.commands.get("decider")!("orq/decider-4b --save", h.ctx);
+		expect(readPrefs(dir).decider).toBe("orq/decider-4b");
+		expect(h.notices.at(-1)).toContain("saved as default");
+		// A section toggle rewrites orqi.json whole, and keeps the decider.
+		await h.commands.get("tips")!("off", h.ctx);
+		expect(readPrefs(dir).decider).toBe("orq/decider-4b");
+		// The next boot resolves the saved pick.
+		const next = createDecider(() => readPrefs(dir).decider);
+		next.resolve([
+			{ id: "typesafe/jev-latest", kind: "classifier" },
+			{ id: "orq/decider-4b", kind: "classifier" },
+		]);
+		expect(next).toMatchObject({ id: "orq/decider-4b", source: "saved" });
+		await h.commands.get("decider")!("nope/x", h.ctx);
+		expect(h.notices.at(-1)).toContain("nope/x is not a decision model in this workspace");
+		// No picker to open here (no model runtime): the bare command lists them, the active one and the default marked.
+		await h.commands.get("route")!("classifier", h.ctx);
+		expect(h.notices.at(-1)).toContain("● orq/decider-4b  · default");
+		expect(h.notices.at(-1)).toContain("○ typesafe/jev-latest");
+	} finally {
+		await h.stop();
+		if (saved === undefined) delete process.env.ORQI_ROUTE_CLASSIFIER;
+		else process.env.ORQI_ROUTE_CLASSIFIER = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/decider --save that cannot write stays a session pick, so a catalogue refresh keeps it", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-decider-"));
+	const saved = process.env.ORQI_ROUTE_CLASSIFIER;
+	delete process.env.ORQI_ROUTE_CLASSIFIER;
+	mkdirSync(join(dir, "orqi.json")); // a directory where the file goes: the write throws
+	const routing = routingOn(dir, (async () => new Response("{}")) as unknown as typeof fetch);
+	const h = harnessOn(dir, { routing });
+	try {
+		await h.start();
+		await h.commands.get("decider")!("typesafe/jev-latest --save", h.ctx);
+		expect(h.notices.at(-1)).toContain("Could not save it");
+		expect(routing.decider).toMatchObject({ id: "typesafe/jev-latest", source: "session" });
+		routing.decider.resolve([
+			{ id: "orq/decider-4b", kind: "classifier" },
+			{ id: "typesafe/jev-latest", kind: "classifier" },
+		]);
+		expect(routing.decider.id).toBe("typesafe/jev-latest");
+	} finally {
+		await h.stop();
+		if (saved === undefined) delete process.env.ORQI_ROUTE_CLASSIFIER;
+		else process.env.ORQI_ROUTE_CLASSIFIER = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("memorq's host.decide asks the user's decider, and its cost lands in the trajectory as a step", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-decide-"));
+	let asked = "";
+	const routing = routingOn(dir, (async (_url: string, init: RequestInit) => {
+		asked = JSON.parse(String(init.body)).model;
+		return new Response(
+			JSON.stringify({
+				answers: { worth: { type: "noul", noul: 0.8 } },
+				usage: { input_tokens: 100, output_tokens: 0, total_cost: 0.00002 },
+			}),
+		);
+	}) as unknown as typeof fetch);
+	const h = harnessOn(dir, { routing });
+	const hosts: any[] = [];
+	h.bus.on("memorq:host", (host) => hosts.push(host));
+	try {
+		await h.start();
+		await h.commands.get("decider")!("typesafe/jev-latest", h.ctx);
+		const result = await hosts.at(-1).decide({ state: { turn: "x" }, questions: { worth: { type: "bool", instructions: "?" } } });
+		expect(asked).toBe("typesafe/jev-latest");
+		expect(result.answers.worth).toEqual({ type: "bool", probability: 0.8 });
+		expect(h.rows().join("\n")).toContain("decide");
+		// A 403 answers undefined, never a throw into memorq.
+		routing.decider.unavailable = "decisions unavailable: API key lacks the classify permission";
+		expect(await hosts.at(-1).decide({ state: {}, questions: {} })).toBeUndefined();
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+	// Once the session has ended its host decides nothing.
+	expect(await hosts.at(-1).decide({ state: {}, questions: {} })).toBeUndefined();
 });
 
 test("a closed session's memorq host never returns its old context percentage", async () => {
@@ -2269,6 +2413,115 @@ test("the /theme pick survives a restart; ORQI_THEME only overrides one run", ()
 	expect(startupTheme("nope", "nord", known)).toBe("orq-dark");
 });
 
+test("plan mode lets reads through, asks for every Bash command and blocks the rest", async () => {
+	expect(planBlock("read", {})).toBeUndefined();
+	expect(planBlock("ask_user", {})).toBeUndefined();
+	expect(planBlock("exit_plan", {})).toBeUndefined();
+	expect(planBlock("mcp__orq__list_traces", {})).toBeUndefined();
+	expect(planBlock("subagent", { agent: "investigator" })).toBeUndefined();
+	expect(planBlock("subagent", { agent: "agent/support-bot" })).toContain("managed agent");
+	for (const tool of [
+		"edit",
+		"write",
+		"mcp__orq__create_dataset",
+		"mcp__orq__update_agent",
+		"mcp__orq__delete_dataset",
+		"some_plugin_tool",
+	])
+		expect(planBlock(tool, {})).toContain("Plan mode is read-only");
+
+	let mode: PermissionMode = "plan";
+	const asked: string[] = [];
+	const calls: unknown[][] = [];
+	const gate = toolGate({ gate: (...args: unknown[]) => calls.push(args) }, undefined, () => mode);
+	const ui = { hasUI: true, ui: { select: async (title: string) => (asked.push(title), ALLOW_ONCE) } as any };
+	expect((await gate.onToolCall({ toolCallId: "e", toolName: "edit", input: {} }, ui))?.block).toBe(true);
+	expect((await gate.onToolCall({ toolCallId: "u", toolName: "mcp__orq__update_agent", input: {} }, ui))?.block).toBe(true);
+	expect(calls.at(-1)).toEqual(["u", "two_way", "denied"]);
+	expect(await gate.onToolCall({ toolCallId: "l", toolName: "mcp__orq__list_traces", input: {} }, ui)).toBeUndefined();
+	// Bash asks while planning, and --auto does not apply: the mode is read on every call.
+	expect(await gate.onToolCall({ toolCallId: "b", toolName: "bash", input: { command: "ls" } }, ui)).toBeUndefined();
+	expect(asked[0]).toStartWith("bash · plan mode");
+	// Planning offers no "for this turn", and a turn-wide yes given before /plan does not carry over.
+	const offered: string[][] = [];
+	const turnWide = toolGate({ gate: () => {} }, undefined, () => mode);
+	const pick = (answer: string) => ({
+		hasUI: true,
+		ui: { select: async (_t: string, options: string[]) => (offered.push(options), answer) } as any,
+	});
+	mode = "prompt";
+	await turnWide.onToolCall({ toolCallId: "t1", toolName: "bash", input: { command: "ls" } }, pick(ALLOW_TURN));
+	await turnWide.onToolCall({ toolCallId: "t2", toolName: "bash", input: { command: "ls" } }, pick(ALLOW_ONCE)); // memo: not asked
+	expect(offered).toHaveLength(1);
+	mode = "plan";
+	await turnWide.onToolCall({ toolCallId: "t3", toolName: "bash", input: { command: "rm x" } }, pick(ALLOW_ONCE));
+	expect(offered).toHaveLength(2);
+	expect(offered[1]).toEqual([ALLOW_ONCE, DENY]);
+	mode = "auto";
+	expect(await gate.onToolCall({ toolCallId: "b2", toolName: "bash", input: { command: "ls" } }, ui)).toBeUndefined();
+	expect(asked).toHaveLength(1);
+	expect(await gate.onToolCall({ toolCallId: "e2", toolName: "edit", input: {} }, ui)).toBeUndefined();
+});
+
+test("/plan switches read-only on and off, tells the model once each way, and persists", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-"));
+	try {
+		const h = harnessOn(dir);
+		await h.start();
+		const beforeTurn = () => h.handlers.get("before_agent_start")!({}, h.ctx) as { message?: { content: string } } | undefined;
+		const edit = () =>
+			h.handlers.get("tool_call")!({ toolCallId: "e", toolName: "edit", input: {} }, { ...h.ctx, hasUI: true }) as Promise<any>;
+		expect(h.widgets.get("orqi-plan")).toBeUndefined();
+		expect(await edit()).toBeUndefined();
+
+		await h.commands.get("plan")!("", h.ctx);
+		expect(h.widgets.get("orqi-plan")).toEqual(["▌ plan mode · read-only · alt+p or /plan off to leave"]);
+		expect(h.entries.at(-1)).toEqual({ customType: "orqi-plan", data: { on: true } });
+		expect((await edit())?.block).toBe(true);
+		expect(beforeTurn()?.message?.content).toBe(PLAN_ON);
+		expect(beforeTurn()).toBeUndefined(); // once, not every turn
+
+		await h.commands.get("plan")!("off", h.ctx);
+		expect(h.widgets.get("orqi-plan")).toBeUndefined();
+		expect(beforeTurn()?.message?.content).toBe(PLAN_OFF);
+		expect(await edit()).toBeUndefined();
+
+		// alt+p does the same as /plan.
+		await h.shortcuts.get("alt+p")!(h.ctx);
+		expect((await edit())?.block).toBe(true);
+		// Selecting a managed agent leaves plan mode: its tools run server-side, out of the gate's reach.
+		await h.handlers.get("model_select")!(
+			{ model: { provider: "orq", id: "agent/bot" }, previousModel: { provider: "orq", id: "m" } },
+			h.ctx,
+		);
+		expect(await edit()).toBeUndefined();
+		expect(h.notices.at(-1)).toContain("Plan mode is off");
+
+		// A resumed branch keeps the mode it last had, without telling the model again.
+		const resumed = harnessOn(dir, { branch: [{ type: "custom", customType: "orqi-plan", data: { on: true } }] });
+		await resumed.start();
+		expect(resumed.widgets.get("orqi-plan")).toBeDefined();
+		expect(resumed.handlers.get("before_agent_start")!({}, resumed.ctx)).toBeUndefined();
+		// --plan starts a session with no record in plan mode, and says so on the first turn.
+		const launched = harnessOn(dir, { permissionMode: "plan" });
+		// One-shot never starts a session: the launch alone already blocks changes.
+		const blocked = await launched.handlers.get("tool_call")!(
+			{ toolCallId: "e", toolName: "edit", input: {} },
+			{ ...launched.ctx, hasUI: false },
+		);
+		expect((blocked as any)?.block).toBe(true);
+		await launched.start();
+		expect((launched.handlers.get("before_agent_start")!({}, launched.ctx) as any)?.message?.content).toBe(PLAN_ON);
+		// The launch is recorded like a switch: a resume without --plan keeps the mode.
+		expect(launched.entries).toContainEqual({ customType: "orqi-plan", data: { on: true } });
+		const reopened = harnessOn(dir, { branch: launched.branch });
+		await reopened.start();
+		expect(reopened.widgets.get("orqi-plan")).toBeDefined();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("reserveFor turns a percent of the window into pi's reserve", () => {
 	expect(reserveFor(70, 200_000)).toBe(60_000);
 	expect(reserveFor(90, 128_000)).toBe(12_800);
@@ -2306,6 +2559,105 @@ test("/compact-at moves pi's compaction reserve in memory, follows the model and
 		expect(reserve()).toBe(20_000);
 		expect(readPrefs(dir).compactAt).toBeUndefined();
 		await h.stop();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/plan run with no plan, or a session that will not open, says so", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-"));
+	try {
+		const h = harnessOn(dir);
+		await h.start();
+		await h.commands.get("plan")!("run", h.ctx);
+		expect(h.notices.at(-1)).toContain("No plan in this session yet");
+		mkdirSync(join(dir, "plans"), { recursive: true });
+		writeFileSync(planPath(dir, "s1"), "# p\n## Slices\n1. x\n");
+		const failing = {
+			...h.ctx,
+			waitForIdle: async () => {},
+			sessionManager: { ...h.ctx.sessionManager, getSessionFile: () => undefined },
+			newSession: async () => {
+				throw new Error("disk full");
+			},
+		};
+		await h.commands.get("plan")!("run", failing);
+		expect(h.notices.at(-1)).toContain("/plan run failed: disk full");
+		expect(h.notices.at(-1)).toContain(planPath(dir, "s1"));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("exit_plan saves the plan and only the user's approval leaves plan mode", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-"));
+	try {
+		const h = harnessOn(dir);
+		await h.start();
+		const tool = h.tools.get("exit_plan")!;
+		const plan = "# Add --verbose\n## Slices\n1. flag\n2. docs";
+		const run = (ctx: any, text = plan) => tool.execute("x", { plan: text }, undefined, undefined, ctx);
+		const text = (r: any) => r.content[0].text as string;
+		const edit = () =>
+			h.handlers.get("tool_call")!({ toolCallId: "e", toolName: "edit", input: {} }, { ...h.ctx, hasUI: true }) as Promise<any>;
+		// The dialog, answered by keys: enter takes the cursor's option, which starts on the recommended one.
+		const answering = (...keys: string[]) => ({
+			...h.ctx,
+			getContextUsage: () => ({ tokens: 31_000 }),
+			sessionManager: { ...h.ctx.sessionManager, getSessionId: () => "s1" },
+			ui: {
+				...h.ctx.ui,
+				setEditorText: (value: string) => h.notices.push(`editor: ${value}`),
+				custom: (factory: any) =>
+					new Promise((resolve) => {
+						const view = factory(
+							{ requestRender: () => {}, terminal: { rows: 40, columns: 80 } },
+							{ ...h.ctx.ui.theme, bg: (_t: string, s: string) => s },
+							{},
+							resolve,
+						);
+						for (const key of keys) view.handleInput(key);
+					}),
+			},
+		});
+
+		expect(text(await run(h.ctx))).toBe(NOT_PLANNING);
+		await h.commands.get("plan")!("on", h.ctx);
+		const noSlices = await run(h.ctx, "# Just do it\n## Context\nlooks fine");
+		expect(noSlices.isError).toBe(true);
+		expect(text(noSlices)).toContain("no slices");
+		// An agent dir that cannot be written is an error the model can report, not a crash.
+		const blocked = join(dir, "not-a-dir");
+		writeFileSync(blocked, "");
+		const unwritable = harnessOn(blocked);
+		await unwritable.start();
+		await unwritable.commands.get("plan")!("on", unwritable.ctx);
+		const failed = await unwritable.tools.get("exit_plan")!.execute("x", { plan }, undefined, undefined, unwritable.ctx);
+		expect(failed.isError).toBe(true);
+		expect(text(failed)).toContain("could not be saved");
+		expect((await run(h.ctx, "# x\n## Decisions\n- auth? (open)")).isError).toBe(true);
+
+		// Feedback keeps plan mode on and goes back to the model.
+		const typed = await run(answering("\x1b[B", "\x1b[B", "\x1b[B", "\r", ..."split slice 1", "\r"));
+		expect(text(typed)).toContain("split slice 1");
+		expect((await edit())?.block).toBe(true);
+		expect(readFileSync(planPath(dir, "s1"), "utf8")).toBe(`${plan}\n`);
+
+		// A fresh session keeps this one read-only and puts /plan run in the editor.
+		expect(text(await run(answering("\x1b[B", "\r")))).toBe(FRESH);
+		expect(h.notices).toContain("editor: /plan run");
+		expect((await edit())?.block).toBe(true);
+
+		// Approve here: plan mode off now, so the same run can start editing; the result says so, not a second notice.
+		expect(text(await run(answering("\r")))).toBe(APPROVED);
+		expect(await edit()).toBeUndefined();
+		expect(h.handlers.get("before_agent_start")!({}, h.ctx)).toBeUndefined();
+
+		// One-shot: nobody to approve, so the plan is saved and the run says where.
+		await h.commands.get("plan")!("on", h.ctx);
+		const headless = await run({ ...h.ctx, mode: "print" });
+		expect(text(headless)).toContain(planPath(dir, "s1"));
+		expect((await edit())?.block).toBe(true);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

@@ -3,7 +3,8 @@
  * `settings.json`. pi's SettingsManager has no setter for a key it does not
  * know, so orqi keeps its own small file rather than writing into pi's, and it
  * is never in a project's `.orqi/`, which is read only when the project is
- * trusted. Today it holds which inspector sections show and where auto-compaction starts.
+ * trusted. It holds which inspector sections show, the decider saved with
+ * `/decider` (ctrl+s or `--save`) and where auto-compaction starts.
  *
  * Read forgivingly (a missing, unreadable or odd file is the defaults; an id
  * orqi does not know is ignored) and written whole, so the next write drops
@@ -36,6 +37,8 @@ export function isCompactAt(value: unknown): value is number {
 
 export interface Prefs {
 	sections: Record<SectionId, boolean>;
+	/** The decision model `/decider` saved; resolved against the workspace at boot (src/decider.ts). */
+	decider?: string;
 	/** Auto-compact at this percent of the window; unset is pi's own reserve-based threshold. */
 	compactAt?: number;
 }
@@ -44,13 +47,14 @@ const FILE = "orqi.json";
 
 export function readPrefs(agentDir: string): Prefs {
 	const sections = { ...DEFAULT_SECTIONS };
-	let file: { sections?: unknown; compactAt?: unknown } | null = null;
+	let file: { sections?: unknown; decider?: unknown; compactAt?: unknown } | null = null;
 	try {
 		file = JSON.parse(readFileSync(join(agentDir, FILE), "utf8"));
 	} catch {
 		// Missing, unreadable or not JSON: the defaults.
 	}
 	const saved = file?.sections;
+	const decider = typeof file?.decider === "string" && file.decider.trim() ? file.decider.trim() : undefined;
 	if (saved && typeof saved === "object" && !Array.isArray(saved)) {
 		for (const id of SECTIONS) {
 			const value = (saved as Record<string, unknown>)[id];
@@ -58,7 +62,7 @@ export function readPrefs(agentDir: string): Prefs {
 		}
 	}
 	const compactAt = file?.compactAt;
-	return isCompactAt(compactAt) ? { sections, compactAt } : { sections };
+	return { sections, ...(decider ? { decider } : {}), ...(isCompactAt(compactAt) ? { compactAt } : {}) };
 }
 
 /** The whole file, through a staging dir and a rename, so a reader never sees half of it. Throws when it cannot be written. */
@@ -69,7 +73,7 @@ export function writePrefs(agentDir: string, prefs: Prefs): void {
 	const tmp = join(staging, FILE);
 	try {
 		const compactAt = isCompactAt(prefs.compactAt) ? prefs.compactAt : undefined;
-		writeFileSync(tmp, `${JSON.stringify({ sections, compactAt }, null, 2)}\n`, { mode: 0o600 });
+		writeFileSync(tmp, `${JSON.stringify({ sections, decider: prefs.decider || undefined, compactAt }, null, 2)}\n`, { mode: 0o600 });
 		renameSync(tmp, join(agentDir, FILE));
 	} finally {
 		rmSync(staging, { recursive: true, force: true });

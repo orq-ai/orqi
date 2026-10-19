@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { isAgentModel } from "./agents.ts";
@@ -53,6 +53,7 @@ import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { toolGate } from "./gate.ts";
+import { createExitPlanTool, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
@@ -87,6 +88,8 @@ export interface HarnessDeps {
 }
 
 const ROUTE_ENTRY = "orqi-route";
+/** Plan mode on or off, persisted on every change so a resumed session keeps it. */
+const PLAN_ENTRY = "orqi-plan";
 /** How long a loaded memorq has to publish its first state before the section says it is not answering. */
 const MEMORQ_GRACE_MS = 5_000;
 /** A learn memorq reported, persisted so /trajectory exports it and a resume shows it. */
@@ -109,6 +112,13 @@ export function learnLine(learned: Learned): string {
 	return `${step.label} ${step.detail}${typeof learned.costUsd === "number" ? ` · ${dollars(learned.costUsd)}` : ""}`;
 }
 const ROUTE_WIDGET = "orqi-route";
+/** Where the decider came from, as `/route explain` says it. */
+const DECIDER_SOURCE = {
+	env: "ORQI_ROUTE_CLASSIFIER",
+	saved: "saved with /decider",
+	session: "this session",
+	default: "default",
+} as const;
 const BARS = "▁▂▃▄▅▆▇█";
 
 /**
@@ -375,6 +385,35 @@ export function orqHarness(deps: HarnessDeps) {
 					: undefined,
 			);
 		};
+		/**
+		 * Plan mode: read-only until the user approves a plan (src/plan.ts). The gate reads it per call.
+		 * Seeded from the launch here, not only in session_start, because a one-shot run never starts a session.
+		 */
+		let planning = deps.permissionMode === "plan";
+		/** What the model is told on its next turn: plan mode just turned on, or off by hand. */
+		let planNotice: string | undefined = planning ? PLAN_ON : undefined;
+		const baseMode: PermissionMode = deps.permissionMode === "auto" ? "auto" : "prompt";
+		const syncPlan = (ctx: ExtensionContext | undefined) => {
+			if (ctx?.mode !== "tui") return;
+			const theme = ctx.ui.theme;
+			ctx.ui.setWidget(
+				"orqi-plan",
+				planning ? [`${theme.fg("warning", "▌ plan mode · read-only")}${theme.fg("dim", " · alt+p or /plan off to leave")}`] : undefined,
+			);
+		};
+		/** The model hears the switch on its next turn, unless `quiet`: an approval says it in the tool result. */
+		const setPlanning = (on: boolean, ctx: ExtensionContext | undefined, quiet = false) => {
+			if (planning === on) return;
+			planning = on;
+			planNotice = quiet ? undefined : on ? PLAN_ON : PLAN_OFF;
+			try {
+				pi.appendEntry(PLAN_ENTRY, { on });
+			} catch {
+				// A stale handle after /new: the mode still holds for this session.
+			}
+			syncPlan(ctx);
+			render();
+		};
 		let reserveTokens = 16_384;
 		let headerShown = false;
 		let statusOf: (key: string) => string | undefined = () => undefined;
@@ -545,10 +584,23 @@ export function orqHarness(deps: HarnessDeps) {
 				},
 			},
 			// memorq keeps this object; once this session has ended its ctx is stale, and the next session offers a new host.
-			pickModel: (current) =>
+			pickModel: async (current) =>
 				ctxRef && deps.modelRuntime && !sessionEnded
-					? pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current)
-					: Promise.resolve(undefined),
+					? (await pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current))?.id
+					: undefined,
+			// The user's decider (/decider), the same one orq/auto asks. Never rejects: no decider, a 403, a
+			// timeout or an ended session all answer undefined, and memorq goes on without a decision.
+			decide: async (context, signal) => {
+				const decider = deps.routing?.decider;
+				if (!decider || sessionEnded) return undefined;
+				try {
+					return await decider.decide("memorq", context, signal);
+				} catch {
+					// A 403 sticks for every asker; say so here too, or only the router's next turn would.
+					if (decider.unavailable && !sessionEnded) ctxRef?.ui.setWidget(ROUTE_WIDGET, [decider.unavailable]);
+					return undefined;
+				}
+			},
 			// Pi cannot calculate a percentage for router or agent models whose window it does not know; orqi's
 			// own measure has the catalogue window and the same visible-context accounting.
 			contextPercent: () => {
@@ -866,6 +918,7 @@ export function orqHarness(deps: HarnessDeps) {
 				project: deps.project?.(),
 				agent,
 				routing: model?.provider === "orq" && model.id === "auto" ? "orq/auto" : undefined,
+				plan: planning,
 				connected: !/not connected/.test(status),
 			};
 		};
@@ -979,6 +1032,22 @@ export function orqHarness(deps: HarnessDeps) {
 		// ── events ────────────────────────────────────────────────────────────
 		pi.on("session_start", (_event, ctx) => {
 			ctxRef = ctx;
+			// Plan mode as this branch last left it; a session with no record starts as the launch said (--plan).
+			const planEntry = ctx.sessionManager
+				.getBranch()
+				.filter((entry) => entry.type === "custom" && entry.customType === PLAN_ENTRY)
+				.at(-1) as { data?: { on?: boolean } } | undefined;
+			planning = planEntry ? planEntry.data?.on === true : deps.permissionMode === "plan";
+			planNotice = planning && !planEntry ? PLAN_ON : undefined;
+			// A launch with --plan is recorded like a switch, so a resume without the flag keeps plan mode.
+			if (planning && !planEntry) {
+				try {
+					pi.appendEntry(PLAN_ENTRY, { on: true });
+				} catch {
+					// A stale handle: the launch flag still holds for this session.
+				}
+			}
+			syncPlan(ctx);
 			if (ctx.mode === "tui" && !rssTimer) {
 				sampleRss();
 				rssTimer = setInterval(sampleRss, 5000);
@@ -1043,6 +1112,7 @@ export function orqHarness(deps: HarnessDeps) {
 			releaseKeys?.();
 			releaseKeys = undefined;
 			stopDecisions?.();
+			stopDeciderCalls?.();
 		});
 		pi.on("session_tree", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
 		pi.on("session_compact", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
@@ -1110,7 +1180,7 @@ export function orqHarness(deps: HarnessDeps) {
 					// A stale Pi handle after session replacement cannot notify memorq; the gate verdict still stands.
 				}
 			},
-			deps.permissionMode,
+			() => (planning ? "plan" : baseMode),
 		);
 		pi.on("tool_call", (event, ctx) => {
 			// ask_user's dialog needs the same keys, for the same reason.
@@ -1150,6 +1220,11 @@ export function orqHarness(deps: HarnessDeps) {
 				savedTools = undefined;
 				if (chatLevel && pi.getThinkingLevel() !== chatLevel) pi.setThinkingLevel(chatLevel);
 			}
+			// A managed agent runs its own tools server-side, where the gate cannot follow.
+			if (planning && isAgentModel(event.model.id)) {
+				setPlanning(false, ctx);
+				ctx.ui.notify("Plan mode is off: an agent runs its own tools, which plan mode cannot hold back.", "warning");
+			}
 			syncAgent(ctx);
 			applyCompactAt(ctx);
 			measure(ctx);
@@ -1175,6 +1250,12 @@ export function orqHarness(deps: HarnessDeps) {
 			if (savedTools) {
 				pi.setActiveTools(savedTools);
 				savedTools = undefined;
+			}
+			// Told once per switch, not every turn: the gate's block reasons remind it, and the prompt cache holds.
+			if (planNotice) {
+				const content = planNotice;
+				planNotice = undefined;
+				return { message: { customType: "orqi-plan-mode", content, display: false } };
 			}
 		});
 
@@ -1203,12 +1284,95 @@ export function orqHarness(deps: HarnessDeps) {
 			} catch {
 				// A stale handle after /new: the step is in the trajectory regardless.
 			}
-			if (deps.routing?.unavailable) ctxRef?.ui.setWidget(ROUTE_WIDGET, [deps.routing.unavailable]);
+			// The line follows the decider: a refresh that cleared the 403 takes it down with the next decision.
+			const unavailable = deps.routing?.decider.unavailable;
+			ctxRef?.ui.setWidget(ROUTE_WIDGET, unavailable ? [unavailable] : undefined);
+		});
+		// orq/auto's calls are drawn with its decisions above; anyone else's (memorq) is a step of its own, so /cost counts it.
+		const stopDeciderCalls = deps.routing?.decider.onCall((call) => {
+			if (call.asker === "router") return;
+			const usage = call.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: call.cost } : undefined;
+			trajectory.route("decide", `for ${call.asker}`, usage, call.latencyMs, call.id);
+		});
+
+		/**
+		 * `/decider`, as `/model` is for the chat model: bare opens pi's selector over the workspace's
+		 * classifiers (enter for this session, ctrl+s to save as the default), `<id>` switches for this
+		 * session and `<id> --save` saves too. Every Decisions call reads `decider.id`, so it applies on the next one.
+		 */
+		const chooseDecider = async (args: string, ctx: ExtensionContext, usage: string) => {
+			const decider = deps.routing?.decider;
+			if (!decider) {
+				ctx.ui.notify("No decision model in this session.", "warning");
+				return;
+			}
+			const words = args.trim().split(/\s+/).filter(Boolean);
+			const save = words.includes("--save");
+			const named = words.filter((word) => word !== "--save");
+			if (named.length > 1) {
+				ctx.ui.notify(`usage: ${usage} [id] [--save]`, "warning");
+				return;
+			}
+			const available = decider.classifiers;
+			const saved = prefs.decider;
+			let wanted = named[0];
+			let keep = save;
+			if (!wanted) {
+				if (!(ctx.mode === "tui" && deps.modelRuntime && available.length)) {
+					ctx.ui.notify(
+						[
+							`decision models in this workspace (${usage} <id> to switch, --save to keep)`,
+							...(available.length
+								? available.map((id) => `  ${id === decider.id ? "●" : "○"} ${id}${id === saved ? "  · default" : ""}`)
+								: ["  none: orq/auto falls back to medium on every turn"]),
+						].join("\n"),
+					);
+					return;
+				}
+				const picked = await pickModel(ctx, deps.modelRuntime, deps.catalogue(), decider.id ?? "", {
+					kind: "classifier",
+					canSave: true,
+					saved,
+				});
+				if (!picked) return; // esc
+				wanted = picked.id;
+				keep = picked.save;
+			}
+			if (!available.includes(wanted)) {
+				ctx.ui.notify(`${wanted} is not a decision model in this workspace; ${usage} lists them`, "warning");
+				return;
+			}
+			// A sticky 403 is cleared too: a different model deserves its own answer.
+			decider.use(wanted, "session");
+			const lines = [`orq/auto now asks ${wanted} (this session)`];
+			if (keep) {
+				// Marked saved only once the write lands, or the next catalogue refresh would read the old file and revert.
+				try {
+					const fresh = readPrefs(deps.agentDir);
+					fresh.decider = wanted;
+					writePrefs(deps.agentDir, fresh);
+					prefs.decider = wanted;
+					decider.use(wanted, "saved");
+					lines[0] = `orq/auto now asks ${wanted} · saved as default`;
+				} catch (error) {
+					lines.push(`Could not save it: ${(error as Error).message}`);
+				}
+				if (process.env.ORQI_ROUTE_CLASSIFIER)
+					lines.push(`ORQI_ROUTE_CLASSIFIER=${process.env.ORQI_ROUTE_CLASSIFIER} overrides it at the next start`);
+			}
+			if (!(ctx.model?.provider === "orq" && ctx.model.id === "auto"))
+				lines.push("It decides when orq/auto picks the model: /model orq/auto");
+			ctx.ui.notify(lines.join("\n"));
+			ctx.ui.setWidget(ROUTE_WIDGET, undefined);
+		};
+		pi.registerCommand("decider", {
+			description: "/decider picks the decision model orq/auto and memorq ask (enter: this session, ctrl+s: save); /decider <id> [--save]",
+			handler: (args, ctx) => chooseDecider(args, ctx, "/decider"),
 		});
 
 		pi.registerCommand("route", {
 			description:
-				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route classifier lists or picks the decision model, /route platform the workspace's smart routers",
+				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
 			handler: async (args, ctx) => {
 				const routing = deps.routing;
 				const arg = args.trim();
@@ -1258,30 +1422,7 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				if (arg === "classifier" || arg.startsWith("classifier ")) {
-					const wanted = arg.slice("classifier".length).trim();
-					const available = deps
-						.catalogue()
-						.filter((model) => model.kind === "classifier")
-						.map((model) => model.id);
-					if (!wanted) {
-						ctx.ui.notify(
-							[
-								"classifiers in this workspace (/route classifier <id> to switch)",
-								...(available.length
-									? available.map((id) => `  ${id === routing.classifier ? "●" : "○"} ${id}`)
-									: ["  none: orq/auto falls back to medium on every turn"]),
-							].join("\n"),
-						);
-						return;
-					}
-					if (!available.includes(wanted)) {
-						ctx.ui.notify(`${wanted} is not a classifier in this workspace; /route classifier lists them`, "warning");
-						return;
-					}
-					// Until orqi exits. A sticky 403 is cleared too: a different model deserves its own answer.
-					routing.classifier = wanted;
-					routing.unavailable = undefined;
-					ctx.ui.notify(`orq/auto now asks ${wanted}. ORQI_ROUTE_CLASSIFIER=${wanted} makes it stick.`);
+					await chooseDecider(arg.slice("classifier".length), ctx, "/route classifier");
 					return;
 				}
 				const pool = TIERS.map((t: Tier) => `${t} ${shortModel(routing.pool[t])}`).join(" · ");
@@ -1295,7 +1436,7 @@ export function orqHarness(deps: HarnessDeps) {
 							`  ${DOOR_QUESTION.instructions}`,
 							...Object.entries(DOOR_QUESTION.criteria).map(([door, text]) => `  ${door.padEnd(7)} ${text}`),
 							`pool  ${pool}`,
-							`classifier  ${routing.classifier ?? "none"}${routing.unavailable ? ` (${routing.unavailable})` : ""}`,
+							`decider  ${routing.decider.id ?? "none"}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
 							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
 							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
 							"       cannot answer, a keyword floor (delete / auto_run / agent or evaluator changes) stands in",
@@ -1304,7 +1445,7 @@ export function orqHarness(deps: HarnessDeps) {
 					);
 					return;
 				}
-				ctx.ui.notify("usage: /route on|off|explain|classifier [id]|platform", "warning");
+				ctx.ui.notify("usage: /route on|off|explain|classifier [id] [--save]|platform", "warning");
 			},
 		});
 
@@ -1375,6 +1516,60 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
+
+		// ── plan mode ─────────────────────────────────────────────────────────
+		pi.registerTool(
+			createExitPlanTool({
+				agentDir: deps.agentDir,
+				planning: () => planning,
+				approve: () => setPlanning(false, ctxRef, true),
+			}),
+		);
+		const togglePlan = (on: boolean, ctx: ExtensionContext) => {
+			if (on && isAgentModel(ctx.model?.id)) {
+				ctx.ui.notify("Leave agent mode first (/agent off): an agent runs its own tools, which plan mode cannot hold back.", "warning");
+				return;
+			}
+			setPlanning(on, ctx);
+			ctx.ui.notify(on ? "Plan mode: read-only until you approve a plan." : "Plan mode off: changes are allowed again.", "info");
+		};
+		pi.registerShortcut("alt+p", { description: "toggle plan mode", handler: (ctx) => togglePlan(!planning, ctx) });
+		pi.registerCommand("plan", {
+			description:
+				"plan mode: read-only until you approve a plan. /plan toggles, /plan on|off, /plan run executes the approved plan in a fresh session",
+			handler: async (args, ctx) => {
+				const arg = args.trim();
+				if (arg === "run") {
+					const path = planPath(deps.agentDir, ctx.sessionManager.getSessionId());
+					if (!existsSync(path)) {
+						ctx.ui.notify("No plan in this session yet: /plan, then ask for one.", "warning");
+						return;
+					}
+					try {
+						const plan = readFileSync(path, "utf8").trim();
+						await ctx.waitForIdle();
+						// The fresh session is not in plan mode, whatever the launch said: running the plan is the point.
+						await ctx.newSession({
+							parentSession: ctx.sessionManager.getSessionFile(),
+							setup: async (sessionManager) => {
+								sessionManager.appendCustomEntry(PLAN_ENTRY, { on: false });
+							},
+							withSession: async (fresh) => {
+								await fresh.sendUserMessage(runPrompt(path, plan));
+							},
+						});
+					} catch (error) {
+						ctx.ui.notify(`/plan run failed: ${(error as Error).message}. The plan is still at ${path}.`, "error");
+					}
+					return;
+				}
+				if (arg && arg !== "on" && arg !== "off") {
+					ctx.ui.notify("/plan takes on, off or run.", "warning");
+					return;
+				}
+				togglePlan(arg ? arg === "on" : !planning, ctx);
+			},
+		});
 
 		/** What to do about a greyed memory row: the update, or where to look. */
 		const memoryHelp = (row: string) =>
