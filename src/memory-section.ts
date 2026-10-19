@@ -3,7 +3,7 @@
  * (`memorq:state`), drawn as at most four lines, and which `read` calls opened
  * one of its notes. Pure: nothing here calls Python or reads a file.
  *
- * The types are memorq's (orq-knowledge-notes `integrations/pi/state.ts`), which
+ * The types are memorq's (orq-ai/memorq `integrations/pi/state.ts`), which
  * is the producer and owns the field names; they are copied, not imported,
  * because the two are separate pi extensions that share only the bus.
  */

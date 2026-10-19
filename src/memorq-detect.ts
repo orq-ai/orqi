@@ -1,5 +1,5 @@
 /**
- * Whether memorq (orq-ai/orq-knowledge-notes), the pi package behind the
+ * Whether memorq (orq-ai/memorq), the pi package behind the
  * sidebar's memory section, is installed. orqi does not carry it, and does
  * not tell users to install it; it reads pi's package settings to tell "not
  * installed" (say nothing about memory) from "installed but silent" (too old
@@ -12,7 +12,7 @@ import type { Check } from "./diagnostics.ts";
 /** A package entry as pi's settings hold it: a source string, or an object with a `source`. */
 type PackageEntry = string | { source?: unknown };
 
-/** memorq by its source: a path, URL or package whose last segment is the repository's name or `memorq`, pinned or not. */
+/** memorq by its source: a path, URL or package whose last segment is `memorq` or its former name `orq-knowledge-notes`, pinned or not. */
 export function isMemorqSource(entry: PackageEntry): boolean {
 	const source = typeof entry === "string" ? entry : entry?.source;
 	return typeof source === "string" && /(^|[/\\:])(orq-knowledge-notes|memorq)(\.git)?\/?([@#][^/]*)?$/.test(source);
