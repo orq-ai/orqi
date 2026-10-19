@@ -534,6 +534,8 @@ export function orqHarness(deps: HarnessDeps) {
 				try {
 					return await decider.decide("memorq", context, signal);
 				} catch {
+					// A 403 sticks for every asker; say so here too, or only the router's next turn would.
+					if (decider.unavailable && !sessionEnded) ctxRef?.ui.setWidget(ROUTE_WIDGET, [decider.unavailable]);
 					return undefined;
 				}
 			},

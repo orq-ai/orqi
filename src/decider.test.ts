@@ -97,6 +97,24 @@ test("every asker gets the current pick and is counted; a 403 sticks until the p
 	expect(calls).toHaveLength(2); // unsubscribed
 });
 
+test("a catalogue refresh clears a 403, even over a session pick; a throwing listener spoils no answer", async () => {
+	let status = 403;
+	const decider = createDecider(undefined, (async () =>
+		status === 200 ? new Response(JSON.stringify({ answers: {} })) : new Response("", { status })) as unknown as typeof fetch);
+	decider.resolve(classifiers("orq/decider-4b", "typesafe/jev-latest"));
+	decider.use("typesafe/jev-latest", "session");
+	await expect(decider.decide("router", { state: {}, questions: {} })).rejects.toThrow("classify permission");
+	expect(decider.unavailable).toBeDefined();
+	decider.resolve(classifiers("orq/decider-4b", "typesafe/jev-latest"));
+	expect(decider.id).toBe("typesafe/jev-latest"); // the session pick stays
+	expect(decider.unavailable).toBeUndefined(); // but it may knock again
+	status = 200;
+	decider.onCall(() => {
+		throw new Error("stale handle");
+	});
+	await expect(decider.decide("memorq", { state: {}, questions: {} })).resolves.toBeDefined();
+});
+
 test("no decider, or one that stalls: the asker gets an error it can go on without", async () => {
 	const none = createDecider();
 	await expect(none.decide("router", { state: {}, questions: {} })).rejects.toThrow("no decision model");

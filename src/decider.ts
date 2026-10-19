@@ -158,6 +158,8 @@ export function createDecider(saved: () => string | undefined = () => undefined,
 			const pick = saved();
 			const env = process.env.ORQI_ROUTE_CLASSIFIER;
 			decider.classifiers = ids;
+			// A fresh catalogue (a reconnect, perhaps with another key) is the moment to knock again after a 403.
+			decider.unavailable = undefined;
 			// An explicit pick for this session outlives a catalogue refresh (reconnect, /refresh), env included, until orqi restarts.
 			if (decider.source === "session" && decider.id && ids.includes(decider.id)) return;
 			// A saved pick this workspace lacks falls through without being erased: another workspace may have it.
@@ -178,7 +180,13 @@ export function createDecider(saved: () => string | undefined = () => undefined,
 			const timeout = AbortSignal.timeout(DECIDE_TIMEOUT_MS);
 			try {
 				const result = await classifyWithOrq(id, context, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout }, fetchImpl);
-				for (const listener of listeners) listener({ asker, id, latencyMs: Date.now() - started, cost: result.usage?.cost.total });
+				for (const listener of listeners) {
+					try {
+						listener({ asker, id, latencyMs: Date.now() - started, cost: result.usage?.cost.total });
+					} catch {
+						// Accounting must not turn an answered question into a classifier error.
+					}
+				}
 				return result;
 			} catch (error) {
 				if (error instanceof ClassifyForbidden && decider.id === id) decider.unavailable = error.message;
