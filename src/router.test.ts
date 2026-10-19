@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { routeLine } from "./harness.ts";
 import { selectionName } from "./harness-views.ts";
-import type { ModelInfo } from "./model.ts";
+import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, type ModelInfo } from "./model.ts";
 import { ClassifyForbidden, classifyWithOrq, createDecider, fromDecisions, toDecisionsQuestions } from "./decider.ts";
 import {
 	DIFFICULTY_QUESTION,
@@ -657,4 +657,14 @@ test("review: a dry run names the model that would really answer, and clipMiddle
 	expect(seen.at(-1)!.would).toBeUndefined();
 	expect(clipMiddle("x".repeat(100), 10).length).toBeLessThanOrEqual(10);
 	expect(clipMiddle("x".repeat(100), 0)).toBe("");
+});
+
+test("review: a model without a listed limit counts at the default it is registered with", () => {
+	const registered: any[] = [];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: (v: any) => registered.push(v) };
+	// luna (fast) lists nothing; the others list 128k output and a 1M window.
+	const limits = CATALOGUE.map((model) => (model.id.endsWith("luna") ? model : { ...model, maxTokens: 128_000, contextWindow: 1_000_000 }));
+	registerRouting(runtime, limits, "openai/gpt-5.6-terra");
+	expect(registered.at(-1).maxTokens).toBe(DEFAULT_MAX_TOKENS);
+	expect(registered.at(-1).contextWindow).toBe(DEFAULT_CONTEXT_WINDOW);
 });

@@ -27,7 +27,7 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createDecider, DECIDE_TIMEOUT_MS, DECISIONS_PROVIDER, type Decider, decisionsProvider } from "./decider.ts";
-import { BASE_MODEL, type ModelInfo } from "./model.ts";
+import { BASE_MODEL, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, type ModelInfo } from "./model.ts";
 
 export const AUTO_ID = "auto";
 
@@ -425,12 +425,15 @@ export function registerRouting(
 	 * output limit are the ones to plan for.
 	 */
 	function advertise() {
-		const smallest = (limit: "contextWindow" | "maxTokens") => {
-			const known = TIERS.map((tier) => current.find((model) => model.id === routing.pool[tier])?.[limit]).filter(
-				(value): value is number => value !== undefined,
+		// A model the catalogue lists no limit for is registered with the default, so that is what it counts as.
+		const smallest = (limit: "contextWindow" | "maxTokens") =>
+			Math.min(
+				...TIERS.map(
+					(tier) =>
+						current.find((model) => model.id === routing.pool[tier])?.[limit] ||
+						(limit === "contextWindow" ? DEFAULT_CONTEXT_WINDOW : DEFAULT_MAX_TOKENS),
+				),
 			);
-			return known.length ? Math.min(...known) : undefined;
-		};
 		runtime.registerVirtualModel({
 			...definition,
 			contextWindow: smallest("contextWindow"),
