@@ -5,7 +5,7 @@
  * first-run welcome, and the commands that ask the orq CLI (`/key /reconnect
  * /whoami /workspace /doctor /update`).
  *
- * Everything the harness shows (footer, inspector, panels and their commands)
+ * Everything the harness shows (footer, sidebar, panels and their commands)
  * is `harness.ts`. A new command goes here only if it is about the connection.
  */
 
@@ -73,7 +73,7 @@ export const ORQI_COMMANDS = [
 	"server",
 	"doctor",
 	"update",
-	"panel",
+	"sidebar",
 	"trajectory",
 	"open",
 	"trace",

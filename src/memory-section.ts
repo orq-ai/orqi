@@ -1,5 +1,5 @@
 /**
- * The inspector's memory section: what memorq last published on pi's event bus
+ * The sidebar's memory section: what memorq last published on pi's event bus
  * (`memorq:state`), drawn as at most four lines, and which `read` calls opened
  * one of its notes. Pure: nothing here calls Python or reads a file.
  *
@@ -39,7 +39,7 @@ export interface MemorqState {
 	enabled: "on" | "readonly" | "off";
 }
 
-/** What orqi offers memorq: the memory row of /panel, the workspace's model picker and the user's decider. */
+/** What orqi offers memorq: the memory row of /sidebar, the workspace's model picker and the user's decider. */
 export interface MemorqHost {
 	panel: { shown(): boolean; set(shown: boolean): void };
 	pickModel(current: string): Promise<string | undefined>;
