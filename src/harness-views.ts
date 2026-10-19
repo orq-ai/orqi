@@ -192,6 +192,7 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 		lever("/agent <key>", "agent mode sends no prompt and no tools", `→ ~${tokens(split.messages)}`),
 		...(c.hidden.length ? [lever("ORQI_ALL_TOOLS=1", `show the ${c.hidden.length} hidden tools`, `→ +${tokens(split.hidden)}`)] : []),
 		lever("/compact", "summarise the messages into one"),
+		lever("/compact-at 70", "auto-compact earlier, at 70% of the window"),
 		...(split.project ? [lever("another directory", "the project files ride along from the cwd", `→ -${tokens(split.project)}`)] : []),
 		...(split.cache !== undefined
 			? [lever(`cache hit ${Math.round(split.cache * 100)}%`, "the prefix is cached; routing keeps it (/route explain)")]
