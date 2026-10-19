@@ -1,7 +1,9 @@
 # Architecture
 
-How orqi is put together. For what it does and how to install it, see [README.md](README.md);
-for the rules that apply when changing the code, see [AGENTS.md](AGENTS.md).
+How orqi is put together. For what it does, see [README.md](README.md); every command and key is in
+[docs/commands.md](docs/commands.md), every setting in [docs/configuration.md](docs/configuration.md)
+and installing in [docs/install.md](docs/install.md). For the rules that apply when changing the
+code, see [AGENTS.md](AGENTS.md).
 
 ## Shape
 

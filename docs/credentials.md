@@ -224,3 +224,32 @@ orq-cli PR #121 (open as of 2026-10-13) moves the session tokens into the OS key
 `session_file` without `workspaceTokens`. If it lands before orqi reads the keychain, the login
 session drops out of the candidate list. The workaround is the one that PR keeps: run the CLI with
 `ORQ_CREDENTIAL_STORE=file` (export it, then `orq auth login` again) so the tokens stay in the file.
+
+## 8. Recipes
+
+```bash
+# 1. Nothing set: the login session, on whatever host the CLI resolved.
+orq auth login
+orqi
+
+# 2. A key on its own. No CLI login needed, but keep the CLI on PATH.
+export ORQ_API_KEY=sk-orq-EXAMPLEKEY000000000000000
+orqi
+
+# 3. Another host. ORQ_SERVER picks the API base URL and the login session that belongs to it.
+export ORQ_SERVER=https://acme.example.orq.ai
+orq auth login
+orqi
+
+# 4. A profile, pinned for one command. Its own server comes with it, so this
+#    talks to whatever host `acme-staging` was created against.
+orq auth profile add acme-staging sk-orq-EXAMPLEKEY111111111111111   # once
+ORQ_PROFILE=acme-staging orqi "which agents are failing?"
+
+# 5. The same profile through the CLI wrapper, which installs orqi if it is missing
+#    and hands the key and the server down itself.
+orq --profile acme-staging orqi
+```
+
+In 4 and 5 the profile beats anything in `ORQ_API_KEY`, and orqi names the credential that won on
+its startup line.
