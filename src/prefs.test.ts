@@ -80,3 +80,20 @@ test("writePrefs rewrites the file whole: unknown ids and keys are gone, every s
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("compactAt round-trips within 30-95 and is dropped otherwise", () => {
+	const dir = scratch();
+	try {
+		writePrefs(dir, { sections: DEFAULT_SECTIONS, compactAt: 70 });
+		expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS, compactAt: 70 });
+		// Unset writes no key, so the file reads back as pi's own threshold.
+		writePrefs(dir, { sections: DEFAULT_SECTIONS });
+		expect(JSON.parse(readFileSync(join(dir, "orqi.json"), "utf8"))).toEqual({ sections: DEFAULT_SECTIONS });
+		for (const compactAt of [29, 96, 70.5, "70", null, -1]) {
+			writeFileSync(join(dir, "orqi.json"), JSON.stringify({ compactAt }));
+			expect(readPrefs(dir).compactAt).toBeUndefined();
+		}
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
