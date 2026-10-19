@@ -35,7 +35,7 @@ let cliProfile: string | undefined;
  * `ORQ_API_BASE_URL`, which the CLI reads for something else entirely.
  */
 export function apiBaseUrl(env: NodeJS.ProcessEnv = process.env, server = cliServer): string {
-	return server ?? env.ORQ_SERVER ?? DEFAULT_SERVER;
+	return server ?? envServer(env.ORQ_SERVER, DEFAULT_SERVER);
 }
 
 /** CLI 11 moved its default host to my.orq.ai (api.orq.ai still answers). */
@@ -70,6 +70,22 @@ export function normalizeServer(input: string): { server: string } | { error: st
 	if (url.protocol !== "https:" && !(local && url.protocol === "http:"))
 		return { error: `${raw}: an orq host needs https (http only on localhost)` };
 	return { server: `${url.origin}${url.pathname.replace(/\/+$/, "")}` };
+}
+
+/**
+ * An orq URL taken from the environment, or `fallback` when it is unset or not
+ * a valid one. `--server`/`/server` are already gated by `normalizeServer`
+ * (https only, localhost aside, no userinfo or query), but `ORQ_SERVER`,
+ * `ORQ_MCP_URL` and `ORQ_GATEWAY_URL` reached the base URL raw, so a value like
+ * `http://attacker.tld` would receive the bearer token in cleartext. Gating
+ * them here brings the environment to the same bar as the typed host; a value
+ * that fails it falls back rather than carrying a credential off to a plain-http
+ * or malformed host.
+ */
+function envServer(value: string | undefined, fallback: string): string {
+	if (!value) return fallback;
+	const checked = normalizeServer(value);
+	return "server" in checked ? checked.server : fallback;
 }
 
 // Their own arguments are theirs: `orqi mcp add x -- srv --server …` is a server's flag.
@@ -153,12 +169,12 @@ export function exportedServer(): string | undefined {
 	return LAUNCH_ENV.ORQ_SERVER || undefined;
 }
 
-export function mcpUrl(): string {
-	return process.env.ORQ_MCP_URL ?? `${apiBaseUrl()}/v2/mcp`;
+export function mcpUrl(env: NodeJS.ProcessEnv = process.env): string {
+	return envServer(env.ORQ_MCP_URL, `${apiBaseUrl(env)}/v2/mcp`);
 }
 
-export function routerUrl(): string {
-	return process.env.ORQ_GATEWAY_URL ?? `${apiBaseUrl()}/v3/router`;
+export function routerUrl(env: NodeJS.ProcessEnv = process.env): string {
+	return envServer(env.ORQ_GATEWAY_URL, `${apiBaseUrl(env)}/v3/router`);
 }
 
 // The CLI talks to the same backend the MCP server does, and that one stalls

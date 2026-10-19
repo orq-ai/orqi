@@ -10,8 +10,10 @@ import {
 	readWhoami,
 	loginKey,
 	LOGIN_HINT,
+	mcpUrl,
 	normalizeServer,
 	orqEnv,
+	routerUrl,
 	profileKey,
 	profileOf,
 	serverOf,
@@ -126,6 +128,22 @@ test("the host follows the CLI, because an API-key profile carries its own serve
 	expect(apiBaseUrl({}, undefined)).toBe("https://my.orq.ai");
 	expect(serverOf('{"authenticated":false}')).toBeUndefined();
 	expect(serverOf("you are not logged in")).toBeUndefined();
+});
+
+test("env-supplied hosts are gated like a typed one, so the token never rides plain http", () => {
+	// A valid https (or localhost http) host is taken as given.
+	expect(apiBaseUrl({ ORQ_SERVER: "https://my.staging.orq.ai" }, undefined)).toBe("https://my.staging.orq.ai");
+	expect(mcpUrl({ ORQ_MCP_URL: "https://mcp.orq.ai/v2/mcp" })).toBe("https://mcp.orq.ai/v2/mcp");
+	expect(mcpUrl({ ORQ_MCP_URL: "http://localhost:8080/v2/mcp" })).toBe("http://localhost:8080/v2/mcp");
+	expect(routerUrl({ ORQ_GATEWAY_URL: "https://gw.orq.ai/v3/router" })).toBe("https://gw.orq.ai/v3/router");
+
+	// A plain-http remote host or a malformed value would have carried the bearer
+	// token in cleartext; it is refused and the safe default stands instead.
+	expect(apiBaseUrl({ ORQ_SERVER: "http://attacker.tld" }, undefined)).toBe("https://my.orq.ai");
+	expect(mcpUrl({ ORQ_MCP_URL: "http://attacker.tld" })).toBe("https://my.orq.ai/v2/mcp");
+	expect(mcpUrl({ ORQ_MCP_URL: "https://:secret@attacker.tld" })).toBe("https://my.orq.ai/v2/mcp");
+	expect(routerUrl({ ORQ_GATEWAY_URL: "http://attacker.tld" })).toBe("https://my.orq.ai/v3/router");
+	expect(routerUrl({})).toBe("https://my.orq.ai/v3/router");
 });
 
 test("a host is read as the base URL the CLI stores, and anything else is refused", () => {
