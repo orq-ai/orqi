@@ -95,8 +95,8 @@ export const SIGN_IN = [
 
 /** The orqi views worth knowing on day one: what the harness adds, then the workspace. Each fits 80 columns. */
 const VIEWS = [
-	"/plan · /route · /context · /cost · /btw · /trajectory · alt+s sidebar",
-	"/agents · /trace · /overview · /skills · /tools · /learn · /whatsnew",
+	"/plan · /handoff · /route · /context · /btw · /trajectory · alt+s sidebar",
+	"/agents · /trace · /overview · /garden · /cost · /skills · /learn · /whatsnew",
 ];
 
 export const CHANGELOG_URL = "https://docs.orq.ai/docs/changelog/";
