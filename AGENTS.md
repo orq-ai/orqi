@@ -210,11 +210,32 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   for the session (enter, or a save that failed) survives a catalogue refresh, `ORQI_ROUTE_CLASSIFIER`
   included, until orqi restarts. Calls by
   anyone but the router become trajectory steps, so `/cost` counts them; they are session-local.
+- **`orq/auto`'s three models are slots, automatic until someone picks one.** The decider judges the
+  message (easy, medium, hard); the model that answers sits in a slot named for what it is (fast,
+  default, frontier: `SLOTS` in `src/router.ts`), and the route line says both (`easy → fast`). An
+  automatic slot is `routePool`'s: the default model's provider only, ranked by the catalogue's
+  intelligence index, and `/route models` says why it holds its model (`autoReason`). A picked slot
+  takes any workspace chat model, any provider: `/route models` opens pi's `/model` selector for it
+  (enter for this session, ctrl+s saves to `orqi.json` as `routeModels`), `a` or `<slot> auto` clears
+  both. `ORQI_ROUTE_POOL` outranks a pick and is named as the source; a saved id this workspace lacks
+  falls through without being erased, and session picks outlive a catalogue refresh, as the decider's
+  do. A pick whose prices run backwards (fast dearer than frontier) is warned about, never refused. The
+  virtual model's context window and output limit are the smallest of the three, because any of them
+  may answer and a picked one can be another provider's.
+- **A dry run still pays for the decider.** `/route dry on` (or `ORQI_ROUTE_DRY_RUN=1`) asks the
+  decider on every user turn and answers on the default slot, so a user can see what `orq/auto` would
+  have picked (the route line's `· would <model>`, `/route explain`'s per-slot counts) before trusting
+  it. The router state records the slot that answered, not the one named, so follow-ups stay on what
+  is cached. Retries still escalate in a dry run: holding an overflowed turn on default would fail it.
 - **The door question rides beside difficulty, and the keyword floor is only its fallback.**
   `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would delete
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
   runs when the classifier errors, 403s, times out, or the workspace has no classifier. A response
-  without a door answer has no opinion; the router does not invent one.
+  without a door answer has no opinion; the router does not invent one. When the strongest
+  difficulty answer is under `ORQI_ROUTE_CONFIDENCE` (0.5), the previous turn's slot answers instead
+  (`unsure .40: stays`): a short follow-up such as "yes, do it" splits its vote, and dropping an hour
+  of hard work to fast on it both answers worse and throws away the prompt cache. The door still
+  wins over it, and the first turn of a session, with nothing to stay on, routes as before.
 - **Teach lives in the inspector (the side panel), never the transcript.** Users see it as "tips" (`/tips`; `/teach` stays an alias, and either one's choice is saved in `orqi.json`, below), the code keeps the name `teach`. Cards are not session
   entries, so `/trajectory` exports only the conversation and a resume shows no lessons. When the
   panel is hidden (under 140 columns unless `alt+i` forces it, in fullscreen or as the regular-mode
@@ -433,8 +454,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   pi keeps owning compaction: mid-run checks, overflow recovery, and the `session_before_compact` that
   memorq learns on. A package that replaces pi's compaction (pi-auto-compact) writes its own entries
   and never fires that event, so memorq would miss them. Under `orq/auto` the reserve is sized on the
-  hard rung's window while pi measures the rung that answered, so a smaller-window rung compacts later
-  than the percent.
+  smallest window of its three models while pi measures the rung that answered, so a larger-window rung
+  compacts earlier than the percent.
 - **orqi does not carry memorq, and only mentions memory once memorq is there.** memorq
   (orq-ai/orq-knowledge-notes, a pi package) ships on its own schedule and is not something every orqi
   user can install, so orqi never tells anyone to install it: with no memorq, `/panel` has no memory

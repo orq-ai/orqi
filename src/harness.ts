@@ -56,7 +56,18 @@ import { toolGate } from "./gate.ts";
 import { registerHandoff } from "./handoff.ts";
 import { createExitPlanTool, PLAN_ENTRY, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
-import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
+import {
+	confidenceFloor,
+	DIFFICULTY_QUESTION,
+	DOOR_QUESTION,
+	priceWarning,
+	SLOTS,
+	TIERS,
+	type Decision,
+	type Routing,
+	type RungSource,
+	type Tier,
+} from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { registerViewCommands } from "./harness-commands.ts";
 import { cacheRate, selectionName, contextSplit } from "./harness-views.ts";
@@ -111,6 +122,13 @@ export function learnLine(learned: Learned): string {
 	return `${step.label} ${step.detail}${typeof learned.costUsd === "number" ? ` · ${dollars(learned.costUsd)}` : ""}`;
 }
 const ROUTE_WIDGET = "orqi-route";
+/** Where a slot's model came from, as `/route models` and `/route explain` say it. */
+const RUNG_SOURCE: Record<RungSource, string> = { auto: "auto", saved: "saved", session: "this session", env: "ORQI_ROUTE_POOL" };
+/** A slot by its name or its rung: `fast` or `easy`. */
+function slotOf(word: string | undefined): Tier | undefined {
+	return TIERS.find((tier) => tier === word || SLOTS[tier] === word);
+}
+
 /** Where the decider came from, as `/route explain` says it. */
 const DECIDER_SOURCE = {
 	env: "ORQI_ROUTE_CLASSIFIER",
@@ -125,9 +143,15 @@ const BARS = "▁▂▃▄▅▆▇█";
  *   route › medium  ▁▅▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003
  */
 export function routeLine(
-	decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP">,
+	decision: Pick<
+		Decision,
+		"tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP" | "would"
+	>,
 ): string {
-	const tier = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(8);
+	// How hard the message was, then the slot that answers it: `easy → fast`.
+	// In a dry run the head is what the decision named, and the tail what answered instead.
+	const named = decision.would?.tier ?? decision.tier;
+	const tier = `${named} → ${SLOTS[named]}${decision.would ? " (dry run)" : ""}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(18);
 	const p = decision.probabilities;
 	const short = (n: number) => n.toFixed(2).replace(/^0/, "");
 	// A door that sent the turn to hard reads with its confidence: `door: one_way .94`.
@@ -145,7 +169,20 @@ export function routeLine(
 		: "";
 	const timing =
 		decision.latencyMs !== undefined ? `   ${classifier} ${(decision.latencyMs / 1000).toFixed(1)} s ${dollars(decision.cost ?? 0)}` : "";
-	return `route › ${tier} ${middle}${why}   → ${shortModel(decision.model)}${timing}`;
+	const would = decision.would ? ` · would ${shortModel(decision.would.model)}` : "";
+	return `route › ${tier} ${middle}${why}   → ${shortModel(decision.model)}${would}${timing}`;
+}
+
+/**
+ * A routing decision as a trajectory row, live or replayed: `easy` / `→ fast · luna`, and in a dry run
+ * `easy (dry)` / `→ default · terra · would fast`. An entry written before dry runs has no `would`.
+ */
+export function routeRow(d: Pick<Decision, "tier" | "model" | "arrow" | "fallback" | "would">): { label: string; detail: string } {
+	const named = d.would?.tier ?? d.tier;
+	return {
+		label: `${named}${d.would ? " (dry)" : ""}${d.arrow ? ` ${d.arrow}` : ""}${d.fallback ? " (fallback)" : ""}`,
+		detail: `→ ${SLOTS[d.tier] ?? d.tier} · ${shortModel(d.model)}${d.would ? ` · would ${SLOTS[d.would.tier]}` : ""}`,
+	};
 }
 
 const WORKSPACE_STATUS = "orq-workspace";
@@ -452,9 +489,9 @@ export function orqHarness(deps: HarnessDeps) {
 		 * the theme is in main.ts: the global value survives pi's save() rebuilding its merged settings, and is never
 		 * written, because save() writes only the fields it marked modified. The window changes with the model, so
 		 * this runs again on every model_select. Unset, it touches nothing, so a session without it is pi's own.
-		 * ponytail: one reserve, sized on the selected model. Under orq/auto that is the hard rung's window while pi
-		 * measures the rung that answered, so a smaller-window rung compacts later than the percent (never past
-		 * overflow recovery); per-rung compaction.modelOverrides if anyone notices.
+		 * ponytail: one reserve, sized on the selected model. Under orq/auto that is the smallest window of its three
+		 * models while pi measures the rung that answered, so a larger-window rung compacts earlier than the percent;
+		 * per-rung compaction.modelOverrides if anyone notices.
 		 */
 		const applyCompactAt = (ctx: ExtensionContext) => {
 			const global = piGlobal();
@@ -1273,11 +1310,14 @@ export function orqHarness(deps: HarnessDeps) {
 			if (!routeShown || !entry.data) return undefined;
 			return new Text(theme.fg("dim", routeLine(entry.data)), 1, 0);
 		});
+		/** What the decider named on each user turn this session, dry run or not: `/route explain` counts them. */
+		const picks: Record<Tier, number> = { easy: 0, medium: 0, hard: 0 };
 		const stopDecisions = deps.routing?.onDecision((decision) => {
 			const usage = decision.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: decision.cost } : undefined;
 			// A fallback is the default rung, not a judgement: say so where the decision is listed.
-			const label = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}${decision.fallback ? " (fallback)" : ""}`;
-			trajectory.route(label, `→ ${shortModel(decision.model)}`, usage, decision.latencyMs, decision.classifier);
+			const { label, detail } = routeRow(decision);
+			trajectory.route(label, detail, usage, decision.latencyMs, decision.classifier);
+			if (decision.reason === "user") picks[decision.would?.tier ?? decision.tier] += 1;
 			try {
 				pi.appendEntry(ROUTE_ENTRY, decision);
 			} catch {
@@ -1364,6 +1404,141 @@ export function orqHarness(deps: HarnessDeps) {
 			ctx.ui.notify(lines.join("\n"));
 			ctx.ui.setWidget(ROUTE_WIDGET, undefined);
 		};
+		/**
+		 * `/route models`: the three models orq/auto picks between, each automatic (derived from the catalogue)
+		 * or put there by the user. Bare, it lists the slots (a panel in the TUI: enter opens pi's model
+		 * selector, `a` goes back to auto); `<slot> <id|auto> [--save]` sets one by typing. Enter in the selector
+		 * is this session, ctrl+s saves to orqi.json, as with /model and /decider.
+		 */
+		const saveRung = (tier: Tier, id: string | undefined) => {
+			const fresh = readPrefs(deps.agentDir);
+			const next = { ...fresh.routeModels };
+			if (id) next[tier] = id;
+			else delete next[tier];
+			fresh.routeModels = next;
+			writePrefs(deps.agentDir, fresh);
+			prefs.routeModels = fresh.routeModels;
+		};
+		const setRung = async (ctx: ExtensionContext, tier: Tier, id: string | undefined, save: boolean) => {
+			const routing = deps.routing!;
+			const lines: string[] = [];
+			try {
+				// `auto` always clears the saved pick too: a slot is either automatic or someone's choice.
+				if (save || !id) saveRung(tier, id);
+			} catch (error) {
+				lines.push(`Could not save it: ${(error as Error).message}`);
+			}
+			routing.pick(tier, id);
+			// The pick re-registered orq/auto with the new rungs' limits; pi's session holds the model object
+			// it was given, so hand it the new one or compaction keeps planning for the old window.
+			if (ctx.model?.provider === "orq" && ctx.model.id === "auto") {
+				const fresh = deps.modelRuntime?.getModel("orq", "auto");
+				if (fresh) await pi.setModel(fresh).catch(() => false);
+			}
+			const model = routing.pool[tier];
+			// Clearing a saved pick that could not be written leaves it in force: say so rather than "auto".
+			const head = !id
+				? routing.source(tier) === "saved"
+					? `${SLOTS[tier]} is still ${model}: the saved pick could not be cleared`
+					: `${SLOTS[tier]} back to auto → ${model}`
+				: `${SLOTS[tier]} → ${model}${save && !lines.length ? " · saved" : " (this session)"}`;
+			lines.unshift(head);
+			if (routing.source(tier) === "env") lines.push(`ORQI_ROUTE_POOL sets ${tier}, so ${routing.pool[tier]} answers until it is unset`);
+			const warning = priceWarning(routing.pool, deps.catalogue());
+			if (warning) lines.push(`⚠ ${warning}`);
+			if (!(ctx.model?.provider === "orq" && ctx.model.id === "auto"))
+				lines.push("They answer when orq/auto picks the model: /model orq/auto");
+			ctx.ui.notify(lines.join("\n"), warning ? "warning" : "info");
+		};
+		const chooseModels = async (args: string, ctx: ExtensionContext): Promise<void> => {
+			const routing = deps.routing!;
+			const words = args.trim().split(/\s+/).filter(Boolean);
+			const save = words.includes("--save");
+			const [slot, id, extra] = words.filter((word) => word !== "--save");
+			const usage = "usage: /route models [fast|default|frontier] [<model id>|auto] [--save]";
+			const chat = new Set(
+				deps
+					.catalogue()
+					.filter((model) => !model.kind || model.kind === "chat")
+					.map((model) => model.id),
+			);
+			if (slot) {
+				const tier = slotOf(slot);
+				if (!tier || !id || extra) {
+					ctx.ui.notify(usage, "warning");
+					return;
+				}
+				if (id !== "auto" && !chat.has(id)) {
+					ctx.ui.notify(`${id} is not a chat model in this workspace; /model lists them`, "warning");
+					return;
+				}
+				await setRung(ctx, tier, id === "auto" ? undefined : id, save);
+				return;
+			}
+			const rows = () =>
+				TIERS.map(
+					(tier) =>
+						`${SLOTS[tier].padEnd(9)} ${shortModel(routing.pool[tier]).padEnd(24)} ${(routing.pool[tier].split("/")[0] ?? "").padEnd(10)} ${RUNG_SOURCE[routing.source(tier)]}`,
+				);
+			const reasons = () =>
+				TIERS.map(
+					(tier) =>
+						`${SLOTS[tier]}: ${routing.source(tier) === "auto" ? routing.why(tier) : `${RUNG_SOURCE[routing.source(tier)]}; auto would be ${routing.why(tier)}`}`,
+				);
+			if (!(ctx.mode === "tui" && deps.modelRuntime)) {
+				ctx.ui.notify(
+					[`orq/auto models (${usage.slice(7)})`, ...rows().map((row) => `  ${row}`), ...reasons().map((row) => `  ${row}`)].join("\n"),
+				);
+				return;
+			}
+			let chosen: Tier | undefined;
+			let live: Panel | undefined;
+			const spec = (): PanelSpec => {
+				const slots = rows();
+				const notes = reasons();
+				return {
+					title: "orq/auto models",
+					rows: [...slots, "", ...notes],
+					selectable: true,
+					filterable: false,
+					// The explanations under the slots are not slots.
+					disabled: new Set(notes.map((_, i) => slots.length + 1 + i).concat(slots.length)),
+					keys: {
+						enter: (i) => {
+							chosen = TIERS[i];
+							return chosen !== undefined;
+						},
+						a: (i) => {
+							const tier = TIERS[i];
+							if (!tier) return false;
+							void setRung(ctx, tier, undefined, false)
+								.catch((error) => ctx.ui.notify(`Could not change ${SLOTS[tier]}: ${(error as Error).message}`, "warning"))
+								.finally(() => live?.update(spec()));
+							return false;
+						},
+					},
+					hint: "enter pick model · a back to auto · esc close",
+				};
+			};
+			await panel(
+				ctx,
+				() => spec(),
+				96,
+				(p) => {
+					live = p;
+				},
+			);
+			if (!chosen) return;
+			const tier = chosen;
+			const picked = await pickModel(ctx, deps.modelRuntime, deps.catalogue(), routing.pool[tier], {
+				canSave: true,
+				saved: prefs.routeModels?.[tier],
+			});
+			if (picked) await setRung(ctx, tier, picked.id, picked.save);
+			// Back to the list, so the next slot is one keypress away; esc there ends it.
+			await chooseModels("", ctx);
+		};
+
 		pi.registerCommand("decider", {
 			description: "/decider picks the decision model orq/auto and memorq ask (enter: this session, ctrl+s: save); /decider <id> [--save]",
 			handler: (args, ctx) => chooseDecider(args, ctx, "/decider"),
@@ -1371,7 +1546,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerCommand("route", {
 			description:
-				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
+				"orq/auto routing: /route on|off shows the route line, /route explain how it decides, /route questions what the decider is asked, /route models picks the fast, default and frontier models, /route dry on|off shows its picks without following them, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
 			handler: async (args, ctx) => {
 				const routing = deps.routing;
 				const arg = args.trim();
@@ -1424,27 +1599,66 @@ export function orqHarness(deps: HarnessDeps) {
 					await chooseDecider(arg.slice("classifier".length), ctx, "/route classifier");
 					return;
 				}
-				const pool = TIERS.map((t: Tier) => `${t} ${shortModel(routing.pool[t])}`).join(" · ");
-				if (arg === "explain" || arg === "") {
+				if (arg === "dry" || arg.startsWith("dry ")) {
+					const want = arg.slice("dry".length).trim();
+					if (want !== "on" && want !== "off") {
+						ctx.ui.notify(`usage: /route dry on|off (now ${routing.dryRun ? "on" : "off"})`, "warning");
+						return;
+					}
+					routing.dryRun = want === "on";
+					ctx.ui.notify(
+						routing.dryRun
+							? `Dry run on: orq/auto still asks the decider but answers every turn on ${shortModel(routing.pool.medium)}; the route line shows what it would have picked.`
+							: "Dry run off: orq/auto answers with the model it picks.",
+					);
+					return;
+				}
+				if (arg === "models" || arg.startsWith("models ")) {
+					await chooseModels(arg.slice("models".length), ctx);
+					return;
+				}
+				const pool = TIERS.map((t: Tier) => `${SLOTS[t]} ${shortModel(routing.pool[t])} (${RUNG_SOURCE[routing.source(t)]})`).join(" · ");
+				if (arg === "questions") {
 					ctx.ui.notify(
 						[
-							"route question (general_v2 · orq-smart-router RES-1619)",
+							"what the decider is asked about each message, word for word",
+							"how hard is it",
 							`  ${DIFFICULTY_QUESTION.instructions}`,
 							...Object.entries(DIFFICULTY_QUESTION.criteria).map(([tier, text]) => `  ${tier.padEnd(7)} ${text}`),
-							"door question (evaluatorq's door criteria, asked in the same call)",
+							"can it be undone",
 							`  ${DOOR_QUESTION.instructions}`,
 							...Object.entries(DOOR_QUESTION.criteria).map(([door, text]) => `  ${door.padEnd(7)} ${text}`),
-							`pool  ${pool}`,
-							`decider  ${routing.decider.id ?? "none"}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
-							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
-							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
-							"       cannot answer, a keyword floor (delete / auto_run / agent or evaluator changes) stands in",
-							"select it with /model orq/auto, or ORQI_MODEL=orq/auto",
 						].join("\n"),
 					);
 					return;
 				}
-				ctx.ui.notify("usage: /route on|off|explain|classifier [id] [--save]|platform", "warning");
+				if (arg === "explain" || arg === "") {
+					const decider = routing.decider.id ?? "none";
+					const counted = picks.easy + picks.medium + picks.hard;
+					const onAuto = ctx.model?.provider === "orq" && ctx.model.id === "auto";
+					ctx.ui.notify(
+						[
+							"orq/auto picks a model for each message you send.",
+							`  1. The decider (${decider}) reads your newest message and answers two questions:`,
+							"     how hard is it (easy, medium or hard), and does it change something that cannot be undone?",
+							"  2. easy goes to fast, medium to default, hard to frontier. A message that changes something",
+							"     (creates, updates, deletes or sends) goes to frontier.",
+							`  3. When the decider is unsure (its top answer under ${confidenceFloor()}), the previous message's model answers again.`,
+							"  4. Tool calls within one answer stay on its model. A retry after an overload or a too-long",
+							"     conversation moves up one.",
+							"  5. If the decider cannot answer, a few keywords (delete, auto_run, agent or evaluator changes)",
+							"     send the message to frontier; anything else goes to default.",
+							"",
+							`models   ${pool}`,
+							`decider  ${decider}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
+							`dry run  ${routing.dryRun ? "on" : "off"}${counted ? ` · this session's picks: ${TIERS.map((t) => `${SLOTS[t]} ${picks[t]}`).join(" · ")}` : ""}`,
+							"",
+							`change it: /route models · /decider · /route dry ${routing.dryRun ? "off" : "on"} · the exact questions: /route questions${onAuto ? "" : " · use it: /model orq/auto"}`,
+						].join("\n"),
+					);
+					return;
+				}
+				ctx.ui.notify("usage: /route on|off|explain|questions|models|dry on|off|classifier [id] [--save]|platform", "warning");
 			},
 		});
 
@@ -1662,12 +1876,12 @@ function branchMessages(ctx: ExtensionContext): any[] {
 		if (entry.type === "message") return [entry.message];
 		if (entry.type === "custom" && entry.customType === ROUTE_ENTRY && entry.data) {
 			const d = entry.data as Decision;
-			const label = `${d.tier}${d.arrow ? ` ${d.arrow}` : ""}`;
+			const { label, detail } = routeRow(d);
 			return [
 				{
 					role: "route",
 					label,
-					detail: `→ ${shortModel(d.model)}`,
+					detail,
 					usage: d.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: d.cost } : undefined,
 					durationMs: d.latencyMs,
 					model: d.classifier,

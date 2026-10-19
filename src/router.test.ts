@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { routeLine } from "./harness.ts";
 import { selectionName } from "./harness-views.ts";
-import type { ModelInfo } from "./model.ts";
-import { ClassifyForbidden, classifyWithOrq, fromDecisions, toDecisionsQuestions } from "./decider.ts";
+import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, type ModelInfo } from "./model.ts";
+import { ClassifyForbidden, classifyWithOrq, createDecider, fromDecisions, toDecisionsQuestions } from "./decider.ts";
 import {
 	DIFFICULTY_QUESTION,
 	DOOR_QUESTION,
@@ -17,8 +17,14 @@ import {
 	logRoute,
 	policy,
 	registerRouting,
+	autoReason,
+	clipMiddle,
+	confidenceFloor,
+	priceWarning,
 	routePool,
 	tierOf,
+	type Decision,
+	type Tier,
 } from "./router.ts";
 
 const CATALOGUE: ModelInfo[] = [
@@ -236,13 +242,13 @@ test("the route line reads like the wireframe", () => {
 			cost: 0.00003,
 			classifier: "typesafe/jev-latest",
 		}),
-	).toBe("route › medium   ▁▆▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003");
+	).toBe("route › medium → default   ▁▆▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003");
 	// A fallback names itself and its reason, so it never reads as a classification.
 	expect(
 		routeLine({ tier: "medium", why: "fallback: classifier timed out after 5 s", model: "openai/gpt-5.6-terra", ...{ fallback: true } }),
-	).toBe("route › medium   fallback: classifier timed out after 5 s   → gpt-5.6-terra");
+	).toBe("route › medium → default   fallback: classifier timed out after 5 s   → gpt-5.6-terra");
 	expect(routeLine({ tier: "hard", arrow: "▲", why: "floor: agent mutation", model: "openai/gpt-5.6-sol" })).toBe(
-		"route › hard ▲   floor: agent mutation   → gpt-5.6-sol",
+		"route › hard → frontier ▲  floor: agent mutation   → gpt-5.6-sol",
 	);
 	expect(
 		routeLine({
@@ -257,7 +263,7 @@ test("the route line reads like the wireframe", () => {
 			cost: 0.00002,
 			classifier: "typesafe/jev-latest",
 		}),
-	).toBe("route › hard ▲   ▆▃▁   easy .72 · medium .28 · hard .00   door: one_way .94   → gpt-5.6-sol   jev 0.3 s $0.00002");
+	).toBe("route › hard → frontier ▲  ▆▃▁   easy .72 · medium .28 · hard .00   door: one_way .94   → gpt-5.6-sol   jev 0.3 s $0.00002");
 	expect(selectionName({ provider: "orq", id: "auto" })).toBe("orq/auto");
 	expect(selectionName({ provider: "orq", id: "openai/gpt-5.6-terra" })).toBe("openai/gpt-5.6-terra");
 });
@@ -359,4 +365,306 @@ test("orq/auto routes a user turn through the classifier and keeps follow-ups on
 			{ role: "user", content: [{ type: "text", text: "c" }] },
 		]),
 	).toBe("c");
+});
+
+test("/route models: a picked slot beats auto, ORQI_ROUTE_POOL beats both, and a saved pick this workspace lacks falls through", () => {
+	const env = process.env.ORQI_ROUTE_POOL;
+	delete process.env.ORQI_ROUTE_POOL;
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	let saved: Record<string, string> = { hard: "anthropic/claude-opus-5", easy: "gone/model" };
+	try {
+		const routing = registerRouting(runtime, CATALOGUE, "openai/gpt-5.6-terra", undefined, undefined, () => saved);
+		// Any provider, once picked; a saved id the catalogue lacks is skipped, not erased.
+		expect(routing.pool).toEqual({ easy: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-terra", hard: "anthropic/claude-opus-5" });
+		expect([routing.source("easy"), routing.source("medium"), routing.source("hard")]).toEqual(["auto", "auto", "saved"]);
+		expect(saved.easy).toBe("gone/model");
+		// A session pick beats the saved one until it is cleared.
+		routing.pick("hard", "openai/gpt-6-luna");
+		expect(routing.pool.hard).toBe("openai/gpt-6-luna");
+		expect(routing.source("hard")).toBe("session");
+		routing.pick("hard", undefined);
+		expect(routing.pool.hard).toBe("anthropic/claude-opus-5");
+		// Cleared saved pick (what `a` does after writing orqi.json): back to auto.
+		saved = {};
+		routing.pick("hard", undefined);
+		expect(routing.pool.hard).toBe("openai/gpt-5.6-sol");
+		expect(routing.source("hard")).toBe("auto");
+		// A session pick outlives a catalogue refresh.
+		routing.pick("easy", "openai/gpt-6-luna");
+		routing.refresh(CATALOGUE);
+		expect(routing.pool.easy).toBe("openai/gpt-6-luna");
+		// The environment wins over a pick, and says so.
+		process.env.ORQI_ROUTE_POOL = "easy=openai/gpt-5.6-terra";
+		routing.refresh(CATALOGUE);
+		expect(routing.pool.easy).toBe("openai/gpt-5.6-terra");
+		expect(routing.source("easy")).toBe("env");
+	} finally {
+		if (env === undefined) delete process.env.ORQI_ROUTE_POOL;
+		else process.env.ORQI_ROUTE_POOL = env;
+	}
+});
+
+test("orq/auto plans for the smallest window among its three models", () => {
+	let virtual: any;
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: (v: any) => (virtual = v) };
+	const windows = CATALOGUE.map((model) => ({ ...model, contextWindow: model.id.startsWith("anthropic/") ? 200_000 : 1_050_000 }));
+	registerRouting(runtime, windows, "openai/gpt-5.6-terra", undefined, undefined, () => ({ hard: "anthropic/claude-opus-5" }));
+	expect(virtual.contextWindow).toBe(200_000);
+});
+
+test("an automatic slot says why the catalogue chose its model; a pool whose prices run backwards is warned about", () => {
+	expect(autoReason(CATALOGUE, "openai/gpt-5.6-terra", "hard")).toBe("highest-scoring openai model (gpt-5.6-sol 53.6)");
+	expect(autoReason(CATALOGUE, "openai/gpt-5.6-terra", "medium")).toBe("your default model (gpt-5.6-terra)");
+	expect(autoReason(CATALOGUE, "openai/gpt-5.6-terra", "easy")).toBe(
+		"cheapest openai model scoring ≥70% of the frontier one (gpt-5.6-luna 38.1, $1.4/M)",
+	);
+	expect(autoReason([{ id: "openai/a", cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } }], "openai/a", "easy")).toBe(
+		"cheapest openai model (a, $2/M)",
+	);
+	const pool = { easy: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-terra", hard: "openai/gpt-5.6-sol" };
+	expect(priceWarning(pool, CATALOGUE)).toBeUndefined();
+	expect(priceWarning({ ...pool, easy: "openai/gpt-5.6-sol", hard: "openai/gpt-6-luna" }, CATALOGUE)).toBe(
+		"fast now costs more than frontier (gpt-5.6-sol $24/M vs gpt-6-luna $0.6/M)",
+	);
+	// A model with no price says nothing.
+	expect(priceWarning({ ...pool, easy: "unknown/x" }, CATALOGUE)).toBeUndefined();
+});
+
+test("review fixes: a session pick the refreshed catalogue lacks is set aside, and orq/auto is re-registered with the rungs' limits", () => {
+	const env = process.env.ORQI_ROUTE_POOL;
+	delete process.env.ORQI_ROUTE_POOL;
+	const registered: any[] = [];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: (v: any) => registered.push(v) };
+	const windows = CATALOGUE.map((model) => ({ ...model, contextWindow: model.id.startsWith("anthropic/") ? 200_000 : 1_050_000 }));
+	try {
+		const routing = registerRouting(runtime, windows, "openai/gpt-5.6-terra");
+		expect(registered.at(-1).contextWindow).toBe(1_050_000);
+		// A pick re-registers orq/auto with the new smallest window, keeping the same router.
+		routing.pick("hard", "anthropic/claude-opus-5");
+		expect(registered.at(-1).contextWindow).toBe(200_000);
+		expect(registered.at(-1).route).toBe(registered[0].route);
+		// Another workspace's catalogue lacks the pick: auto again, and the window follows.
+		routing.refresh(windows.filter((model) => !model.id.startsWith("anthropic/")));
+		expect(routing.pool.hard).toBe("openai/gpt-5.6-sol");
+		expect(routing.source("hard")).toBe("auto");
+		expect(registered.at(-1).contextWindow).toBe(1_050_000);
+		// Back in a workspace that has it, the session pick applies again.
+		routing.refresh(windows);
+		expect(routing.pool.hard).toBe("anthropic/claude-opus-5");
+	} finally {
+		if (env === undefined) delete process.env.ORQI_ROUTE_POOL;
+		else process.env.ORQI_ROUTE_POOL = env;
+	}
+	// The explanation ranks the same models routePool does: a regional copy never wins.
+	const regional: ModelInfo[] = [...CATALOGUE, { id: "openai/eu.gpt-9", intelligence: 99 }];
+	expect(routePool(regional, "openai/gpt-5.6-terra").hard).toBe("openai/gpt-5.6-sol");
+	expect(autoReason(regional, "openai/gpt-5.6-terra", "hard")).toBe("highest-scoring openai model (gpt-5.6-sol 53.6)");
+});
+
+test("long prompts keep their start and end", () => {
+	expect(clipMiddle("short", 100)).toBe("short");
+	const exact = "x".repeat(100);
+	expect(clipMiddle(exact, 100)).toBe(exact);
+	const long = `${"A".repeat(500)}${"m".repeat(10_000)}${"Z".repeat(500)}`;
+	const clipped = clipMiddle(long, 2_000);
+	expect(clipped.length).toBeLessThanOrEqual(2_000);
+	expect(clipped.startsWith("A".repeat(500))).toBe(true);
+	expect(clipped.endsWith("Z".repeat(500))).toBe(true);
+	expect(clipped).toMatch(/\[… \d+ characters omitted …\]/);
+});
+
+test("an unsure decider keeps the previous slot", () => {
+	const split = { easy: 0.4, medium: 0.35, hard: 0.25 };
+	expect(policy({ reason: "user", text: "yes, do it", state: { tier: "hard", model: "m" }, classified: split }, 0.5)).toEqual({
+		tier: "hard",
+		why: "unsure .40: stays",
+	});
+	// Confident: routes as today.
+	expect(
+		policy({ reason: "user", text: "hi", state: { tier: "hard", model: "m" }, classified: { easy: 1, medium: 0, hard: 0 } }, 0.5).tier,
+	).toBe("easy");
+	// 0 turns the rule off.
+	expect(policy({ reason: "user", text: "x", state: { tier: "hard", model: "m" }, classified: split }, 0).tier).toBe("medium");
+});
+
+test("unsure with nothing to stay on routes as today", () => {
+	expect(policy({ reason: "user", text: "x", classified: { easy: 0.4, medium: 0.35, hard: 0.25 } }, 0.5)).toEqual({ tier: "medium" });
+});
+
+test("the door beats an unsure difficulty", () => {
+	expect(
+		policy(
+			{
+				reason: "user",
+				text: "x",
+				state: { tier: "easy", model: "m" },
+				classified: { easy: 0.4, medium: 0.35, hard: 0.25 },
+				door: "one_way",
+			},
+			0.5,
+		).tier,
+	).toBe("hard");
+});
+
+test("no probabilities, no confidence rule", () => {
+	expect(
+		policy({ reason: "user", text: "delete the dataset", state: { tier: "easy", model: "m" }, classified: { error: "timed out" } }, 0.5)
+			.why,
+	).toBe("floor: destructive request");
+});
+
+test("ORQI_ROUTE_CONFIDENCE: a number in [0, 1], else 0.5", () => {
+	expect(confidenceFloor(undefined)).toBe(0.5);
+	expect(confidenceFloor("0.6")).toBe(0.6);
+	expect(confidenceFloor("0")).toBe(0);
+	expect(confidenceFloor("2")).toBe(0.5);
+	expect(confidenceFloor("high")).toBe(0.5);
+});
+
+/** orq/auto over the test catalogue, with a decider that always answers `answer` (and a 0.00001 cost). */
+function dryRouting(answer: Record<Tier, number>) {
+	const models = new Map(CATALOGUE.map((m) => [m.id, { id: m.id, provider: "orq" }]));
+	let virtual: any;
+	const runtime = {
+		getModel: (_provider: string, id: string) => models.get(id),
+		registerProvider: () => {},
+		registerVirtualModel: (definition: any) => (virtual = definition),
+	};
+	const decider = createDecider(
+		undefined,
+		(async () =>
+			new Response(
+				JSON.stringify({
+					answers: { difficulty: { type: "choice", choice: "easy", probabilities: answer, confidence: 1 } },
+					usage: { input_tokens: 1, output_tokens: 0, total_cost: 0.00001 },
+				}),
+			)) as unknown as typeof fetch,
+	);
+	const routing = registerRouting(runtime, CATALOGUE, "openai/gpt-5.6-terra", undefined, decider);
+	const seen: Decision[] = [];
+	routing.onDecision((decision) => seen.push(decision));
+	return { routing, virtual: () => virtual, seen };
+}
+
+test("dry run answers on default and says what it would have picked", async () => {
+	const { routing, virtual, seen } = dryRouting({ easy: 1, medium: 0, hard: 0 });
+	routing.dryRun = true;
+	const user = await virtual().route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "hi" }] });
+	expect(user.model.id).toBe("openai/gpt-5.6-terra");
+	expect(user.state.tier).toBe("medium");
+	expect(seen.at(-1)!.would).toEqual({ tier: "easy", model: "openai/gpt-5.6-luna" });
+	// A follow-up stays on what answered, not on what would have.
+	const followUp = await virtual().route({ reason: "continuation", thinkingLevel: "medium", state: user.state, messages: [] });
+	expect(followUp.model.id).toBe("openai/gpt-5.6-terra");
+	// Off again: the decision is followed.
+	routing.dryRun = false;
+	const live = await virtual().route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "hi" }] });
+	expect(live.model.id).toBe("openai/gpt-5.6-luna");
+	expect(seen.at(-1)!.would).toBeUndefined();
+});
+
+test("dry run still escalates a retry", async () => {
+	const { routing, virtual } = dryRouting({ easy: 1, medium: 0, hard: 0 });
+	routing.dryRun = true;
+	const retry = await virtual().route({
+		reason: "retry",
+		thinkingLevel: "medium",
+		state: { tier: "medium", model: "openai/gpt-5.6-terra" },
+		failed: { message: { errorMessage: "context length exceeded" } },
+		messages: [],
+	});
+	expect(retry.model.id).toBe("openai/gpt-5.6-sol");
+});
+
+test("the route line in a dry run", () => {
+	expect(
+		routeLine({
+			tier: "medium",
+			model: "openai/gpt-5.6-terra",
+			probabilities: { easy: 1, medium: 0, hard: 0 },
+			would: { tier: "easy", model: "openai/gpt-5.6-luna" },
+		}),
+	).toBe("route › easy → fast (dry run) █▁▁   easy 1.00 · medium .00 · hard .00   → gpt-5.6-terra · would gpt-5.6-luna");
+});
+
+test("review: an unsure follow-up in a dry run stays on what the previous turn named, as a live run would", async () => {
+	let answer: Record<Tier, number> = { easy: 0, medium: 0, hard: 1 };
+	const models = new Map(CATALOGUE.map((m) => [m.id, { id: m.id, provider: "orq" }]));
+	let virtual: any;
+	const runtime = {
+		getModel: (_p: string, id: string) => models.get(id),
+		registerProvider: () => {},
+		registerVirtualModel: (v: any) => (virtual = v),
+	};
+	const decider = createDecider(
+		undefined,
+		(async () =>
+			new Response(
+				JSON.stringify({ answers: { difficulty: { type: "choice", choice: "x", probabilities: answer, confidence: 1 } } }),
+			)) as unknown as typeof fetch,
+	);
+	const routing = registerRouting(runtime, CATALOGUE, "openai/gpt-5.6-terra", undefined, decider);
+	const seen: Decision[] = [];
+	routing.onDecision((d) => seen.push(d));
+	routing.dryRun = true;
+	const first = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "prove it" }] });
+	expect(seen.at(-1)!.would?.tier).toBe("hard");
+	answer = { easy: 0.4, medium: 0.35, hard: 0.25 };
+	await virtual.route({ reason: "user", thinkingLevel: "medium", state: first.state, messages: [{ role: "user", content: "yes, do it" }] });
+	expect(seen.at(-1)!.would).toEqual({ tier: "hard", model: "openai/gpt-5.6-sol" });
+	expect(seen.at(-1)!.why).toBe("unsure .40: stays");
+});
+
+test("review: a choice answer without probabilities never triggers the unsure rule", () => {
+	expect(
+		policy({ reason: "user", text: "x", state: { tier: "hard", model: "m" }, classified: {} as Record<Tier, number> }, 0.5).why,
+	).toBeUndefined();
+});
+
+test("review: orq/auto advertises the smallest output limit of its three models, as it does the window", () => {
+	const registered: any[] = [];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: (v: any) => registered.push(v) };
+	const limits = CATALOGUE.map((model) => ({ ...model, maxTokens: model.id.startsWith("anthropic/") ? 32_000 : 128_000 }));
+	const routing = registerRouting(runtime, limits, "openai/gpt-5.6-terra");
+	expect(registered.at(-1).maxTokens).toBe(128_000);
+	routing.pick("easy", "anthropic/claude-opus-5");
+	expect(registered.at(-1).maxTokens).toBe(32_000);
+});
+
+test("review: a dry run names the model that would really answer, and clipMiddle never exceeds a small limit", async () => {
+	const models = new Map(CATALOGUE.filter((m) => m.id !== "openai/gpt-5.6-luna").map((m) => [m.id, { id: m.id, provider: "orq" }]));
+	let virtual: any;
+	const runtime = {
+		getModel: (_p: string, id: string) => models.get(id),
+		registerProvider: () => {},
+		registerVirtualModel: (v: any) => (virtual = v),
+	};
+	const decider = createDecider(
+		undefined,
+		(async () =>
+			new Response(
+				JSON.stringify({
+					answers: { difficulty: { type: "choice", choice: "easy", probabilities: { easy: 1, medium: 0, hard: 0 }, confidence: 1 } },
+				}),
+			)) as unknown as typeof fetch,
+	);
+	const routing = registerRouting(runtime, CATALOGUE, "openai/gpt-5.6-terra", undefined, decider);
+	const seen: Decision[] = [];
+	routing.onDecision((d) => seen.push(d));
+	routing.dryRun = true;
+	// luna is the fast slot but cannot be resolved: a live run would fall back to default, so no "would" at all.
+	await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "hi" }] });
+	expect(seen.at(-1)!.would).toBeUndefined();
+	expect(clipMiddle("x".repeat(100), 10).length).toBeLessThanOrEqual(10);
+	expect(clipMiddle("x".repeat(100), 0)).toBe("");
+});
+
+test("review: a model without a listed limit counts at the default it is registered with", () => {
+	const registered: any[] = [];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: (v: any) => registered.push(v) };
+	// luna (fast) lists nothing; the others list 128k output and a 1M window.
+	const limits = CATALOGUE.map((model) => (model.id.endsWith("luna") ? model : { ...model, maxTokens: 128_000, contextWindow: 1_000_000 }));
+	registerRouting(runtime, limits, "openai/gpt-5.6-terra");
+	expect(registered.at(-1).maxTokens).toBe(DEFAULT_MAX_TOKENS);
+	expect(registered.at(-1).contextWindow).toBe(DEFAULT_CONTEXT_WINDOW);
 });

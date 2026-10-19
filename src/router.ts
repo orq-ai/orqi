@@ -27,13 +27,17 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
 import { createDecider, DECIDE_TIMEOUT_MS, DECISIONS_PROVIDER, type Decider, decisionsProvider } from "./decider.ts";
-import { BASE_MODEL, type ModelInfo } from "./model.ts";
+import { BASE_MODEL, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, type ModelInfo } from "./model.ts";
 
 export const AUTO_ID = "auto";
 
 export type Tier = "easy" | "medium" | "hard";
 export const TIERS: Tier[] = ["easy", "medium", "hard"];
 export type Pool = Record<Tier, string>;
+/** What each rung is called where the user sees it: the decider judges the message (easy), the slot names the model (fast). */
+export const SLOTS: Record<Tier, string> = { easy: "fast", medium: "default", hard: "frontier" };
+/** Where a rung's model came from: derived from the catalogue, picked with `/route models`, or `ORQI_ROUTE_POOL`. */
+export type RungSource = "auto" | "saved" | "session" | "env";
 
 /**
  * The benchmarked question, verbatim from orq-smart-router
@@ -82,10 +86,16 @@ const regional = (id: string) => /\/(eu|us|global|apac)\./.test(id) || id.includ
  * is the default model, easy is the cheapest model that keeps at least 70%
  * of hard's index. On the dev workspace that is luna / terra / sol. Without
  * an index, easy is the cheapest tool-calling model of that provider and the
- * default covers medium and hard. `ORQI_ROUTE_POOL=easy=…,medium=…,hard=…`
- * overrides any rung.
+ * default covers medium and hard. A model the user put in a slot (`picked`,
+ * any provider) replaces the derived one, and `ORQI_ROUTE_POOL=easy=…,medium=…,hard=…`
+ * overrides both.
  */
-export function routePool(catalogue: ModelInfo[], defaultModel: string, override = process.env.ORQI_ROUTE_POOL): Pool {
+export function routePool(
+	catalogue: ModelInfo[],
+	defaultModel: string,
+	override = process.env.ORQI_ROUTE_POOL,
+	picked: Partial<Pool> = {},
+): Pool {
 	const provider = defaultModel.split("/")[0];
 	const chat = catalogue.filter((model) => !model.kind && model.id.startsWith(`${provider}/`) && !regional(model.id));
 	const price = (model: ModelInfo) => (model.cost ? model.cost.input + model.cost.output : Infinity);
@@ -100,16 +110,65 @@ export function routePool(catalogue: ModelInfo[], defaultModel: string, override
 		const cheapest = [...chat].sort((a, b) => price(a) - price(b))[0]?.id ?? defaultModel;
 		pool = { easy: cheapest, medium: defaultModel, hard: defaultModel };
 	}
-	for (const part of (override ?? "").split(",")) {
-		const [tier, id] = part.split("=").map((s) => s.trim());
-		if (tier && id && (TIERS as string[]).includes(tier)) pool[tier as Tier] = id;
-	}
+	Object.assign(pool, picked);
+	Object.assign(pool, overrides(override));
 	return pool;
+}
+
+/** The rungs `ORQI_ROUTE_POOL` sets. */
+function overrides(value = process.env.ORQI_ROUTE_POOL): Partial<Pool> {
+	const out: Partial<Pool> = {};
+	for (const part of (value ?? "").split(",")) {
+		const [tier, id] = part.split("=").map((s) => s.trim());
+		if (tier && id && (TIERS as string[]).includes(tier)) out[tier as Tier] = id;
+	}
+	return out;
+}
+
+const per = (model: ModelInfo | undefined) => (model?.cost ? model.cost.input + model.cost.output : undefined);
+const dollarsPerM = (n: number | undefined) => (n === undefined ? "no price" : `$${Number(n.toFixed(2))}/M`);
+
+/** Why the catalogue gave a rung its model, in a line: what `/route models` says under an automatic slot. */
+export function autoReason(catalogue: ModelInfo[], defaultModel: string, tier: Tier): string {
+	const provider = defaultModel.split("/")[0];
+	const pool = routePool(catalogue, defaultModel, "");
+	const model = catalogue.find((candidate) => candidate.id === pool[tier]);
+	const name = pool[tier].split("/").at(-1);
+	const score = model?.intelligence !== undefined ? ` ${model.intelligence}` : "";
+	const ranked = catalogue.filter(
+		(candidate) =>
+			!candidate.kind && candidate.id.startsWith(`${provider}/`) && !regional(candidate.id) && candidate.intelligence !== undefined,
+	);
+	if (tier === "medium") return `your default model (${name})`;
+	if (ranked.length < 2)
+		return tier === "easy"
+			? `cheapest ${provider} model (${name}, ${dollarsPerM(per(model))})`
+			: `your default model (${name}): no scores to rank by`;
+	if (tier === "hard") return `highest-scoring ${provider} model (${name}${score})`;
+	return `cheapest ${provider} model scoring ≥70% of the frontier one (${name}${score}, ${dollarsPerM(per(model))})`;
+}
+
+/** A pool whose prices run backwards (fast dearer than frontier): said, never refused. */
+export function priceWarning(pool: Pool, catalogue: ModelInfo[]): string | undefined {
+	const price = (tier: Tier) => per(catalogue.find((model) => model.id === pool[tier]));
+	for (const [cheap, dear] of [
+		["easy", "hard"],
+		["easy", "medium"],
+		["medium", "hard"],
+	] as [Tier, Tier][]) {
+		const a = price(cheap);
+		const b = price(dear);
+		if (a !== undefined && b !== undefined && a > b)
+			return `${SLOTS[cheap]} now costs more than ${SLOTS[dear]} (${pool[cheap].split("/").at(-1)} ${dollarsPerM(a)} vs ${pool[dear].split("/").at(-1)} ${dollarsPerM(b)})`;
+	}
+	return undefined;
 }
 
 // ── the policy ─────────────────────────────────────────────────────────────
 
 export interface RouteState {
+	/** In a dry run, the rung and model the decision named, when the default answered instead. */
+	would?: { tier: Tier; model: string };
 	tier: Tier;
 	model: string;
 	probabilities?: Record<Tier, number>;
@@ -150,6 +209,15 @@ function parseCuts(value: string | undefined): [number, number] {
 	return Number.isFinite(a) && Number.isFinite(b) ? [a!, b!] : [0.5, 1.5];
 }
 
+/**
+ * Below this, the decider's strongest answer is a guess, and the previous turn's slot answers instead:
+ * "yes, do it" after an hour of hard work splits its vote and should not drop to fast. `0` turns it off.
+ */
+export function confidenceFloor(value = process.env.ORQI_ROUTE_CONFIDENCE): number {
+	const floor = Number(value);
+	return value !== undefined && value.trim() !== "" && Number.isFinite(floor) && floor >= 0 && floor <= 1 ? floor : 0.5;
+}
+
 /** A retry error that a bigger model would get past. */
 export function escalates(error: string | undefined): boolean {
 	return /overload|capacity|context|too long|maximum.*tokens|token limit/i.test(error ?? "");
@@ -172,7 +240,7 @@ export interface PolicyInput {
  * The rung for one request, and the words the route entry shows.
  * `classified` is only consulted on a user turn.
  */
-export function policy(input: PolicyInput): { tier: Tier; why?: string; arrow?: "▲" | "↑"; fallback?: true } {
+export function policy(input: PolicyInput, floor = confidenceFloor()): { tier: Tier; why?: string; arrow?: "▲" | "↑"; fallback?: true } {
 	const { reason, state } = input;
 	if (reason === "direct") return { tier: "easy", why: "summary" };
 	if (reason === "continuation") return { tier: state?.tier ?? "medium" };
@@ -192,6 +260,13 @@ export function policy(input: PolicyInput): { tier: Tier; why?: string; arrow?: 
 		return { tier: "medium", why: `fallback: ${why}`, fallback: true };
 	}
 	if (input.door && input.door !== "benign") return { tier: "hard", why: `door: ${input.door}`, arrow: "▲" };
+	const probabilities = input.classified;
+	// A choice answer without probabilities has no confidence to judge: route on it as before.
+	const answered = TIERS.some((tier) => probabilities[tier] !== undefined);
+	const top = Math.max(...TIERS.map((tier) => probabilities[tier] ?? 0));
+	// What the previous turn named: in a dry run that is `would`, not the default that answered.
+	const previous = state?.would?.tier ?? state?.tier;
+	if (answered && previous && top < floor) return { tier: previous, why: `unsure ${top.toFixed(2).replace(/^0/, "")}: stays` };
 	return { tier: tierOf(input.classified) };
 }
 
@@ -216,6 +291,24 @@ export function logRoute(path: string, text: string, state: RouteState): void {
 	);
 }
 
+/** How much of the newest message the decider reads. */
+export const PROMPT_CHARS = 16_000;
+
+/**
+ * `text` within `max` characters, keeping its start and its end around an
+ * omission marker: the actual ask often follows a pasted log or file.
+ */
+export function clipMiddle(text: string, max: number): string {
+	if (text.length <= max) return text;
+	const marker = (omitted: number) => `\n\n[… ${omitted} characters omitted …]\n\n`;
+	// Too small a limit for the marker: the start alone, still within it.
+	if (marker(text.length).length >= max) return text.slice(0, Math.max(0, max));
+	const budget = max - marker(text.length).length;
+	const head = Math.ceil(budget / 2);
+	const tail = budget - head;
+	return `${text.slice(0, head)}${marker(text.length - head - tail)}${text.slice(text.length - tail)}`;
+}
+
 /** Text of the newest user message in a request's transcript. */
 export function lastUserText(messages: readonly { role: string; content?: unknown }[]): string {
 	const content = [...messages].reverse().find((message) => message.role === "user")?.content;
@@ -232,11 +325,23 @@ export interface Decision extends RouteState {
 }
 
 export interface Routing {
+	/** The model on each rung now: derived, then the user's picks, then `ORQI_ROUTE_POOL`. */
 	pool: Pool;
+	/** Where each rung's model came from. */
+	source(tier: Tier): RungSource;
+	/** Why the catalogue would put its model on this rung, picked or not. */
+	why(tier: Tier): string;
+	/** Put a workspace chat model on a rung for this session; undefined goes back to the saved pick or auto. The caller saves. */
+	pick(tier: Tier, id: string | undefined): void;
 	/** The decision model it asks: the harness's one decider (src/decider.ts). */
 	decider: Decider;
 	/** Returns the unsubscribe: each session's harness listens, and stops when that session ends. */
 	onDecision(listener: (decision: Decision) => void): () => void;
+	/**
+	 * Dry run: the decider is asked (and paid for) on every user turn, but the default slot answers and
+	 * the decision is only shown. `ORQI_ROUTE_DRY_RUN=1` starts with it on; `/route dry` switches it.
+	 */
+	dryRun: boolean;
 	/** Recompute the pool and the decider from a fresher catalogue (after a first sign-in). */
 	refresh(catalogue: ModelInfo[]): void;
 }
@@ -258,34 +363,89 @@ export function registerRouting(
 	defaultModel: string,
 	routeLog?: string,
 	decider: Decider = createDecider(),
+	/** The picks `/route models` saved in orqi.json; one this workspace lacks falls through without being erased. */
+	saved: () => Partial<Pool> = () => ({}),
 ): Routing {
 	const listeners = new Set<(decision: Decision) => void>();
 	const base = defaultModel === `orq/${AUTO_ID}` ? BASE_MODEL : defaultModel;
+	let current = catalogue;
+	// Picked for this session; like the decider's, they outlive a catalogue refresh until orqi restarts.
+	const session: Partial<Pool> = {};
+	const chat = () => new Set(current.filter((model) => !model.kind || model.kind === "chat").map((model) => model.id));
+	const savedHere = (): Partial<Pool> => {
+		const offered = chat();
+		return Object.fromEntries(Object.entries(saved()).filter(([tier, id]) => TIERS.includes(tier as Tier) && id && offered.has(id)));
+	};
+	// A session pick the catalogue no longer offers (another workspace) is set aside, not applied: route() could not resolve it.
+	const sessionHere = (): Partial<Pool> => {
+		const offered = chat();
+		return Object.fromEntries(Object.entries(session).filter(([, id]) => id && offered.has(id)));
+	};
+	let registered = false;
+	const recompute = () => {
+		routing.pool = routePool(current, base, process.env.ORQI_ROUTE_POOL, { ...savedHere(), ...sessionHere() });
+		if (registered) advertise();
+	};
 	const routing: Routing = {
 		pool: routePool(catalogue, base),
+		source: (tier) => {
+			if (overrides()[tier]) return "env";
+			const picked = sessionHere()[tier];
+			// The same model picked again for the session is the saved one, not a second choice.
+			if (picked && picked !== savedHere()[tier]) return "session";
+			if (savedHere()[tier]) return "saved";
+			return "auto";
+		},
+		why: (tier) => autoReason(current, base, tier),
+		pick: (tier, id) => {
+			if (id) session[tier] = id;
+			else delete session[tier];
+			recompute();
+		},
 		decider,
+		dryRun: process.env.ORQI_ROUTE_DRY_RUN === "1",
 		onDecision: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		},
 		refresh: (next) => {
 			const classifiers = next.filter((model) => model.kind === "classifier");
-			routing.pool = routePool(next, base);
+			current = next;
+			recompute();
 			decider.resolve(next);
 			if (classifiers.length) runtime.registerProvider(DECISIONS_PROVIDER, decisionsProvider(classifiers));
 		},
 	};
 	routing.refresh(catalogue);
 	const pool = () => routing.pool;
-	const hard = catalogue.find((model) => model.id === routing.pool.hard);
+	/**
+	 * Register (again) the virtual model with limits for the rungs as they are now. pi replaces a
+	 * virtual model registered again under the same id, so a pick or a fresher catalogue moves them.
+	 * Any rung may answer, and a picked one can be another provider's: the smallest window and the smallest
+	 * output limit are the ones to plan for.
+	 */
+	function advertise() {
+		// A model the catalogue lists no limit for is registered with the default, so that is what it counts as.
+		const smallest = (limit: "contextWindow" | "maxTokens") =>
+			Math.min(
+				...TIERS.map(
+					(tier) =>
+						current.find((model) => model.id === routing.pool[tier])?.[limit] ||
+						(limit === "contextWindow" ? DEFAULT_CONTEXT_WINDOW : DEFAULT_MAX_TOKENS),
+				),
+			);
+		runtime.registerVirtualModel({
+			...definition,
+			contextWindow: smallest("contextWindow"),
+			maxTokens: smallest("maxTokens"),
+		});
+	}
 
-	runtime.registerVirtualModel({
+	const definition = {
 		provider: "orq",
 		id: AUTO_ID,
 		name: "orq/auto",
 		thinkingLevels: ["off", "low", "medium", "high"],
-		contextWindow: hard?.contextWindow,
-		maxTokens: hard?.maxTokens,
 		async route(request: any) {
 			const state = request.state as RouteState | undefined;
 			const text = lastUserText(request.messages);
@@ -306,7 +466,7 @@ export function registerRouting(
 					try {
 						const result = await decider.decide(
 							"router",
-							{ state: { prompt: text.slice(0, 16_000) }, questions: { difficulty: DIFFICULTY_QUESTION, door: DOOR_QUESTION } },
+							{ state: { prompt: clipMiddle(text, PROMPT_CHARS) }, questions: { difficulty: DIFFICULTY_QUESTION, door: DOOR_QUESTION } },
 							request.signal,
 						);
 						const answer = result.answers.difficulty;
@@ -341,13 +501,22 @@ export function registerRouting(
 				classified,
 				door: door?.door,
 			});
-			const model = runtime.getModel("orq", pool()[decision.tier]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
-			if (!model) throw new Error(`orq/auto: no model for the ${decision.tier} rung (${pool()[decision.tier]})`);
+			const resolve = (rung: Tier) =>
+				runtime.getModel("orq", pool()[rung]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
+			const named = resolve(decision.tier);
+			// A dry run answers on the default slot, and says so only when a live run would have answered on another
+			// model; retries still escalate, or an overflow would fail the turn.
+			const fallback = resolve("medium");
+			const dry = routing.dryRun && request.reason === "user" && !!named && named.id !== fallback?.id;
+			const tier: Tier = dry ? "medium" : decision.tier;
+			const model = dry ? fallback : named;
+			if (!model) throw new Error(`orq/auto: no model for the ${tier} rung (${pool()[tier]})`);
 			const changed = request.reason === "user" || (request.reason === "retry" && decision.arrow);
 			if (!changed) return { model, thinkingLevel: request.thinkingLevel };
 			const next: RouteState = {
-				tier: decision.tier,
+				tier,
 				model: model.id,
+				...(dry && named ? { would: { tier: decision.tier, model: named.id } } : {}),
 				...(classified && !("error" in classified) ? { probabilities: classified } : {}),
 				...(decision.why ? { why: decision.why } : {}),
 				...(cost !== undefined ? { cost } : {}),
@@ -366,7 +535,9 @@ export function registerRouting(
 			}
 			return { model, thinkingLevel: request.thinkingLevel, state: next };
 		},
-	});
+	};
+	advertise();
+	registered = true;
 	return routing;
 }
 

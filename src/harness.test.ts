@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import { startupTheme, VERSION } from "./branding.ts";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -10,7 +10,7 @@ import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, gitBadges, gitOperation, headerBar, hostLabel, sparkline, statusLine, tokens } from "./footer.ts";
-import { exitSummary, orqHarness, repoOf, reserveFor, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
+import { exitSummary, orqHarness, repoOf, reserveFor, routeRow, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
@@ -31,6 +31,7 @@ import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 import { createDecider } from "./decider.ts";
+import { registerRouting } from "./router.ts";
 import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
 import { ALLOW_ONCE, ALLOW_TURN, DENY, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
 import type { PermissionMode } from "./permission-mode.ts";
@@ -611,6 +612,7 @@ function harnessOn(
 		now?: () => number;
 		permissionMode?: PermissionMode;
 		routing?: unknown;
+		catalogue?: ModelInfo[];
 		settingsManager?: SettingsManager;
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
 		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
@@ -655,7 +657,7 @@ function harnessOn(
 	};
 	orqHarness({
 		agentDir,
-		catalogue: () => [],
+		catalogue: () => options.catalogue ?? [],
 		toolCount: () => 0,
 		callTool: async () => ({ text: "", isError: false }),
 		workspace: () => undefined,
@@ -2721,6 +2723,180 @@ test("/compact-at unset leaves pi's settings alone, and a project's own reserve 
 		expect(reserve()).toBe(50_000);
 		await h.stop();
 	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/route models sets a slot by typing: this session, --save into orqi.json, auto clears both", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-route-models-"));
+	const env = process.env.ORQI_ROUTE_POOL;
+	delete process.env.ORQI_ROUTE_POOL;
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6, cost: { input: 4, output: 20, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6, cost: { input: 2, output: 12, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1, cost: { input: 0.2, output: 1.2, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "anthropic/claude-opus-5", intelligence: 60.7, cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "typesafe/jev-latest", kind: "classifier" },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra", undefined, undefined, () => readPrefs(dir).routeModels ?? {});
+	const h = harnessOn(dir, { routing, catalogue });
+	const route = h.commands.get("route")!;
+	try {
+		await h.start();
+		await route("models frontier anthropic/claude-opus-5", h.ctx);
+		expect(routing.pool.hard).toBe("anthropic/claude-opus-5");
+		expect(routing.source("hard")).toBe("session");
+		expect(readPrefs(dir).routeModels).toBeUndefined();
+		expect(h.notices.at(-1)).toContain("frontier → anthropic/claude-opus-5 (this session)");
+		// The rung's name works as well as the slot's; --save keeps it.
+		await route("models hard anthropic/claude-opus-5 --save", h.ctx);
+		expect(readPrefs(dir).routeModels).toEqual({ hard: "anthropic/claude-opus-5" });
+		expect(routing.source("hard")).toBe("saved");
+		expect(h.notices.at(-1)).toContain("frontier → anthropic/claude-opus-5 · saved");
+		// A section toggle rewrites orqi.json whole and keeps the slot.
+		await h.commands.get("tips")!("off", h.ctx);
+		expect(readPrefs(dir).routeModels).toEqual({ hard: "anthropic/claude-opus-5" });
+		// Prices running backwards: said, not refused.
+		await route("models fast openai/gpt-5.6-sol", h.ctx);
+		expect(routing.pool.easy).toBe("openai/gpt-5.6-sol");
+		expect(h.notices.at(-1)).toContain("⚠ fast now costs more than default");
+		await route("models fast auto", h.ctx);
+		expect(routing.pool.easy).toBe("openai/gpt-5.6-luna");
+		expect(h.notices.at(-1)).toContain("fast back to auto → openai/gpt-5.6-luna");
+		await route("models frontier auto", h.ctx);
+		expect(readPrefs(dir).routeModels).toBeUndefined();
+		expect(routing.pool.hard).toBe("openai/gpt-5.6-sol");
+		// Only the workspace's chat models: not a classifier, not a typo.
+		await route("models default typesafe/jev-latest", h.ctx);
+		expect(h.notices.at(-1)).toContain("typesafe/jev-latest is not a chat model in this workspace");
+		await route("models turbo openai/gpt-5.6-sol", h.ctx);
+		expect(h.notices.at(-1)).toContain("usage: /route models");
+		// No picker here (no model runtime): the bare command lists the slots and why each holds its model.
+		await route("models", h.ctx);
+		const listed = h.notices.at(-1)!;
+		expect(listed).toContain("fast      gpt-5.6-luna");
+		expect(listed).toContain("frontier: highest-scoring openai model (gpt-5.6-sol 53.6)");
+		await route("explain", h.ctx);
+		expect(h.notices.at(-1)).toContain("models   fast gpt-5.6-luna (auto) · default gpt-5.6-terra (auto) · frontier gpt-5.6-sol (auto)");
+	} finally {
+		await h.stop();
+		if (env === undefined) delete process.env.ORQI_ROUTE_POOL;
+		else process.env.ORQI_ROUTE_POOL = env;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an old route entry replays without would; a dry one names both", () => {
+	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra" })).toEqual({ label: "medium", detail: "→ default · gpt-5.6-terra" });
+	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra", fallback: true })).toEqual({
+		label: "medium (fallback)",
+		detail: "→ default · gpt-5.6-terra",
+	});
+	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra", would: { tier: "easy", model: "openai/gpt-5.6-luna" } })).toEqual({
+		label: "easy (dry)",
+		detail: "→ default · gpt-5.6-terra · would fast",
+	});
+});
+
+test("/route dry on|off switches it for the session and says so", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-route-dry-"));
+	const env = process.env.ORQI_ROUTE_DRY_RUN;
+	delete process.env.ORQI_ROUTE_DRY_RUN;
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6 },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6 },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1 },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra");
+	const h = harnessOn(dir, { routing, catalogue });
+	const route = h.commands.get("route")!;
+	try {
+		await h.start();
+		expect(routing.dryRun).toBe(false);
+		await route("dry on", h.ctx);
+		expect(routing.dryRun).toBe(true);
+		expect(h.notices.at(-1)).toContain("Dry run on: orq/auto still asks the decider but answers every turn on gpt-5.6-terra");
+		await route("explain", h.ctx);
+		expect(h.notices.at(-1)).toContain("dry run  on");
+		// The way back is offered, not the switch already thrown.
+		expect(h.notices.at(-1)).toContain("/route dry off");
+		await route("dry", h.ctx);
+		expect(h.notices.at(-1)).toContain("usage: /route dry on|off (now on)");
+		await route("dry off", h.ctx);
+		expect(routing.dryRun).toBe(false);
+		expect(h.notices.at(-1)).toContain("Dry run off");
+	} finally {
+		await h.stop();
+		if (env === undefined) delete process.env.ORQI_ROUTE_DRY_RUN;
+		else process.env.ORQI_ROUTE_DRY_RUN = env;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/route explain says how orq/auto decides in plain words; /route questions has the decider's exact wording", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-route-explain-"));
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6, cost: { input: 4, output: 20, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6, cost: { input: 2, output: 12, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1, cost: { input: 0.2, output: 1.2, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "typesafe/jev-latest", kind: "classifier" },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra");
+	const h = harnessOn(dir, { routing, catalogue });
+	const route = h.commands.get("route")!;
+	try {
+		await h.start();
+		await route("explain", h.ctx);
+		const explained = h.notices.at(-1)!;
+		// No ticket, eval or package names: those mean nothing to whoever reads this.
+		expect(explained).not.toMatch(/RES-\d|general_v2|evaluatorq|smart-router/);
+		expect(explained).toContain("orq/auto picks a model for each message you send");
+		expect(explained).toContain("easy goes to fast, medium to default, hard to frontier");
+		// Creating or updating changes state too, and goes to frontier like a delete does.
+		expect(explained).toContain("A message that changes something");
+		expect(explained).toContain("(creates, updates, deletes or sends) goes to frontier");
+		expect(explained).toContain("models   fast gpt-5.6-luna (auto)");
+		expect(explained).toContain("decider  typesafe/jev-latest");
+		expect(explained).toContain("/route questions");
+		await route("questions", h.ctx);
+		const questions = h.notices.at(-1)!;
+		expect(questions).toContain("Pick the least capable model tier");
+		expect(questions).toContain("Classify whether doing what this request asks can be undone");
+		expect(questions).not.toMatch(/RES-\d|general_v2|evaluatorq/);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("review: a slot whose saved pick cannot be cleared says so instead of claiming auto", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-route-clear-"));
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6, cost: { input: 4, output: 20, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6, cost: { input: 2, output: 12, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1, cost: { input: 0.2, output: 1.2, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "anthropic/claude-opus-5", intelligence: 60.7, cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 } },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra", undefined, undefined, () => readPrefs(dir).routeModels ?? {});
+	const h = harnessOn(dir, { routing, catalogue });
+	const route = h.commands.get("route")!;
+	try {
+		await h.start();
+		await route("models frontier anthropic/claude-opus-5 --save", h.ctx);
+		expect(routing.source("hard")).toBe("saved");
+		// orqi.json cannot be replaced: the agent dir is read-only.
+		chmodSync(dir, 0o500);
+		await route("models frontier auto", h.ctx);
+		expect(routing.pool.hard).toBe("anthropic/claude-opus-5");
+		expect(h.notices.at(-1)).not.toContain("back to auto");
+		expect(h.notices.at(-1)).toContain("frontier is still anthropic/claude-opus-5: the saved pick could not be cleared");
+	} finally {
+		chmodSync(dir, 0o700);
+		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

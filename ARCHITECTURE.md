@@ -48,12 +48,12 @@ orqi
 | `src/plan.ts` | Plan mode: what the model is told, the `exit_plan` tool and its approval dialog, where plans are saved |
 | `src/handoff.ts` | `/handoff <goal>`: pi's handoff example, adapted. Drafts a fresh session's first message from this branch on a plain chat model, points at the plan, keeps plan mode |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
-| `src/prefs.ts` | `<agentDir>/orqi.json`: which inspector sections show, the saved decider and `/compact-at`'s percent, read forgivingly and written whole |
+| `src/prefs.ts` | `<agentDir>/orqi.json`: which inspector sections show, the saved decider, `orq/auto`'s saved models and `/compact-at`'s percent, read forgivingly and written whole |
 | `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
 | `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
-| `src/model-picker.ts` | pi's `/model` selector over one kind of workspace model: chat models for memorq, classifiers for `/decider` |
+| `src/model-picker.ts` | pi's `/model` selector over one kind of workspace model: chat models for memorq and `/route models`, classifiers for `/decider` |
 | `src/decider.ts` | The decider: the one decision model every Decisions call asks (`/decider`, `orqi.json`, `ORQI_ROUTE_CLASSIFIER`), the API adapter and the `orq-decisions` provider |
-| `src/router.ts` | `orq/auto`: pool, policy, route log |
+| `src/router.ts` | `orq/auto`: its three slots (automatic or picked), policy, route log |
 | `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
 | `src/footer.ts` / `src/inspector-rows.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, the inspector's trajectory rows and its signals, context and teach sections, boxed overlay panels |
 | `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows, the detail view and the inspect view; the changelog parser |
@@ -160,9 +160,12 @@ overflow on retry moves one rung up. The same Decisions call asks the door quest
 benign / two_way / one_way, reworded for a request): a request that changes state never goes below
 hard, while a question about one ("which tool would delete a dataset?") is routed on its difficulty.
 A keyword floor (delete, `auto_run`, agent or evaluator changes) stands in only when the classifier
-errors, 403s, times out, or the workspace has none. The rungs come from the workspace catalogue's
-intelligence index, within the default model's provider: hard is the most capable, medium the
-default, easy the cheapest with at least 70% of hard's index. Under `orq/auto` the `investigator`
+errors, 403s, times out, or the workspace has none. Each rung answers with the model in its slot (easy → fast,
+medium → default, hard → frontier). An automatic slot comes from the workspace catalogue's
+intelligence index, within the default model's provider: frontier is the most capable, default the
+default model, fast the cheapest with at least 70% of frontier's index. `/route models` puts any
+workspace chat model in a slot instead, for the session or saved in `orqi.json`; `ORQI_ROUTE_POOL`
+overrides both. Under `orq/auto` the `investigator`
 and `docs` subagents run on easy and `analyst` on medium. Each decision is a step in the trajectory
 and an `orqi-route` session entry, drawn as the route line and replayed on resume.
 

@@ -22,6 +22,10 @@ export const DEFAULT_MODEL = process.env.ORQI_MODEL ?? BASE_MODEL;
 const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
 
+/** What a model is registered with when the catalogue lists no window or output limit. */
+export const DEFAULT_CONTEXT_WINDOW = 200_000;
+export const DEFAULT_MAX_TOKENS = 16_384;
+
 export interface ModelInfo {
 	id: string;
 	/** `agent` is a managed agent served on the Responses API as `agent/<key>`. */
@@ -272,8 +276,8 @@ function writeModelsJson(agentDir: string, models: ModelInfo[]): void {
 							// An agent reasons (or not) on its own model; a reasoning effort would be rejected.
 							reasoning: model.kind !== "agent",
 							input: ["text"],
-							contextWindow: model.contextWindow || 200000,
-							maxTokens: model.maxTokens || 16384,
+							contextWindow: model.contextWindow || DEFAULT_CONTEXT_WINDOW,
+							maxTokens: model.maxTokens || DEFAULT_MAX_TOKENS,
 							cost: model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 							// Per-model override; the provider default stays chat completions.
 							...(model.responses ? { api: "openai-responses" } : {}),
