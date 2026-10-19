@@ -16,6 +16,17 @@ afterEach(() => {
 
 const classifiers = (...ids: string[]): ModelInfo[] => [{ id: "openai/gpt-5" }, ...ids.map((id) => ({ id, kind: "classifier" as const }))];
 
+test("a pick made for the session survives a catalogue refresh, env included, unless the workspace dropped it", () => {
+	process.env.ORQI_ROUTE_CLASSIFIER = "orq/decider-4b";
+	const decider = createDecider(() => undefined);
+	decider.resolve(classifiers("orq/decider-4b", "typesafe/jev-latest"));
+	decider.use("typesafe/jev-latest");
+	decider.resolve(classifiers("orq/decider-4b", "typesafe/jev-latest"));
+	expect(decider).toMatchObject({ id: "typesafe/jev-latest", source: "session" });
+	decider.resolve(classifiers("orq/decider-4b"));
+	expect(decider).toMatchObject({ id: "orq/decider-4b", source: "env" });
+});
+
 test("env beats the saved pick, the saved pick beats the preference list, and a saved pick this workspace lacks falls through", () => {
 	delete process.env.ORQI_ROUTE_CLASSIFIER;
 	let saved: string | undefined = "typesafe/jev-latest";

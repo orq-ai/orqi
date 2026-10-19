@@ -158,6 +158,8 @@ export function createDecider(saved: () => string | undefined = () => undefined,
 			const pick = saved();
 			const env = process.env.ORQI_ROUTE_CLASSIFIER;
 			decider.classifiers = ids;
+			// An explicit pick for this session outlives a catalogue refresh (reconnect, /refresh), env included, until orqi restarts.
+			if (decider.source === "session" && decider.id && ids.includes(decider.id)) return;
 			// A saved pick this workspace lacks falls through without being erased: another workspace may have it.
 			if (env) decider.use(env, "env");
 			else if (pick && ids.includes(pick)) decider.use(pick, "saved");

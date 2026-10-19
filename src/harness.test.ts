@@ -1077,6 +1077,31 @@ test("/decider switches for this session, --save keeps it in orqi.json, /route c
 	}
 });
 
+test("/decider --save that cannot write stays a session pick, so a catalogue refresh keeps it", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-decider-"));
+	const saved = process.env.ORQI_ROUTE_CLASSIFIER;
+	delete process.env.ORQI_ROUTE_CLASSIFIER;
+	mkdirSync(join(dir, "orqi.json")); // a directory where the file goes: the write throws
+	const routing = routingOn(dir, (async () => new Response("{}")) as unknown as typeof fetch);
+	const h = harnessOn(dir, { routing });
+	try {
+		await h.start();
+		await h.commands.get("decider")!("typesafe/jev-latest --save", h.ctx);
+		expect(h.notices.at(-1)).toContain("Could not save it");
+		expect(routing.decider).toMatchObject({ id: "typesafe/jev-latest", source: "session" });
+		routing.decider.resolve([
+			{ id: "orq/decider-4b", kind: "classifier" },
+			{ id: "typesafe/jev-latest", kind: "classifier" },
+		]);
+		expect(routing.decider.id).toBe("typesafe/jev-latest");
+	} finally {
+		await h.stop();
+		if (saved === undefined) delete process.env.ORQI_ROUTE_CLASSIFIER;
+		else process.env.ORQI_ROUTE_CLASSIFIER = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("memorq's host.decide asks the user's decider, and its cost lands in the trajectory as a step", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-decide-"));
 	let asked = "";

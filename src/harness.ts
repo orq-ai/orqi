@@ -1199,14 +1199,17 @@ export function orqHarness(deps: HarnessDeps) {
 				return;
 			}
 			// A sticky 403 is cleared too: a different model deserves its own answer.
-			decider.use(wanted, keep ? "saved" : "session");
-			const lines = [`orq/auto now asks ${wanted}${keep ? " · saved as default" : " (this session)"}`];
+			decider.use(wanted, "session");
+			const lines = [`orq/auto now asks ${wanted} (this session)`];
 			if (keep) {
+				// Marked saved only once the write lands, or the next catalogue refresh would read the old file and revert.
 				try {
 					const fresh = readPrefs(deps.agentDir);
 					fresh.decider = wanted;
 					writePrefs(deps.agentDir, fresh);
 					prefs.decider = wanted;
+					decider.use(wanted, "saved");
+					lines[0] = `orq/auto now asks ${wanted} · saved as default`;
 				} catch (error) {
 					lines.push(`Could not save it: ${(error as Error).message}`);
 				}

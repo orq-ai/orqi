@@ -189,7 +189,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `orq/auto` on each user turn, memorq through `host.decide`. The saved pick lives in `orqi.json`
   beside the inspector sections; `ORQI_ROUTE_CLASSIFIER` outranks it, and a saved id this workspace
   lacks falls through to `CLASSIFIER_PREFERENCE` without being erased, as a saved theme does. A 403
-  makes the decider unavailable for every asker until the pick or the catalogue changes. Calls by
+  makes the decider unavailable for every asker until the pick or the catalogue changes. A pick made
+  for the session (enter, or a save that failed) survives a catalogue refresh, `ORQI_ROUTE_CLASSIFIER`
+  included, until orqi restarts. Calls by
   anyone but the router become trajectory steps, so `/cost` counts them; they are session-local.
 - **The door question rides beside difficulty, and the keyword floor is only its fallback.**
   `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would delete
