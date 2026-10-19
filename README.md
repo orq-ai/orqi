@@ -9,8 +9,8 @@ with your workspace's own tools, models and skills already wired in. No setup, n
 It embeds the [pi coding agent](https://github.com/earendil-works/pi) in-process and boots with the
 orq MCP tools, the orq skills and the orqi system prompt already wired in.
 
-![orqi first-run onboarding: the orqi logo, sign-in guidance and workspace options](docs/onboarding.png)
-<p align="center"><sub><strong>First run.</strong> Sign in with the browser, paste an API key, or explore without a workspace.</sub></p>
+![An orqi session on orq/auto: the opening screen with harness and orq.ai platform commands, two routed messages, and the sidebar with the trajectory, signals, context, memory, routing and process](docs/session.png)
+<p align="center"><sub><strong>A session on <code>orq/auto</code>.</strong> Each message is routed to a model, and the sidebar shows the trajectory, the context, memory and what routing saved.</sub></p>
 
 ```
 orqi                                   # interactive TUI
