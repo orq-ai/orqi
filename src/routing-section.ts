@@ -116,9 +116,10 @@ export function routingLines(stats: RoutingStats, width: number): string[] {
 	const churn = [
 		stats.switches ? `${stats.switches} switch${stats.switches === 1 ? "" : "es"}` : "no switches",
 		...(stats.lostCache > 0 ? [`lost cache ~${dollars(stats.lostCache)}`] : []),
-		...(stats.unsure ? [`${stats.unsure} unsure`] : []),
 	];
 	body.push(churn.join(" · "));
+	// Its own line: beside the switches it no longer fits the panel's 36 columns.
+	if (stats.unsure) body.push(`${stats.unsure} unsure, kept the last model`);
 	if (stats.decider) {
 		const d = stats.decider;
 		// Named as the route line names it: `decider-4b`, `jev`.

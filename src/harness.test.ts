@@ -2907,3 +2907,52 @@ test("review: a slot whose saved pick cannot be cleared says so instead of claim
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("a resumed session's routing section counts the replayed decisions: the mark is rebuilt from the saved decision", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-routing-resume-"));
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6, cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6, cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1, cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0 } },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra");
+	const answer = (model: string, text: string) => ({
+		type: "message",
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text }],
+			model,
+			usage: { input: 1_000, output: 10, cacheRead: 0, totalTokens: 1_010 },
+		},
+	});
+	// What a session file holds: the decision itself (appendEntry(ROUTE_ENTRY, decision)), no mark.
+	const decided = (tier: string, extra: Record<string, unknown> = {}) => ({
+		type: "custom",
+		customType: "orqi-route",
+		data: { tier, model: "openai/gpt-5.6-luna", reason: "user", latencyMs: 200, cost: 0.00001, classifier: "orq/decider-4b", ...extra },
+		timestamp: new Date().toISOString(),
+	});
+	const branch = [
+		{ type: "message", message: { role: "user", content: "hi" } },
+		decided("easy"),
+		answer("openai/gpt-5.6-luna", "hello"),
+		{ type: "message", message: { role: "user", content: "yes, do it" } },
+		decided("medium", { model: "openai/gpt-5.6-terra", why: "unsure .40: stays" }),
+		answer("openai/gpt-5.6-terra", "done"),
+	];
+	const h = harnessOn(dir, { routing, catalogue, branch });
+	try {
+		await h.start();
+		const lines = h.opened.inspector!.render(38).map((line) => bare(line).slice(1, -1).trim());
+		const at = lines.findIndex((line) => line.startsWith("─ routing"));
+		expect(at).toBeGreaterThan(-1);
+		expect(lines[at + 1]).toBe("fast 1 · default 1 · frontier 0");
+		expect(lines[at + 2]).toMatch(/^1 switch · lost cache ~\$0\.\d+$/);
+		expect(lines[at + 3]).toBe("1 unsure, kept the last model");
+		expect(lines[at + 4]).toBe("decider-4b 2× · 0.2 s · $0.00002");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
