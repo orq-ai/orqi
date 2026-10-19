@@ -4,7 +4,19 @@ import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TU
 import { ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { isAgentModel } from "./agents.ts";
 import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
-import { dollars, footerLine, headerBar, hostLabel, shortModel, tokens, type Paint } from "./footer.ts";
+import {
+	dollars,
+	footerLine,
+	gitBadges,
+	gitOperation,
+	headerBar,
+	hostLabel,
+	shortModel,
+	statusLine,
+	tokens,
+	type GitSummary,
+	type Paint,
+} from "./footer.ts";
 import {
 	contextLines,
 	contextUsed,
@@ -46,7 +58,7 @@ import type { PermissionMode } from "./permission-mode.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { registerViewCommands } from "./harness-commands.ts";
-import { selectionName, contextSplit } from "./harness-views.ts";
+import { cacheRate, selectionName, contextSplit } from "./harness-views.ts";
 
 export interface HarnessDeps {
 	agentDir: string;
@@ -405,7 +417,25 @@ export function orqHarness(deps: HarnessDeps) {
 		let reserveTokens = 16_384;
 		let headerShown = false;
 		let statusOf: (key: string) => string | undefined = () => undefined;
-		let lastFooter = "";
+		let lastFooter: string[] = [""];
+		let git: GitSummary | undefined;
+		let gitDir: string | undefined;
+		let gitRun = 0;
+		/** Git badges for the footer, off the render path: after each run and on a branch change. Outside git, none. */
+		const refreshGit = async (ctx: ExtensionContext) => {
+			if (ctx.mode !== "tui") return;
+			const run = ++gitRun;
+			try {
+				gitDir ??= (await pi.exec("git", ["rev-parse", "--absolute-git-dir"], { cwd: ctx.cwd })).stdout.trim() || undefined;
+				const status = await pi.exec("git", ["status", "--porcelain=v2", "--branch", "--untracked-files=normal"], { cwd: ctx.cwd });
+				if (run !== gitRun) return;
+				git = status.code === 0 && gitDir ? gitBadges(status.stdout, gitOperation(gitDir)) : undefined;
+			} catch {
+				if (run !== gitRun) return; // a newer refresh owns the result
+				git = undefined;
+			}
+			render();
+		};
 		let split: ContextSplit | undefined;
 		// Which inspector sections show: orqi.json in the agent dir, read once per session (makeServices builds
 		// this extension again for /new, /resume and /fork) and written whole on every toggle.
@@ -702,7 +732,7 @@ export function orqHarness(deps: HarnessDeps) {
 				tuiRef = tui;
 				// The footer factory is the one place an extension is handed the TUI.
 				attachMinimap(tui, theme, ctx);
-				const unsub = footerData.onBranchChange(() => tui.requestRender());
+				const unsub = footerData.onBranchChange(() => void refreshGit(ctx));
 				statusOf = (key) => footerData.getExtensionStatuses().get(key);
 				const paint: Paint = {
 					brand: (s) => theme.bold(theme.fg("accent", s)),
@@ -716,11 +746,17 @@ export function orqHarness(deps: HarnessDeps) {
 					render(width: number): string[] {
 						// Rendering must never throw: an exception here takes the whole TUI down.
 						try {
-							lastFooter = footerFrame(width);
+							// Other extensions' statuses get a second line; the workspace is the header's.
+							const statuses = [...footerData.getExtensionStatuses()]
+								.filter(([key]) => key !== WORKSPACE_STATUS)
+								.sort(([a], [b]) => a.localeCompare(b))
+								.map(([, text]) => text);
+							const status = statusLine(statuses, width, paint);
+							lastFooter = status ? [footerFrame(width), status] : [footerFrame(width)];
 						} catch {
 							// Keep the last good frame.
 						}
-						return [lastFooter];
+						return lastFooter;
 					},
 				};
 				function footerFrame(width: number): string {
@@ -741,6 +777,7 @@ export function orqHarness(deps: HarnessDeps) {
 							input: totals.input + totals.cacheRead,
 							output: totals.output,
 							cost: totals.cost,
+							cache: cacheRate(trajectory.steps),
 							context: sample
 								? { used: sample.used, window: sample.window, threshold: (sample.window - reserve) / sample.window }
 								: undefined,
@@ -748,6 +785,7 @@ export function orqHarness(deps: HarnessDeps) {
 							tools: isAgentModel(ctxRef?.model?.id) ? 0 : deps.toolCount(),
 							minimapHidden: !minimapVisible(),
 							branch: footerData.getGitBranch(),
+							git,
 						},
 						width,
 						paint,
@@ -1041,6 +1079,7 @@ export function orqHarness(deps: HarnessDeps) {
 			recordLearn(memorqState?.learned);
 			traces.length = 0;
 			measure(ctx);
+			void refreshGit(ctx);
 			syncAgent(ctx);
 			if (!isAgentModel(ctx.model?.id)) chatLevel = pi.getThinkingLevel();
 			card = undefined;
@@ -1155,6 +1194,7 @@ export function orqHarness(deps: HarnessDeps) {
 			gate.endTurn();
 			ctx.ui.setWorkingMessage();
 			measure(ctx);
+			void refreshGit(ctx);
 			const run = trajectory.steps.filter((step) => step.id > runFrom);
 			runFrom = trajectory.steps.at(-1)?.id ?? runFrom;
 			let teachLine = "";

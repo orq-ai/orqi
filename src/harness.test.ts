@@ -9,7 +9,7 @@ import { readSkill, skillOrigin } from "./skills.ts";
 import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
-import { contextBar, dollars, footerLine, headerBar, hostLabel, sparkline, tokens } from "./footer.ts";
+import { contextBar, dollars, footerLine, gitBadges, gitOperation, headerBar, hostLabel, sparkline, statusLine, tokens } from "./footer.ts";
 import { exitSummary, orqHarness, repoOf, reserveFor, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
@@ -244,6 +244,54 @@ test("the footer degrades by width band", () => {
 	);
 });
 
+test("the footer shows the cache rate, git badges and a cleaned branch", () => {
+	const state = { selection: "openai/gpt-5.6-terra", input: 88_100, output: 6_200, cost: 0.113, samples: [], tools: 0, cache: 0.724 };
+	expect(footerLine({ ...state, branch: "main" }, 110)).toContain("↑88k ↓6.2k ↺72% · $0.113");
+	expect(footerLine({ ...state, branch: "main" }, 96)).not.toContain("↺"); // needs the medium band, like the counts
+	expect(footerLine({ ...state, branch: "worktree/bratislava", git: { badges: "+2 ~3" } }, 110)).toEndWith(" bratislava +2 ~3 ");
+	expect(footerLine({ ...state, branch: "detached", git: { badges: "", detached: "a1b2c3d" } }, 110)).toEndWith(" @a1b2c3d ");
+	expect(footerLine({ ...state, branch: "main", git: { badges: "" } }, 110)).toEndWith(" main ");
+});
+
+test("git badges come from porcelain v2", () => {
+	const porcelain = [
+		"# branch.oid 0123456789abcdef0123456789abcdef01234567",
+		"# branch.head main",
+		"# branch.upstream origin/main",
+		"# branch.ab +2 -1",
+		"1 M. N... 100644 100644 100644 a b src/a.ts",
+		"1 .M N... 100644 100644 100644 a b src/b.ts",
+		"1 MM N... 100644 100644 100644 a b src/c.ts",
+		"2 R. N... 100644 100644 100644 a b R100 src/d.ts\tsrc/e.ts",
+		"u UU N... 100644 100644 100644 100644 a b c src/f.ts",
+		"? notes.md",
+		"? tmp/",
+	].join("\n");
+	expect(gitBadges(porcelain)).toEqual({ badges: "!1 +3 ~2 ?2 ↑2 ↓1", detached: "0123456" });
+	expect(gitBadges(porcelain, "REBASE 3/7").badges).toStartWith("REBASE 3/7 !1");
+	expect(gitBadges("# branch.oid (initial)\n# branch.head main")).toEqual({ badges: "", detached: undefined });
+	const dir = mkdtempSync(join(tmpdir(), "orqi-git-"));
+	try {
+		expect(gitOperation(dir)).toBeUndefined();
+		mkdirSync(join(dir, "rebase-merge"));
+		writeFileSync(join(dir, "rebase-merge/msgnum"), "3\n");
+		writeFileSync(join(dir, "rebase-merge/end"), "7\n");
+		expect(gitOperation(dir)).toBe("REBASE 3/7");
+		rmSync(join(dir, "rebase-merge"), { recursive: true });
+		writeFileSync(join(dir, "MERGE_HEAD"), "abc\n");
+		expect(gitOperation(dir)).toBe("MERGING");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("other extensions' statuses get a line only when there are any", () => {
+	expect(statusLine([], 80)).toBeUndefined();
+	expect(statusLine(["  ", "\n"], 80)).toBeUndefined();
+	expect(statusLine(["memorq 14 notes", "ponytail\nfull"], 80)).toBe(" memorq 14 notes · ponytail full");
+	expect(visibleWidth(statusLine(["x".repeat(200)], 40)!)).toBeLessThanOrEqual(40);
+});
+
 test("tokens and dollars read like the wireframes", () => {
 	expect(tokens(412)).toBe("412");
 	expect(tokens(6_200)).toBe("6.2k");
@@ -454,6 +502,80 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 	expect(notices).toContain("Refreshed 1 enabled models and 0 managed agents.");
 });
 
+test("footerLine: a long branch keeps its git badges by dropping the sparkline and tools before cutting", () => {
+	const state = {
+		workspace: "orq:acme",
+		selection: "openai/gpt-5.6-terra",
+		thinking: "medium",
+		input: 71_000,
+		output: 10,
+		cost: 0.078,
+		context: { used: 35_000, window: 1_100_000 },
+		samples: [{ used: 1, window: 2 }] as never,
+		tools: 49,
+		branch: "arianpasquali/orqi-component-review",
+		git: { badges: "MERGING +2 ~1 ?1" },
+	};
+	const line = footerLine(state, 150);
+	expect(line).toEndWith(" arianpasquali/orqi-component-review MERGING +2 ~1 ?1 ");
+	expect(line).not.toContain("tools");
+	expect(visibleWidth(line)).toBe(150);
+	expect(footerLine({ ...state, branch: "main" }, 150)).toContain("49 tools");
+});
+
+test("footerLine: when nothing fits, the branch name is shortened and the git state stays", () => {
+	const state = {
+		input: 0,
+		output: 0,
+		cost: 0.1,
+		samples: [],
+		tools: 0,
+		branch: "arianpasquali/orqi-component-review",
+		git: { badges: "MERGING !1 ~2" },
+	};
+	const line = footerLine({ ...state, workspace: "orq:acme", selection: "openai/gpt-5.6-terra" }, 70);
+	expect(line).toEndWith("… MERGING !1 ~2 ");
+	expect(visibleWidth(line)).toBeLessThanOrEqual(70);
+});
+
+test("footerLine: a wide-glyph branch shortens by display width and stays within the line", () => {
+	const state = {
+		input: 0,
+		output: 0,
+		cost: 0.1,
+		samples: [],
+		tools: 0,
+		branch: "機能/フッターのブランチ名はとても長い🚀🚀",
+		git: { badges: "~2" },
+	};
+	const line = footerLine({ ...state, workspace: "orq:acme", selection: "openai/gpt-5.6-terra" }, 60);
+	expect(line).toEndWith("… ~2 ");
+	expect(visibleWidth(line)).toBeLessThanOrEqual(60);
+});
+
+test("footer git badges: a refresh that fails after a newer one finished leaves the newer badges", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-footer-git-"));
+	const calls: { args: string[]; ok: (out: { stdout: string; code: number }) => void; fail: (error: Error) => void }[] = [];
+	const exec = (_command: string, args: string[]) =>
+		new Promise<{ stdout: string; code: number }>((ok, fail) => calls.push({ args, ok, fail }));
+	const h = harnessOn(dir, { exec });
+	try {
+		await h.start(); // refresh 1 waits on rev-parse
+		h.branchChanged(); // refresh 2 starts behind it
+		calls[1]!.ok({ stdout: dir, code: 0 });
+		await Bun.sleep(0);
+		calls[2]!.ok({ stdout: "# branch.head main\n1 .M N... 100644 100644 100644 a b src/x.ts\n", code: 0 });
+		await Bun.sleep(0);
+		expect(h.footer()).toContain("~1");
+		calls[0]!.fail(new Error("spawn failed")); // the older refresh dies late
+		await Bun.sleep(0);
+		expect(h.footer()).toContain("~1");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 /** A fake of pi's in-process event bus: what the harness and memorq share. */
 function fakeBus() {
 	const listeners = new Map<string, Set<(data: unknown) => void>>();
@@ -490,6 +612,8 @@ function harnessOn(
 		permissionMode?: PermissionMode;
 		routing?: unknown;
 		settingsManager?: SettingsManager;
+		/** pi.exec, for the footer's git badges; absent, every call throws. */
+		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
 	} = {},
 ) {
 	const tools = new Map<string, any>();
@@ -527,6 +651,7 @@ function harnessOn(
 		getThinkingLevel: () => "off",
 		getAllTools: () => [],
 		getActiveTools: () => [],
+		...(options.exec ? { exec: options.exec } : {}),
 	};
 	orqHarness({
 		agentDir,
@@ -544,6 +669,8 @@ function harnessOn(
 	const notices: string[] = [];
 	const widgets = new Map<string, unknown>();
 	const opened: { panel?: Panel; inspector?: { render(width: number): string[] } } = {};
+	let footer: { render(width: number): string[] } | undefined;
+	let branchChanged: (() => void) | undefined;
 	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
 	const ctx = {
 		mode: "tui",
@@ -560,10 +687,13 @@ function harnessOn(
 			setWorkingMessage: () => {},
 			onTerminalInput: () => () => {},
 			setFooter: (factory: any) => {
-				factory({ requestRender: () => {} }, plainTheme, {
-					onBranchChange: () => () => {},
+				footer = factory({ requestRender: () => {} }, plainTheme, {
+					onBranchChange: (callback: () => void) => {
+						branchChanged = callback;
+						return () => {};
+					},
 					getExtensionStatuses: () => new Map(),
-					getGitBranch: () => undefined,
+					getGitBranch: () => (options.exec ? "main" : undefined),
 				});
 			},
 			custom: (factory: any, options?: any) => {
@@ -616,6 +746,8 @@ function harnessOn(
 		branch,
 		rows,
 		widgets,
+		footer: () => footer!.render(200).join("\n"),
+		branchChanged: () => branchChanged!(),
 		tools,
 		shortcuts,
 	};
