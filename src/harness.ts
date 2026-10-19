@@ -255,6 +255,8 @@ export function sectionRows(
 type StackEntryLike = { component: Component; basis?: number | "auto"; grow?: number; shrink?: number; minSize?: number };
 
 const HEADER_ROWS = 2;
+/** Why /sidebar greys the routing row: orq/auto is not picking the model and has not routed yet. */
+const ROUTING_OFF = "/model orq/auto";
 /** The sidebar's own lines: top border, trajectory title, summary, hint, bottom border. */
 const FRAME_CHROME = 5;
 const UNPATCHED = Symbol.for("orqi.layout.render");
@@ -889,13 +891,14 @@ export function orqHarness(deps: HarnessDeps) {
 				title: "routing",
 				lines: (w) =>
 					routingLines(routingStats(trajectory.steps, priceOf, deps.routing?.pool.medium ?? "", deps.routing?.dryRun ?? false), w),
-				// Only while orq/auto picks the model, or once it has routed this session.
-				hidden: () =>
-					!deps.routing ||
-					!(
-						(ctxRef?.model?.provider === "orq" && ctxRef.model.id === "auto") ||
-						trajectory.steps.some((step) => step.role === "route" && step.route)
-					),
+				// Drawn only while orq/auto picks the model, or once it has routed this session. Otherwise
+				// greyed in /sidebar with the way in, rather than left out where nobody would find it.
+				unavailable: () =>
+					(ctxRef?.model?.provider === "orq" && ctxRef.model.id === "auto") ||
+					trajectory.steps.some((step) => step.role === "route" && step.route)
+						? undefined
+						: ROUTING_OFF,
+				hidden: () => !deps.routing,
 			},
 			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
 			{
@@ -1879,6 +1882,8 @@ export function orqHarness(deps: HarnessDeps) {
 							const id = ids[i];
 							// A greyed row cannot be switched: say what would make it available instead.
 							if (id === "memory" && disabled.has(i)) ctx.ui.notify(memoryHelp(rows[i] ?? ""));
+							if (id === "routing" && disabled.has(i))
+								ctx.ui.notify("The routing section shows orq/auto's picks. Switch to it with /model orq/auto.");
 							if (!id || disabled.has(i)) return false;
 							setSection(ctx, id, !prefs.sections[id]);
 							syncWidgets(ctx);
