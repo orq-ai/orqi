@@ -133,7 +133,7 @@ function footerBand(state: FooterState, width: number, paint: Paint, wide: boole
 	}
 	// Keep the selected model visible at every width; effort needs the medium band.
 	if (medium && state.thinking) left.push(paint.dim(`think ${state.thinking}`));
-	if (state.minimapHidden) left.push(paint.dim("inspector alt+i"));
+	if (state.minimapHidden) left.push(paint.dim("sidebar alt+s"));
 
 	const right: string[] = [];
 	if (medium && (state.input || state.output)) {

@@ -127,7 +127,15 @@ test("the header names the day-one views", () => {
 		.join("\n")
 		.replace(/\x1b\[[0-9;]*m/g, "");
 	expect(text).toContain("orqi (aka TonyBot) v0.2.0");
-	expect(text).toContain("/learn · /route · /cost · /trace · /agents · /whatsnew · alt+i inspector");
+	expect(text).toContain("/plan · /route · /context · /cost · /btw · /trajectory · alt+s sidebar");
+	expect(text).toContain("/agents · /trace · /overview · /skills · /tools · /learn · /whatsnew");
+	// Each fits an 80-column terminal with its indent.
+	expect(
+		text
+			.split("\n")
+			.filter((line) => line.includes(" · /"))
+			.every((line) => line.length <= 80),
+	).toBe(true);
 	expect(text).not.toContain("changelog https://"); // /whatsnew replaces the bare URL
 });
 

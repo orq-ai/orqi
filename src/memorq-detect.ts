@@ -1,6 +1,6 @@
 /**
  * Whether memorq (orq-ai/orq-knowledge-notes), the pi package behind the
- * inspector's memory section, is installed. orqi does not carry it, and does
+ * sidebar's memory section, is installed. orqi does not carry it, and does
  * not tell users to install it; it reads pi's package settings to tell "not
  * installed" (say nothing about memory) from "installed but silent" (too old
  * to publish its state, or failing). A memorq loaded some other way (an extensions folder) shows itself
@@ -41,6 +41,6 @@ export function memorqChecks(presence: MemorqPresence, python3: () => Check): Ch
 	const memorq: Check =
 		presence === "loaded"
 			? { id: "memorq", status: "pass", message: "memorq loaded" }
-			: { id: "memorq", status: "warn", message: "memorq is installed but too old for the side panel: /plugin update, then restart" };
+			: { id: "memorq", status: "warn", message: "memorq is installed but too old for the sidebar: /plugin update, then restart" };
 	return [memorq, python3()];
 }

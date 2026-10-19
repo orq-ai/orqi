@@ -1,5 +1,5 @@
 /**
- * Teach mode: after a run, one card in the side panel about a platform concept
+ * Teach mode: after a run, one card in the sidebar about a platform concept
  * the run just touched, picked from the tools it called. A static glossary,
  * no model call and no docs fetch, and nothing goes to the transcript, so
  * `/trajectory` exports only the conversation.
