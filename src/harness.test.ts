@@ -30,6 +30,7 @@ import { hintsSection, schemaLines } from "./mcp.ts";
 import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl, traceSummary, traceUrl } from "./trace.ts";
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
+import { createDecider } from "./decider.ts";
 import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
 import { ALLOW_ONCE, ALLOW_TURN, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
 import type { PermissionMode } from "./permission-mode.ts";
@@ -487,6 +488,7 @@ function harnessOn(
 		modelRuntime?: unknown;
 		now?: () => number;
 		permissionMode?: PermissionMode;
+		routing?: unknown;
 		settingsManager?: SettingsManager;
 	} = {},
 ) {
@@ -536,6 +538,7 @@ function harnessOn(
 		modelRuntime: options.modelRuntime as never,
 		now: options.now,
 		permissionMode: options.permissionMode,
+		routing: options.routing as never,
 		settingsManager: options.settingsManager,
 	})(pi as any);
 	const notices: string[] = [];
@@ -1034,7 +1037,7 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 		await h.start();
 		expect(hosts).toHaveLength(2);
 		const host = hosts[1];
-		expect(Object.keys(host).sort()).toEqual(["contextPercent", "panel", "pickModel"]);
+		expect(Object.keys(host).sort()).toEqual(["contextPercent", "decide", "panel", "pickModel"]);
 		expect(host.contextPercent).toEqual(expect.any(Function));
 		expect(host.panel.shown()).toBe(true);
 		host.panel.set(false);
@@ -1045,10 +1048,120 @@ test("orqi answers memorq:host? with its panel row and the model picker, and off
 		expect(panelRows(h.opened.panel!)).not.toContainEqual(expect.stringContaining("memory"));
 		// No model runtime handed to this harness: the picker opens nothing and memorq writes nothing.
 		expect(await host.pickModel("openai/gpt-5")).toBeUndefined();
+		// No routing handed to this harness: no decider, so memorq decides nothing, and nothing throws into it.
+		expect(await host.decide({ state: {}, questions: {} })).toBeUndefined();
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+/** orq/auto's routing as main.ts builds it, with a real decider over two classifiers and a canned Decisions API. */
+function routingOn(dir: string, fetchImpl: typeof fetch) {
+	const decider = createDecider(() => readPrefs(dir).decider, fetchImpl);
+	decider.resolve([
+		{ id: "orq/decider-4b", kind: "classifier" },
+		{ id: "typesafe/jev-latest", kind: "classifier" },
+	]);
+	return { pool: { easy: "e", medium: "m", hard: "h" }, decider, onDecision: () => () => {}, refresh: () => {} };
+}
+
+test("/decider switches for this session, --save keeps it in orqi.json, /route classifier is the same command", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-decider-"));
+	const saved = process.env.ORQI_ROUTE_CLASSIFIER;
+	delete process.env.ORQI_ROUTE_CLASSIFIER;
+	const routing = routingOn(dir, (async () => new Response("{}")) as unknown as typeof fetch);
+	const h = harnessOn(dir, { routing });
+	try {
+		await h.start();
+		expect(routing.decider.id).toBe("orq/decider-4b");
+		await h.commands.get("decider")!("typesafe/jev-latest", h.ctx);
+		expect(routing.decider).toMatchObject({ id: "typesafe/jev-latest", source: "session" });
+		expect(readPrefs(dir).decider).toBeUndefined();
+		expect(h.notices.at(-1)).toContain("orq/auto now asks typesafe/jev-latest (this session)");
+		await h.commands.get("decider")!("orq/decider-4b --save", h.ctx);
+		expect(readPrefs(dir).decider).toBe("orq/decider-4b");
+		expect(h.notices.at(-1)).toContain("saved as default");
+		// A section toggle rewrites orqi.json whole, and keeps the decider.
+		await h.commands.get("tips")!("off", h.ctx);
+		expect(readPrefs(dir).decider).toBe("orq/decider-4b");
+		// The next boot resolves the saved pick.
+		const next = createDecider(() => readPrefs(dir).decider);
+		next.resolve([
+			{ id: "typesafe/jev-latest", kind: "classifier" },
+			{ id: "orq/decider-4b", kind: "classifier" },
+		]);
+		expect(next).toMatchObject({ id: "orq/decider-4b", source: "saved" });
+		await h.commands.get("decider")!("nope/x", h.ctx);
+		expect(h.notices.at(-1)).toContain("nope/x is not a decision model in this workspace");
+		// No picker to open here (no model runtime): the bare command lists them, the active one and the default marked.
+		await h.commands.get("route")!("classifier", h.ctx);
+		expect(h.notices.at(-1)).toContain("● orq/decider-4b  · default");
+		expect(h.notices.at(-1)).toContain("○ typesafe/jev-latest");
+	} finally {
+		await h.stop();
+		if (saved === undefined) delete process.env.ORQI_ROUTE_CLASSIFIER;
+		else process.env.ORQI_ROUTE_CLASSIFIER = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/decider --save that cannot write stays a session pick, so a catalogue refresh keeps it", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-decider-"));
+	const saved = process.env.ORQI_ROUTE_CLASSIFIER;
+	delete process.env.ORQI_ROUTE_CLASSIFIER;
+	mkdirSync(join(dir, "orqi.json")); // a directory where the file goes: the write throws
+	const routing = routingOn(dir, (async () => new Response("{}")) as unknown as typeof fetch);
+	const h = harnessOn(dir, { routing });
+	try {
+		await h.start();
+		await h.commands.get("decider")!("typesafe/jev-latest --save", h.ctx);
+		expect(h.notices.at(-1)).toContain("Could not save it");
+		expect(routing.decider).toMatchObject({ id: "typesafe/jev-latest", source: "session" });
+		routing.decider.resolve([
+			{ id: "orq/decider-4b", kind: "classifier" },
+			{ id: "typesafe/jev-latest", kind: "classifier" },
+		]);
+		expect(routing.decider.id).toBe("typesafe/jev-latest");
+	} finally {
+		await h.stop();
+		if (saved === undefined) delete process.env.ORQI_ROUTE_CLASSIFIER;
+		else process.env.ORQI_ROUTE_CLASSIFIER = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("memorq's host.decide asks the user's decider, and its cost lands in the trajectory as a step", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-decide-"));
+	let asked = "";
+	const routing = routingOn(dir, (async (_url: string, init: RequestInit) => {
+		asked = JSON.parse(String(init.body)).model;
+		return new Response(
+			JSON.stringify({
+				answers: { worth: { type: "noul", noul: 0.8 } },
+				usage: { input_tokens: 100, output_tokens: 0, total_cost: 0.00002 },
+			}),
+		);
+	}) as unknown as typeof fetch);
+	const h = harnessOn(dir, { routing });
+	const hosts: any[] = [];
+	h.bus.on("memorq:host", (host) => hosts.push(host));
+	try {
+		await h.start();
+		await h.commands.get("decider")!("typesafe/jev-latest", h.ctx);
+		const result = await hosts.at(-1).decide({ state: { turn: "x" }, questions: { worth: { type: "bool", instructions: "?" } } });
+		expect(asked).toBe("typesafe/jev-latest");
+		expect(result.answers.worth).toEqual({ type: "bool", probability: 0.8 });
+		expect(h.rows().join("\n")).toContain("decide");
+		// A 403 answers undefined, never a throw into memorq.
+		routing.decider.unavailable = "decisions unavailable: API key lacks the classify permission";
+		expect(await hosts.at(-1).decide({ state: {}, questions: {} })).toBeUndefined();
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+	// Once the session has ended its host decides nothing.
+	expect(await hosts.at(-1).decide({ state: {}, questions: {} })).toBeUndefined();
 });
 
 test("a closed session's memorq host never returns its old context percentage", async () => {
