@@ -7,6 +7,13 @@ import { createBashTool, createEditTool, createReadTool } from "@earendil-works/
 
 export const LOCAL_TOOL_NAMES = ["read", "edit", "bash"] as const;
 
+/**
+ * pi tools orqi switches off. pi activates its own `write` by default whenever a
+ * session is created without a tool list, so leaving it out of `createLocalTools`
+ * is not enough: it would still reach the model, outside the permission gate.
+ */
+export const EXCLUDED_TOOLS = ["write"];
+
 /** Read and targeted-edit tools, both scoped by pi to the session working directory. */
 export function createLocalTools(cwd: string) {
 	return [createReadTool(cwd), createEditTool(cwd), createBashTool(cwd)];
