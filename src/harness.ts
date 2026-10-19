@@ -52,7 +52,6 @@ import { COMPACT_AT_MAX, COMPACT_AT_MIN, isCompactAt, readPrefs, writePrefs, typ
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type RouteMark, type Step } from "./trajectory.ts";
-import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { toolGate } from "./gate.ts";
 import { registerHandoff } from "./handoff.ts";
 import { createExitPlanTool, PLAN_ENTRY, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
@@ -697,13 +696,6 @@ export function orqHarness(deps: HarnessDeps) {
 			noteReads++;
 			render();
 		};
-		// ── teach state: the card lives in the panel, never the transcript ──
-		// On by default (prefs.sections.tips): the cards are the harness explaining the platform; /tips off hides them
-		// (shown as "tips"; "teach" is the code name and the old command).
-		let card: { concept: Concept; used: string[]; step: number } | undefined;
-		const shownConcepts = new Set<string>();
-		/** The last step id a previous run reached: steering advances `turn` more than once per run. */
-		let runFrom = 0;
 		let startedAt = Date.now();
 		/** Read on session start, after each run and on a model switch: never in a render, where a handle may be stale. */
 		const measure = (ctx: ExtensionContext) => {
@@ -901,16 +893,11 @@ export function orqHarness(deps: HarnessDeps) {
 				hidden: () => !deps.routing,
 			},
 			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
-			{
-				id: "tips",
-				title: "tips",
-				lines: (w) => sectionLines("tips", card ? cardLines(card, w - 2) : [], w, "a card follows the next answer"),
-			},
 		];
 		/**
 		 * The sidebar: a box as tall as its
 		 * slot, the trajectory (one row per step, `minimapRows`) on top and the
-		 * teach, context and signals sections under it.
+		 * sections under it.
 		 */
 		const minimapView = (theme: { fg(token: string, text: string): string }): Component => {
 			// Rendering must never throw: an exception here takes the whole TUI down.
@@ -956,28 +943,16 @@ export function orqHarness(deps: HarnessDeps) {
 				});
 				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				// The slot is the screen less what composeLayout keeps above and below it, or the overlay's
-				// margins (1 + 3) in regular mode. A frame taller than its slot loses its bottom: tips, the hint.
+				// margins (1 + 3) in regular mode. A frame taller than its slot loses its bottom: the last section, the hint.
 				const slot = (process.stdout.rows ?? 30) - (sideRoot ? sideRoot.reserved() : 4);
 				const height = showTrajectory ? Math.max(3, slot - FRAME_CHROME - below) : 0;
-				const rows = minimapRows(
-					trajectory.steps,
-					inner,
-					height,
-					minimapSelected,
-					frame,
-					rowPaint,
-					prefs.sections.tips ? card?.step : undefined,
-				);
+				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
 				const paintSection = ({ id, lines }: { id: SectionId; lines: string[] }) => [
 					blank,
 					side(theme.fg("dim", lines[0]!)),
-					...lines
-						.slice(1)
-						.map((line, i) =>
-							side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : id === "tips" && i === 0 && card ? "accent" : "muted", line)),
-						),
+					...lines.slice(1).map((line, i) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : "muted", line))),
 				];
 				const title = " sidebar ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
@@ -985,7 +960,9 @@ export function orqHarness(deps: HarnessDeps) {
 					? "↑↓ move · enter peek · esc"
 					: minimapSelected !== undefined
 						? "scrolled back · wheel down follows"
-						: `alt+s · ${showTrajectory ? "/sidebar focus · " : ""}/tips ${prefs.sections.tips ? "off" : "on"}`; // focus walks the trajectory
+						: showTrajectory
+							? "alt+s · /sidebar focus" // focus walks the trajectory
+							: "alt+s · /sidebar";
 				// FRAME_CHROME counts the lines here that are neither trajectory rows nor sections.
 				return [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
@@ -1188,10 +1165,7 @@ export function orqHarness(deps: HarnessDeps) {
 			void refreshGit(ctx);
 			syncAgent(ctx);
 			if (!isAgentModel(ctx.model?.id)) chatLevel = pi.getThinkingLevel();
-			card = undefined;
-			shownConcepts.clear();
 			startedAt = Date.now();
-			runFrom = trajectory.steps.at(-1)?.id ?? 0;
 			if (ctx.mode !== "tui") return;
 			installFooter(ctx);
 			ctx.ui.setWorkingIndicator({ frames: SPINNER.map((f) => ctx.ui.theme.fg("accent", f)), intervalMs: 80 });
@@ -1239,15 +1213,14 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 		/**
 		 * Without the sidebar (regular mode, or hidden on a narrow terminal),
-		 * teach and signals fall back to one dim widget line each above the
-		 * editor. Widgets, not entries, so /trajectory and a resume stay clean.
+		 * a tool loop falls back to one widget line above the editor. A widget,
+		 * not an entry, so /trajectory and a resume stay clean.
 		 */
 		// The fullscreen sidebar or, in regular mode, the overlay that stands in for it.
 		const panelShown = () => Boolean(sideRoot || overlay) && minimapVisible();
-		const syncWidgets = (ctx: ExtensionContext, teachLine?: string) => {
+		const syncWidgets = (ctx: ExtensionContext) => {
 			if (ctx.mode !== "tui") return;
 			const loop = signals(trajectory.steps, trajectory.turn).loop;
-			const dim = (line: string) => ctx.ui.theme.fg("dim", line);
 			ctx.ui.setWidget(
 				"orqi-signals",
 				// Above the editor whenever the sidebar's signals are not on screen: panel hidden, or signals off in /sidebar.
@@ -1260,9 +1233,6 @@ export function orqHarness(deps: HarnessDeps) {
 						]
 					: undefined,
 			);
-			const tipsOn = prefs.sections.tips;
-			if (teachLine !== undefined || !tipsOn || panelShown())
-				ctx.ui.setWidget("orqi-teach", teachLine && tipsOn && !panelShown() ? [dim(teachLine)] : undefined);
 		};
 
 		// The one-way gate. Registered here so its verdicts reach the trajectory;
@@ -1301,15 +1271,7 @@ export function orqHarness(deps: HarnessDeps) {
 			ctx.ui.setWorkingMessage();
 			measure(ctx);
 			void refreshGit(ctx);
-			const run = trajectory.steps.filter((step) => step.id > runFrom);
-			runFrom = trajectory.steps.at(-1)?.id ?? runFrom;
-			let teachLine = "";
-			if (prefs.sections.tips && ctx.mode === "tui") {
-				const picked = pickCard(run, shownConcepts);
-				if (picked) card = { concept: picked.concept, used: picked.used, step: picked.step.id };
-				if (picked) teachLine = cardLine(card!);
-			}
-			syncWidgets(ctx, teachLine);
+			syncWidgets(ctx);
 			render();
 		});
 		pi.on("thinking_level_select", (event, ctx) => {
@@ -1733,31 +1695,6 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		// ── commands ──────────────────────────────────────────────────────────
-		const toggleTips = async (args: string, ctx: ExtensionContext) => {
-			const arg = args.trim();
-			if (arg && arg !== "on" && arg !== "off") {
-				ctx.ui.notify("usage: /tips on|off", "warning");
-				return;
-			}
-			setSection(ctx, "tips", arg ? arg === "on" : !prefs.sections.tips);
-			ctx.ui.notify(
-				prefs.sections.tips
-					? `Tips on: a card follows the next relevant tool call, ${panelShown() ? "in the sidebar" : "above the editor"}.`
-					: "Tips off.",
-			);
-			syncWidgets(ctx);
-			render();
-		};
-		pi.registerCommand("tips", {
-			description: "/tips on|off: show contextual orq.ai tips for the tools a run uses",
-			handler: toggleTips,
-		});
-		// Keep the original name working for existing users and session notes.
-		pi.registerCommand("teach", {
-			description: "alias for /tips",
-			handler: toggleTips,
-		});
-
 		const COMPACT_AT_CHOICES = ["off", ...[50, 60, 70, 80, 90].filter(isCompactAt).map(String)];
 		pi.registerCommand("compact-at", {
 			description: `/compact-at ${COMPACT_AT_MIN}-${COMPACT_AT_MAX}|off: auto-compact at this percent of the context window`,

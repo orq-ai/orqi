@@ -41,13 +41,12 @@ orqi
 | `src/frontmatter.ts` | `normalizeCommand`: quotes plugin command frontmatter that strict YAML would reject |
 | `src/update.ts` | `orqi update`: the release check, the launch notice text, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
-| `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the sidebar, working indicator, agent mode, exit summary, `alt+s`, and the commands that own state: `/route /teach /sidebar /compact-at` |
+| `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the sidebar, working indicator, agent mode, exit summary, `alt+s`, and the commands that own state: `/route /sidebar /compact-at` |
 | `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /traces /analytics /overview /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
 | `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, the dialog before a call that cannot be undone, and plan mode's read-only allowlist |
 | `src/plan.ts` | Plan mode: what the model is told, the `exit_plan` tool and its approval dialog, where plans are saved |
 | `src/handoff.ts` | `/handoff <goal>`: pi's handoff example, adapted. Drafts a fresh session's first message from this branch on a plain chat model, points at the plan, keeps plan mode |
-| `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the sidebar shows after a run |
 | `src/prefs.ts` | `<agentDir>/orqi.json`: which sidebar sections show, the saved decider, `orq/auto`'s saved models and `/compact-at`'s percent, read forgivingly and written whole |
 | `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
 | `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
@@ -55,7 +54,7 @@ orqi
 | `src/decider.ts` | The decider: the one decision model every Decisions call asks (`/decider`, `orqi.json`, `ORQI_ROUTE_CLASSIFIER`), the API adapter and the `orq-decisions` provider |
 | `src/router.ts` | `orq/auto`: its three slots (automatic or picked), policy, route log |
 | `src/trajectory.ts` | The session as steps (built from pi's messages), context samples, ATIF export |
-| `src/footer.ts` / `src/inspector-rows.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, the sidebar's trajectory rows and its signals, context and teach sections, boxed overlay panels |
+| `src/footer.ts` / `src/inspector-rows.ts` / `src/panel.ts` | Pure renderers: footer line and header bar by width band, the sidebar's trajectory rows and its signals, context and process sections, boxed overlay panels |
 | `src/trace.ts` / `src/agents.ts` / `src/whatsnew.ts` | Studio links and span summaries; agent rows, the detail view and the inspect view; the changelog parser |
 | `scripts/build.ts` / `scripts/dist.ts` / `scripts/vendor.ts` | Embed assets; cross-compile tarballs; vendor the upstream skills |
 | `scripts/lift-themes.ts` | Writes `themes/pack/` from the pinned theme package, lightening text colours that miss the contrast floor |
@@ -104,14 +103,13 @@ the footer's cost and pi's `/session` are real numbers rather than zero.
 
 The sidebar: the trajectory on top (one row per step, the mouse wheel scrolls
 it, and it takes whatever height the rest leave; switched off, the panel is only as tall as the rest),
-then up to six sections, in this order: signals (a tool called three times with the same
+then up to five sections, in this order: signals (a tool called three times with the same
 arguments in one turn, errors, irreversible calls), the context split (system prompt, tool schemas,
 skills index, messages, as characters over four, measured after each run and never in a render),
 routing (while `orq/auto` routes: picks per slot, model switches and the cache they lost, the
 decider's calls, and an estimated saving against the default model, `src/routing-section.ts`),
-memory (what memorq last published, below), process (orqi's resident memory, sampled every 5 s off
-the render path: now, the last minute, the peak) and tips (`/tips off` hides it; `/teach` is the old
-name). Each section is an `InspectorSection` in `src/harness.ts`; bare `/sidebar` lists them with a
+memory (what memorq last published, below) and process (orqi's resident memory, sampled every 5 s
+off the render path: now, the last minute, the peak). Each section is an `InspectorSection` in `src/harness.ts`; bare `/sidebar` lists them with a
 checkbox each, and the choice lives in `<agentDir>/orqi.json` (`src/prefs.ts`). Process starts off;
 the rest start on. A section that cannot show (an installed memorq that is silent or too old, routing while another
 model than `orq/auto` answers) is greyed in the list with the reason, and space on it says what to do; with no memorq at all the memory

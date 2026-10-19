@@ -15,13 +15,13 @@
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type SectionId = "trajectory" | "signals" | "context" | "routing" | "memory" | "process" | "tips";
+export type SectionId = "trajectory" | "signals" | "context" | "routing" | "memory" | "process";
 
 /**
  * Draw order, top down. The trajectory takes the height the others leave; off, the panel is only as tall
- * as its sections. Tips last: the panel ends above the editor, and a short terminal clips it from the bottom.
+ * as its sections. A short terminal clips the panel from the bottom, so the least needed section goes last.
  */
-export const SECTIONS: readonly SectionId[] = ["trajectory", "signals", "context", "routing", "memory", "process", "tips"];
+export const SECTIONS: readonly SectionId[] = ["trajectory", "signals", "context", "routing", "memory", "process"];
 
 export const DEFAULT_SECTIONS: Readonly<Record<SectionId, boolean>> = Object.freeze({
 	trajectory: true,
@@ -30,7 +30,6 @@ export const DEFAULT_SECTIONS: Readonly<Record<SectionId, boolean>> = Object.fre
 	routing: true,
 	memory: true,
 	process: false,
-	tips: true,
 });
 
 /** `/compact-at`'s range, in percent of the context window. Below 30, the kept recent turns plus the summary can sit over the trigger. */

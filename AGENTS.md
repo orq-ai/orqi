@@ -246,12 +246,6 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (`unsure .40: stays`): a short follow-up such as "yes, do it" splits its vote, and dropping an hour
   of hard work to fast on it both answers worse and throws away the prompt cache. The door still
   wins over it, and the first turn of a session, with nothing to stay on, routes as before.
-- **Teach lives in the sidebar, never the transcript.** Users see it as "tips" (`/tips`; `/teach` stays an alias, and either one's choice is saved in `orqi.json`, below), the code keeps the name `teach`. Cards are not session
-  entries, so `/trajectory` exports only the conversation and a resume shows no lessons. When the
-  panel is hidden (under 140 columns unless `alt+s` forces it, in fullscreen or as the regular-mode
-  overlay) the card and a tool-loop warning fall back to one widget line above the editor, for the
-  same reason. The glossary is static (`src/teach.ts`): no model call and no docs fetch per card,
-  and each concept shows once per session.
 - **The exit summary is written from `session_shutdown`, not from `main.ts`.** `InteractiveMode`
   ends in `process.exit`, so `main.ts` never regains control. On quit pi leaves the alternate
   screen, emits `session_shutdown` with reason `quit`, then prints its resume hint, so a stdout
@@ -401,7 +395,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   notices), so those sit in the content box rather than stretching under the panel. Only the editor
   and footer keep the full width: a footer cut short by the panel read as broken, and a warning
   spanning the screen under the panel cut the panel off above it. The cost is panel height: it ends
-  above the editor, so on a short terminal the bottom section (tips) is the first to be clipped.
+  above the editor, so on a short terminal the bottom section is the first to be clipped.
   pi's root is `VStack[transcript, dock]` and the dock's `entries` are readable; the editor is the
   one entry with `minSize: 3`. A dock without one keeps the whole dock full width, and a root that
   is not `VStack[transcript, dock]` falls back to wrapping the whole root, which works but narrows
@@ -443,8 +437,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   ↑↓/enter is raw input intercepted with `onTerminalInput` only while `/sidebar focus` is on, so the
   editor never loses the keyboard otherwise.
 - **Sidebar sections are a registry, and the choice lives in `<agentDir>/orqi.json`.** Each section
-  (trajectory, signals, context, routing, memory, process, tips, in that order: tips last, because a short
-  terminal clips the panel from the bottom) is an `InspectorSection` whose `lines()` is a pure renderer over state
+  (trajectory, signals, context, routing, memory, process, in that order: the least needed last, because
+  a short terminal clips the panel from the bottom) is an `InspectorSection` whose `lines()` is a pure renderer over state
   already measured. The trajectory is the exception: the frame draws it into the height the others
   leave, so its entry only puts it in `/sidebar`; off, the panel shrinks to its sections. Which ones draw is orqi's own small file (`src/prefs.ts`), not pi's
   `settings.json` (pi's SettingsManager has no setter for a key it does not know) and not the

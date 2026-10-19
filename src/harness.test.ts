@@ -36,7 +36,6 @@ import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
 import { ALLOW_ONCE, ALLOW_TURN, DENY, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import { APPROVED, FRESH, NOT_PLANNING, PLAN_OFF, PLAN_ON, planPath } from "./plan.ts";
-import { cardLine, cardLines, conceptOf, GLOSSARY, pickCard, wrap } from "./teach.ts";
 import { brandBuiltinCommands, bugHint, bugIssueUrl, ORQI_ISSUES_URL, redirectPiBugCommand } from "./bug.ts";
 
 /** Visible text: truncation adds ANSI resets around its ellipsis. */
@@ -778,7 +777,7 @@ test("/sidebar lists the sections with their state and space toggles and persist
 		await commands.get("sidebar")!("", ctx);
 		const panel = opened.panel!;
 		// No memorq anywhere: the list says nothing about memory.
-		expect(panelRows(panel)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[ ] process", "[x] tips"]);
+		expect(panelRows(panel)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[ ] process"]);
 		panel.handleInput("\x1b[B");
 		panel.handleInput("\x1b[B"); // down past the trajectory to context
 		panel.handleInput(" ");
@@ -830,7 +829,7 @@ test("orqi.json with unknown ids and garbage values: the harness starts on the d
 		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { bogus: true, tips: "nah", process: true }, extra: [1] }));
 		const { commands, ctx, opened } = harnessOn(dir);
 		await commands.get("sidebar")!("", ctx);
-		expect(panelRows(opened.panel!)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[x] process", "[x] tips"]);
+		expect(panelRows(opened.panel!)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[x] process"]);
 		opened.panel!.handleInput("\x1b[B");
 		opened.panel!.handleInput(" "); // signals off
 		await new Promise((resolve) => setTimeout(resolve, 0));
@@ -848,15 +847,18 @@ test("two orqi windows on one agent dir keep each other's panel choices", async 
 		// Both start before either saves, so each holds the defaults in memory.
 		const one = harnessOn(dir);
 		const two = harnessOn(dir);
-		await one.commands.get("tips")!("off", one.ctx);
+		await one.commands.get("sidebar")!("", one.ctx);
+		one.opened.panel!.handleInput("\x1b[B");
+		one.opened.panel!.handleInput(" "); // signals
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		await two.commands.get("sidebar")!("", two.ctx);
 		two.opened.panel!.handleInput("\x1b[B");
 		two.opened.panel!.handleInput("\x1b[B"); // context
 		two.opened.panel!.handleInput(" ");
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(readPrefs(dir).sections).toEqual({ ...DEFAULT_SECTIONS, tips: false, context: false });
+		expect(readPrefs(dir).sections).toEqual({ ...DEFAULT_SECTIONS, signals: false, context: false });
 		// The second window picked up the first one's choice when it saved.
-		expect(panelRows(two.opened.panel!)).toEqual(["[x] trajectory", "[x] signals", "[ ] context", "[ ] process", "[ ] tips"]);
+		expect(panelRows(two.opened.panel!)).toEqual(["[x] trajectory", "[ ] signals", "[ ] context", "[ ] process"]);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -1249,7 +1251,9 @@ test("/decider switches for this session, --save keeps it in orqi.json, /route c
 		expect(readPrefs(dir).decider).toBe("orq/decider-4b");
 		expect(h.notices.at(-1)).toContain("saved as default");
 		// A section toggle rewrites orqi.json whole, and keeps the decider.
-		await h.commands.get("tips")!("off", h.ctx);
+		await h.commands.get("sidebar")!("", h.ctx);
+		h.opened.panel!.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(readPrefs(dir).decider).toBe("orq/decider-4b");
 		// The next boot resolves the saved pick.
 		const next = createDecider(() => readPrefs(dir).decider);
@@ -1403,7 +1407,7 @@ test("a silent memorq row: commands registered points at /doctor, installed with
 			const h = harnessOn(dir, options as never);
 			await h.start();
 			await h.commands.get("sidebar")!("", h.ctx);
-			expect(panelRows(h.opened.panel!)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[ ] process", "[x] tips"]);
+			expect(panelRows(h.opened.panel!)).toEqual(["[x] trajectory", "[x] signals", "[x] context", "[ ] process"]);
 			expect(h.notices.join("\n")).not.toContain("install");
 			await h.stop();
 		}
@@ -1527,46 +1531,26 @@ test("/reload and /new: the next instance asks again and draws the fresh state",
 	}
 });
 
-test("/tips off flips the tips row and the sidebar omits the section", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "orqi-panel-"));
-	try {
-		const { commands, ctx, opened } = harnessOn(dir);
-		await commands.get("tips")!("off", ctx);
-		const prefs = readPrefs(dir);
-		expect(prefs.sections.tips).toBe(false);
-		await commands.get("sidebar")!("", ctx);
-		expect(panelRows(opened.panel!).at(-1)).toBe("[ ] tips");
-		const sections: InspectorSection[] = SECTIONS.map((id) => ({ id, title: id, lines: () => [] }));
-		expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["trajectory", "signals", "context", "routing", "memory"]);
-		// /teach is the same switch.
-		await commands.get("teach")!("", ctx);
-		expect(readPrefs(dir).sections.tips).toBe(true);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
-
 test("sections draw in registry order, only when chosen and available; the list shows why one is not", () => {
 	const sections: InspectorSection[] = [
 		{ id: "signals", title: "signals", lines: () => [] },
 		{ id: "context", title: "context", lines: () => [] },
 		{ id: "memory", title: "memory", lines: () => [], unavailable: () => "update memorq" },
 		{ id: "process", title: "process", lines: () => [] },
-		{ id: "tips", title: "tips", lines: () => [] },
 	];
 	const prefs = { sections: { ...DEFAULT_SECTIONS, process: true, context: false } };
-	expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "process", "tips"]);
+	expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "process"]);
 	const { rows, disabled, ids } = sectionRows(sections, prefs);
-	expect(rows).toEqual(["[x] signals", "[ ] context", "[ ] memory  · update memorq", "[x] process", "[x] tips"]);
+	expect(rows).toEqual(["[x] signals", "[ ] context", "[ ] memory  · update memorq", "[x] process"]);
 	expect([...disabled]).toEqual([2]);
-	expect(ids).toEqual(["signals", "context", "memory", "process", "tips"]);
+	expect(ids).toEqual(["signals", "context", "memory", "process"]);
 	// A hidden section is neither listed nor drawn, and the rows after it keep their own ids.
 	const hidden = sections.map((s) => (s.id === "memory" ? { ...s, hidden: () => true } : s));
-	expect(sectionRows(hidden, prefs).ids).toEqual(["signals", "context", "process", "tips"]);
-	expect(sectionsToDraw(hidden, prefs).map((s) => s.id)).toEqual(["signals", "process", "tips"]);
-	// Once available, memory draws where the registry puts it: above process, tips last.
+	expect(sectionRows(hidden, prefs).ids).toEqual(["signals", "context", "process"]);
+	expect(sectionsToDraw(hidden, prefs).map((s) => s.id)).toEqual(["signals", "process"]);
+	// Once available, memory draws where the registry puts it: above process.
 	sections[2] = { ...sections[2]!, unavailable: () => undefined };
-	expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "memory", "process", "tips"]);
+	expect(sectionsToDraw(sections, prefs).map((s) => s.id)).toEqual(["signals", "memory", "process"]);
 });
 
 test("the inspect view reads get_agent's JSON", () => {
@@ -2017,7 +2001,7 @@ test("signals: a loop is the same tool with the same arguments three times in th
 });
 
 test("panel sections: a rule, an indented body, one calm line when empty", () => {
-	expect(sectionLines("tips", [], 36)).toEqual([" ─ tips ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
+	expect(sectionLines("memory", [], 36)).toEqual([" ─ memory ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
 	const split: ContextSplit = {
 		prompt: 4_440,
 		hints: 680,
@@ -2062,12 +2046,11 @@ test("the process section: resident memory now, the last minute scaled to the pe
 	expect(processLines([1.2 * 1024 * MB], 1.2 * 1024 * MB, 36)[1]!.trimEnd()).toBe("  1.2 GB  █             peak 1.2 GB");
 });
 
-test("minimap rows mark a call waiting on the gate and the step a teach card is about", () => {
+test("minimap rows mark a call waiting on the gate", () => {
 	const step: Step = { id: 5, turn: 1, role: "tool", label: "delete_dataset", detail: "", status: "running", ts: 0, gate: "waiting" };
 	expect(bare(minimapRow(step, 36, false)).trimEnd()).toBe(" ⠋ tool   delete_dataset ?");
 	const done: Step = { ...step, status: "ok", gate: "allowed" };
-	expect(bare(minimapRow(done, 36, false, 0, undefined, true)).trimEnd()).toBe(" ⚙ tool   delete_dataset ✓ ▸");
-	expect(bare(minimapRows([done], 36, 3, undefined, 0, undefined, 5)[0]!)).toContain("✓ ▸");
+	expect(bare(minimapRow(done, 36, false)).trimEnd()).toBe(" ⚙ tool   delete_dataset ✓");
 	// A managed agent's reply is labelled as the agent's.
 	const reply: Step = {
 		id: 6,
@@ -2174,53 +2157,9 @@ export const ORQ_TOOLS = [
 	"update_skill",
 ];
 
-test("teach: every orq tool has a concept, and a card is shown once per session", () => {
-	for (const tool of ORQ_TOOLS) expect(GLOSSARY[conceptOf(`mcp__orq__${tool}`) ?? "missing"], tool).toBeDefined();
-	expect(conceptOf("mcp__orq__get_span")).toBe("trace");
-	expect(conceptOf("mcp__orq__list_datapoints")).toBe("dataset");
-	expect(conceptOf("mcp__orq__delete_dataset")).toBe("one-way door");
-	expect(conceptOf("mcp__orq__submit_feedback")).toBe("feedback");
-	expect(conceptOf("read")).toBeUndefined();
-	const tool = (id: number, name: string): Step => ({
-		id,
-		turn: 1,
-		role: "tool",
-		label: name,
-		toolName: `mcp__orq__${name}`,
-		detail: "",
-		status: "ok",
-		ts: 0,
-	});
-	const run = [
-		{ id: 1, turn: 1, role: "user", label: "user", detail: "", status: "ok", ts: 0 } as Step,
-		tool(2, "list_traces"),
-		tool(3, "get_span"),
-		tool(4, "get_agent"),
-	];
-	const shown = new Set<string>();
-	const first = pickCard(run, shown)!;
-	expect([first.key, first.step.id, first.used]).toEqual(["trace", 2, ["list_traces", "get_span"]]);
-	expect(pickCard(run, shown)?.key).toBe("agent"); // trace was shown: the next concept
-	expect(pickCard(run, shown)).toBeUndefined();
-	expect(wrap("one two three four", 9)).toEqual(["one two", "three", "four"]);
-	const lines = cardLines(first, 34);
-	expect(lines[0]).toBe("trace");
-	expect(lines.every((line) => visibleWidth(line) <= 34)).toBe(true);
-	expect(lines.slice(-2)).toEqual([
-		"used  list_traces · get_span",
-		`docs  ${hyperlink("open", "https://docs.orq.ai/docs/observability/traces")}`,
-	]);
-	expect(cardLine(first)).toStartWith("▸ tips  trace: One request through your agent or deployment, kept as a tree of spans:");
-	expect(cardLine(first)).toContain(
-		hyperlink("https://docs.orq.ai/docs/observability/traces", "https://docs.orq.ai/docs/observability/traces"),
-	);
-	// The longest current docs path must still fit the compact sidebar.
-	const skillLines = cardLines({ concept: GLOSSARY.skill!, used: ["list_skills"] }, 32);
-	expect(skillLines.at(-1)).toBe(`docs  ${hyperlink("open", "https://docs.orq.ai/docs/integrations/code-assistants/skills")}`);
-	expect(skillLines.every((line) => visibleWidth(line) <= 32)).toBe(true);
+test("the header bar is who and where", () => {
 	expect(headerBar({ connected: true, workspace: "acme", routing: "orq/auto" }, 200)).toBe(
-		// No tips (on by default, the sidebar says so) and no thread id (/open opens it,
-		// the exit summary prints it): the header is who and where.
+		// No thread id (/open opens it, the exit summary prints it): the header is who and where.
 		` ◌ orqi v${VERSION}  workspace acme · routing orq/auto`,
 	);
 });
@@ -2788,7 +2727,9 @@ test("/route models sets a slot by typing: this session, --save into orqi.json, 
 		expect(routing.source("hard")).toBe("saved");
 		expect(h.notices.at(-1)).toContain("frontier → anthropic/claude-opus-5 · saved");
 		// A section toggle rewrites orqi.json whole and keeps the slot.
-		await h.commands.get("tips")!("off", h.ctx);
+		await h.commands.get("sidebar")!("", h.ctx);
+		h.opened.panel!.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(readPrefs(dir).routeModels).toEqual({ hard: "anthropic/claude-opus-5" });
 		// Prices running backwards: said, not refused.
 		await route("models fast openai/gpt-5.6-sol", h.ctx);
