@@ -556,7 +556,7 @@ export function orqHarness(deps: HarnessDeps) {
 			// memorq keeps this object; once this session has ended its ctx is stale, and the next session offers a new host.
 			pickModel: async (current) =>
 				ctxRef && deps.modelRuntime && !sessionEnded
-					? (await pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current))?.id
+					? (await pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current, { overlay: true }))?.id
 					: undefined,
 			// The user's decider (/decider), the same one orq/auto asks. Never rejects: no decider, a 403, a
 			// timeout or an ended session all answer undefined, and memorq goes on without a decision.

@@ -4,7 +4,9 @@
  * notes through the router with the id it gets back, so an agent, a
  * classifier or the `orq/auto` virtual model is never offered, in either of
  * the selector's scopes. `/decider` gets the classifiers only, with `/model`'s
- * ctrl+s to save the pick as the default.
+ * ctrl+s to save the pick as the default. Like `/model`, the selector takes the
+ * editor's place; memorq asks for an overlay instead, because it opens the
+ * picker from its own screen, which replacing the editor would tear down.
  */
 
 import type { Model } from "@earendil-works/pi-ai";
@@ -46,13 +48,14 @@ export interface PickOptions {
 	/** Offer ctrl+s, "set as default", as `/model` does; `saved` gets the `· default` badge. */
 	canSave?: boolean;
 	saved?: string;
+	/** Float over what is on screen instead of taking the editor's place, which is what `/model` does. */
+	overlay?: boolean;
 }
 
 /**
- * Open the selector over whatever is on screen and resolve the chosen model's
- * id (and whether ctrl+s asked to save it), or undefined when the user pressed
- * esc, there is no TUI, there is no model of that kind, or the overlay could
- * not open. Never rejects: memorq writes only on an id.
+ * Open the selector and resolve the chosen model's id (and whether ctrl+s
+ * asked to save it), or undefined when the user pressed esc, there is no TUI,
+ * there is no model of that kind, or the selector could not open. Never rejects: memorq writes only on an id.
  */
 export async function pickModel(
 	ctx: ExtensionContext,
@@ -83,14 +86,15 @@ export async function pickModel(
 					tui,
 					find(current),
 					offered,
-					scoped,
+					// No scope tab, as `/model` has none: `offered` already lists only these.
+					[],
 					(model) => done({ id: model.id, save: false }),
 					() => done(undefined),
 					undefined,
 					options.canSave ? (model) => done({ id: model.id, save: true }) : undefined,
 					options.saved ? { provider, id: options.saved } : undefined,
 				),
-			{ overlay: true, overlayOptions: { anchor: "center", width: "80%", maxHeight: "85%" } },
+			options.overlay ? { overlay: true, overlayOptions: { anchor: "center", width: "80%", maxHeight: "85%" } } : undefined,
 		);
 	} catch {
 		return undefined;
