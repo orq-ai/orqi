@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
@@ -35,7 +35,7 @@ import {
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
-import { readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
+import { COMPACT_AT_MAX, COMPACT_AT_MIN, isCompactAt, readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
@@ -70,6 +70,8 @@ export interface HarnessDeps {
 	memorq?: () => "installed" | "none";
 	/** The clock, for tests of memorq's grace window. */
 	now?: () => number;
+	/** This session's pi settings, so `/compact-at` can move the compaction reserve in memory. */
+	settingsManager?: SettingsManager;
 }
 
 const ROUTE_ENTRY = "orqi-route";
@@ -146,6 +148,11 @@ export interface InspectorSection {
 	note?(): string | undefined;
 	/** Left out of /panel's list and never drawn: memory, with no memorq anywhere. */
 	hidden?(): boolean;
+}
+
+/** The reserve that makes pi compact at `pct` of `window`: pi compacts once the context passes `window - reserve`. */
+export function reserveFor(pct: number, window: number): number {
+	return Math.ceil((window * (100 - pct)) / 100);
 }
 
 /** The sections the inspector draws, in registry order: chosen in orqi.json and available. */
@@ -369,6 +376,33 @@ export function orqHarness(deps: HarnessDeps) {
 		 * orqi window's choices since this one started are kept rather than overwritten, and come back
 		 * into this one. Never from a render: it reads and writes the file.
 		 */
+		// pi's own global reserve as this session read it from settings.json: `/compact-at off` puts it back.
+		let piReserve: number | undefined;
+		const piGlobal = () =>
+			(deps.settingsManager as unknown as { globalSettings?: { compaction?: { reserveTokens?: number } } } | undefined)?.globalSettings;
+		/**
+		 * Turn orqi.json's `compactAt` into pi's reserve for the model in use, so pi's own compaction (mid-run checks,
+		 * overflow recovery, session_before_compact, which memorq learns on) just starts earlier. In memory only, as
+		 * the theme is in main.ts: the global value survives pi's save() rebuilding its merged settings, and is never
+		 * written, because save() writes only the fields it marked modified. The window changes with the model, so
+		 * this runs again on every model_select.
+		 * ponytail: one reserve, sized on the selected model. Under orq/auto that is the hard rung's window while pi
+		 * measures the rung that answered, so a smaller-window rung compacts later than the percent (never past
+		 * overflow recovery); per-rung compaction.modelOverrides if anyone notices. A trusted project's own
+		 * compaction.reserveTokens wins again after pi's next save().
+		 */
+		const applyCompactAt = (ctx: ExtensionContext) => {
+			const global = piGlobal();
+			const window = ctx.model?.contextWindow;
+			if (deps.settingsManager && global) {
+				const reserve = prefs.compactAt && window ? reserveFor(prefs.compactAt, window) : piReserve;
+				global.compaction ??= {};
+				if (reserve === undefined) delete global.compaction.reserveTokens;
+				else global.compaction.reserveTokens = reserve;
+				deps.settingsManager.applyOverrides({ compaction: { reserveTokens: reserve ?? 16_384 } });
+			}
+			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
+		};
 		const setSection = (ctx: ExtensionContext | undefined, id: SectionId, value: boolean) => {
 			prefs.sections[id] = value;
 			try {
@@ -910,7 +944,8 @@ export function orqHarness(deps: HarnessDeps) {
 			// Every session is a thread: /new and /fork mint a new id, /resume keeps
 			// the file's own. The provider headers read this per request.
 			process.env.ORQI_THREAD_ID = ctx.sessionManager.getSessionId();
-			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
+			piReserve = piGlobal()?.compaction?.reserveTokens;
+			applyCompactAt(ctx);
 			// The bus has no replay: ask memorq for its state now, in case it published before this instance listened.
 			try {
 				memorqLoaded = pi.getCommands().some((command) => MEMORQ_COMMANDS.includes(command.name));
@@ -1072,6 +1107,7 @@ export function orqHarness(deps: HarnessDeps) {
 				if (chatLevel && pi.getThinkingLevel() !== chatLevel) pi.setThinkingLevel(chatLevel);
 			}
 			syncAgent(ctx);
+			applyCompactAt(ctx);
 			measure(ctx);
 			render();
 		});
@@ -1252,6 +1288,44 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.registerCommand("teach", {
 			description: "alias for /tips",
 			handler: toggleTips,
+		});
+
+		const COMPACT_AT_CHOICES = ["off", "50", "60", "70", "80", "90"];
+		pi.registerCommand("compact-at", {
+			description: `/compact-at ${COMPACT_AT_MIN}-${COMPACT_AT_MAX}|off: auto-compact at this percent of the context window`,
+			handler: async (args, ctx) => {
+				let arg = args.trim().replace(/%$/, "");
+				if (!arg) {
+					const now = prefs.compactAt === undefined ? "off" : String(prefs.compactAt);
+					const labels = COMPACT_AT_CHOICES.map(
+						(choice) =>
+							`${choice === "off" ? "off · pi's default, near the end of the window" : `${choice}%`}${choice === now ? "  ✓" : ""}`,
+					);
+					const picked = await ctx.ui.select(`Auto-compact at · now ${now === "off" ? "off" : `${now}%`}`, labels);
+					if (picked === undefined) return;
+					arg = COMPACT_AT_CHOICES[labels.indexOf(picked)] ?? now;
+				}
+				const pct = arg === "off" ? undefined : Number(arg);
+				if (pct !== undefined && !isCompactAt(pct)) {
+					ctx.ui.notify(`usage: /compact-at ${COMPACT_AT_MIN}-${COMPACT_AT_MAX}|off`, "warning");
+					return;
+				}
+				prefs.compactAt = pct;
+				try {
+					// Reread, so another orqi window's panel choices since this one started are kept.
+					writePrefs(deps.agentDir, { ...readPrefs(deps.agentDir), compactAt: pct });
+				} catch (error) {
+					ctx.ui.notify(`Could not save the choice, it applies to this run only: ${(error as Error).message}`, "warning");
+				}
+				applyCompactAt(ctx);
+				render();
+				const window = ctx.model?.contextWindow;
+				ctx.ui.notify(
+					pct === undefined
+						? "Auto-compaction is back to pi's default, near the end of the window."
+						: `Auto-compaction at ${pct}% of the context window${window ? ` (${tokens(window - reserveTokens)} of ${tokens(window)})` : ""}.`,
+				);
+			},
 		});
 
 		pi.registerShortcut("alt+i", { description: "toggle the orqi inspector", handler: () => toggleMinimap() });
