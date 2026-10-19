@@ -17,6 +17,8 @@ import {
 	logRoute,
 	policy,
 	registerRouting,
+	autoReason,
+	priceWarning,
 	routePool,
 	tierOf,
 } from "./router.ts";
@@ -236,13 +238,13 @@ test("the route line reads like the wireframe", () => {
 			cost: 0.00003,
 			classifier: "typesafe/jev-latest",
 		}),
-	).toBe("route › medium   ▁▆▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003");
+	).toBe("route › medium → default   ▁▆▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003");
 	// A fallback names itself and its reason, so it never reads as a classification.
 	expect(
 		routeLine({ tier: "medium", why: "fallback: classifier timed out after 5 s", model: "openai/gpt-5.6-terra", ...{ fallback: true } }),
-	).toBe("route › medium   fallback: classifier timed out after 5 s   → gpt-5.6-terra");
+	).toBe("route › medium → default   fallback: classifier timed out after 5 s   → gpt-5.6-terra");
 	expect(routeLine({ tier: "hard", arrow: "▲", why: "floor: agent mutation", model: "openai/gpt-5.6-sol" })).toBe(
-		"route › hard ▲   floor: agent mutation   → gpt-5.6-sol",
+		"route › hard → frontier ▲  floor: agent mutation   → gpt-5.6-sol",
 	);
 	expect(
 		routeLine({
@@ -257,7 +259,7 @@ test("the route line reads like the wireframe", () => {
 			cost: 0.00002,
 			classifier: "typesafe/jev-latest",
 		}),
-	).toBe("route › hard ▲   ▆▃▁   easy .72 · medium .28 · hard .00   door: one_way .94   → gpt-5.6-sol   jev 0.3 s $0.00002");
+	).toBe("route › hard → frontier ▲  ▆▃▁   easy .72 · medium .28 · hard .00   door: one_way .94   → gpt-5.6-sol   jev 0.3 s $0.00002");
 	expect(selectionName({ provider: "orq", id: "auto" })).toBe("orq/auto");
 	expect(selectionName({ provider: "orq", id: "openai/gpt-5.6-terra" })).toBe("openai/gpt-5.6-terra");
 });
@@ -359,4 +361,98 @@ test("orq/auto routes a user turn through the classifier and keeps follow-ups on
 			{ role: "user", content: [{ type: "text", text: "c" }] },
 		]),
 	).toBe("c");
+});
+
+test("/route models: a picked slot beats auto, ORQI_ROUTE_POOL beats both, and a saved pick this workspace lacks falls through", () => {
+	const env = process.env.ORQI_ROUTE_POOL;
+	delete process.env.ORQI_ROUTE_POOL;
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	let saved: Record<string, string> = { hard: "anthropic/claude-opus-5", easy: "gone/model" };
+	try {
+		const routing = registerRouting(runtime, CATALOGUE, "openai/gpt-5.6-terra", undefined, undefined, () => saved);
+		// Any provider, once picked; a saved id the catalogue lacks is skipped, not erased.
+		expect(routing.pool).toEqual({ easy: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-terra", hard: "anthropic/claude-opus-5" });
+		expect([routing.source("easy"), routing.source("medium"), routing.source("hard")]).toEqual(["auto", "auto", "saved"]);
+		expect(saved.easy).toBe("gone/model");
+		// A session pick beats the saved one until it is cleared.
+		routing.pick("hard", "openai/gpt-6-luna");
+		expect(routing.pool.hard).toBe("openai/gpt-6-luna");
+		expect(routing.source("hard")).toBe("session");
+		routing.pick("hard", undefined);
+		expect(routing.pool.hard).toBe("anthropic/claude-opus-5");
+		// Cleared saved pick (what `a` does after writing orqi.json): back to auto.
+		saved = {};
+		routing.pick("hard", undefined);
+		expect(routing.pool.hard).toBe("openai/gpt-5.6-sol");
+		expect(routing.source("hard")).toBe("auto");
+		// A session pick outlives a catalogue refresh.
+		routing.pick("easy", "openai/gpt-6-luna");
+		routing.refresh(CATALOGUE);
+		expect(routing.pool.easy).toBe("openai/gpt-6-luna");
+		// The environment wins over a pick, and says so.
+		process.env.ORQI_ROUTE_POOL = "easy=openai/gpt-5.6-terra";
+		routing.refresh(CATALOGUE);
+		expect(routing.pool.easy).toBe("openai/gpt-5.6-terra");
+		expect(routing.source("easy")).toBe("env");
+	} finally {
+		if (env === undefined) delete process.env.ORQI_ROUTE_POOL;
+		else process.env.ORQI_ROUTE_POOL = env;
+	}
+});
+
+test("orq/auto plans for the smallest window among its three models", () => {
+	let virtual: any;
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: (v: any) => (virtual = v) };
+	const windows = CATALOGUE.map((model) => ({ ...model, contextWindow: model.id.startsWith("anthropic/") ? 200_000 : 1_050_000 }));
+	registerRouting(runtime, windows, "openai/gpt-5.6-terra", undefined, undefined, () => ({ hard: "anthropic/claude-opus-5" }));
+	expect(virtual.contextWindow).toBe(200_000);
+});
+
+test("an automatic slot says why the catalogue chose its model; a pool whose prices run backwards is warned about", () => {
+	expect(autoReason(CATALOGUE, "openai/gpt-5.6-terra", "hard")).toBe("highest-scoring openai model (gpt-5.6-sol 53.6)");
+	expect(autoReason(CATALOGUE, "openai/gpt-5.6-terra", "medium")).toBe("your default model (gpt-5.6-terra)");
+	expect(autoReason(CATALOGUE, "openai/gpt-5.6-terra", "easy")).toBe(
+		"cheapest openai model scoring ≥70% of the frontier one (gpt-5.6-luna 38.1, $1.4/M)",
+	);
+	expect(autoReason([{ id: "openai/a", cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } }], "openai/a", "easy")).toBe(
+		"cheapest openai model (a, $2/M)",
+	);
+	const pool = { easy: "openai/gpt-5.6-luna", medium: "openai/gpt-5.6-terra", hard: "openai/gpt-5.6-sol" };
+	expect(priceWarning(pool, CATALOGUE)).toBeUndefined();
+	expect(priceWarning({ ...pool, easy: "openai/gpt-5.6-sol", hard: "openai/gpt-6-luna" }, CATALOGUE)).toBe(
+		"fast now costs more than frontier (gpt-5.6-sol $24/M vs gpt-6-luna $0.6/M)",
+	);
+	// A model with no price says nothing.
+	expect(priceWarning({ ...pool, easy: "unknown/x" }, CATALOGUE)).toBeUndefined();
+});
+
+test("review fixes: a session pick the refreshed catalogue lacks is set aside, and orq/auto is re-registered with the rungs' limits", () => {
+	const env = process.env.ORQI_ROUTE_POOL;
+	delete process.env.ORQI_ROUTE_POOL;
+	const registered: any[] = [];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: (v: any) => registered.push(v) };
+	const windows = CATALOGUE.map((model) => ({ ...model, contextWindow: model.id.startsWith("anthropic/") ? 200_000 : 1_050_000 }));
+	try {
+		const routing = registerRouting(runtime, windows, "openai/gpt-5.6-terra");
+		expect(registered.at(-1).contextWindow).toBe(1_050_000);
+		// A pick re-registers orq/auto with the new smallest window, keeping the same router.
+		routing.pick("hard", "anthropic/claude-opus-5");
+		expect(registered.at(-1).contextWindow).toBe(200_000);
+		expect(registered.at(-1).route).toBe(registered[0].route);
+		// Another workspace's catalogue lacks the pick: auto again, and the window follows.
+		routing.refresh(windows.filter((model) => !model.id.startsWith("anthropic/")));
+		expect(routing.pool.hard).toBe("openai/gpt-5.6-sol");
+		expect(routing.source("hard")).toBe("auto");
+		expect(registered.at(-1).contextWindow).toBe(1_050_000);
+		// Back in a workspace that has it, the session pick applies again.
+		routing.refresh(windows);
+		expect(routing.pool.hard).toBe("anthropic/claude-opus-5");
+	} finally {
+		if (env === undefined) delete process.env.ORQI_ROUTE_POOL;
+		else process.env.ORQI_ROUTE_POOL = env;
+	}
+	// The explanation ranks the same models routePool does: a regional copy never wins.
+	const regional: ModelInfo[] = [...CATALOGUE, { id: "openai/eu.gpt-9", intelligence: 99 }];
+	expect(routePool(regional, "openai/gpt-5.6-terra").hard).toBe("openai/gpt-5.6-sol");
+	expect(autoReason(regional, "openai/gpt-5.6-terra", "hard")).toBe("highest-scoring openai model (gpt-5.6-sol 53.6)");
 });

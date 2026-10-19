@@ -97,3 +97,20 @@ test("compactAt round-trips within 30-95 and is dropped otherwise", () => {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("orq/auto's saved slots round-trip; junk and unknown rungs are no pick", () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-prefs-route-"));
+	try {
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, routeModels: { hard: "anthropic/claude-opus-5" } });
+		expect(readPrefs(dir).routeModels).toEqual({ hard: "anthropic/claude-opus-5" });
+		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ routeModels: { hard: 3, fast: "x", easy: "  ", medium: " openai/a " } }));
+		expect(readPrefs(dir).routeModels).toEqual({ medium: "openai/a" });
+		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ routeModels: ["openai/a"] }));
+		expect(readPrefs(dir).routeModels).toBeUndefined();
+		// An empty set is not written.
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, routeModels: {} });
+		expect(JSON.parse(readFileSync(join(dir, "orqi.json"), "utf8")).routeModels).toBeUndefined();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

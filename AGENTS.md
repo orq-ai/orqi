@@ -210,6 +210,18 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   for the session (enter, or a save that failed) survives a catalogue refresh, `ORQI_ROUTE_CLASSIFIER`
   included, until orqi restarts. Calls by
   anyone but the router become trajectory steps, so `/cost` counts them; they are session-local.
+- **`orq/auto`'s three models are slots, automatic until someone picks one.** The decider judges the
+  message (easy, medium, hard); the model that answers sits in a slot named for what it is (fast,
+  default, frontier: `SLOTS` in `src/router.ts`), and the route line says both (`easy → fast`). An
+  automatic slot is `routePool`'s: the default model's provider only, ranked by the catalogue's
+  intelligence index, and `/route models` says why it holds its model (`autoReason`). A picked slot
+  takes any workspace chat model, any provider: `/route models` opens pi's `/model` selector for it
+  (enter for this session, ctrl+s saves to `orqi.json` as `routeModels`), `a` or `<slot> auto` clears
+  both. `ORQI_ROUTE_POOL` outranks a pick and is named as the source; a saved id this workspace lacks
+  falls through without being erased, and session picks outlive a catalogue refresh, as the decider's
+  do. A pick whose prices run backwards (fast dearer than frontier) is warned about, never refused. The
+  virtual model's context window is the smallest of the three, because any of them may answer and a
+  picked one can be another provider's.
 - **The door question rides beside difficulty, and the keyword floor is only its fallback.**
   `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would delete
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
@@ -433,8 +445,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   pi keeps owning compaction: mid-run checks, overflow recovery, and the `session_before_compact` that
   memorq learns on. A package that replaces pi's compaction (pi-auto-compact) writes its own entries
   and never fires that event, so memorq would miss them. Under `orq/auto` the reserve is sized on the
-  hard rung's window while pi measures the rung that answered, so a smaller-window rung compacts later
-  than the percent.
+  smallest window of its three models while pi measures the rung that answered, so a larger-window rung
+  compacts earlier than the percent.
 - **orqi does not carry memorq, and only mentions memory once memorq is there.** memorq
   (orq-ai/orq-knowledge-notes, a pi package) ships on its own schedule and is not something every orqi
   user can install, so orqi never tells anyone to install it: with no memorq, `/panel` has no memory

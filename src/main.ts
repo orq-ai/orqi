@@ -542,6 +542,8 @@ const routing = registerRouting(
 	process.env.ORQI_ROUTE_LOG === "1" ? join(AGENT_DIR, "routes.jsonl") : undefined,
 	// The one decider every Decisions call asks; /decider saves its pick in orqi.json.
 	createDecider(() => readPrefs(AGENT_DIR).decider),
+	// The models /route models saved for orq/auto's slots.
+	() => readPrefs(AGENT_DIR).routeModels ?? {},
 );
 const model = pickModel(models);
 // `edit` retains pi's native before/after diff preview. Bash is exposed through

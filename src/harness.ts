@@ -55,7 +55,17 @@ import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { toolGate } from "./gate.ts";
 import { createExitPlanTool, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
-import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
+import {
+	DIFFICULTY_QUESTION,
+	DOOR_QUESTION,
+	priceWarning,
+	SLOTS,
+	TIERS,
+	type Decision,
+	type Routing,
+	type RungSource,
+	type Tier,
+} from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { registerViewCommands } from "./harness-commands.ts";
 import { cacheRate, selectionName, contextSplit } from "./harness-views.ts";
@@ -112,6 +122,13 @@ export function learnLine(learned: Learned): string {
 	return `${step.label} ${step.detail}${typeof learned.costUsd === "number" ? ` · ${dollars(learned.costUsd)}` : ""}`;
 }
 const ROUTE_WIDGET = "orqi-route";
+/** Where a slot's model came from, as `/route models` and `/route explain` say it. */
+const RUNG_SOURCE: Record<RungSource, string> = { auto: "auto", saved: "saved", session: "this session", env: "ORQI_ROUTE_POOL" };
+/** A slot by its name or its rung: `fast` or `easy`. */
+function slotOf(word: string | undefined): Tier | undefined {
+	return TIERS.find((tier) => tier === word || SLOTS[tier] === word);
+}
+
 /** Where the decider came from, as `/route explain` says it. */
 const DECIDER_SOURCE = {
 	env: "ORQI_ROUTE_CLASSIFIER",
@@ -128,7 +145,8 @@ const BARS = "▁▂▃▄▅▆▇█";
 export function routeLine(
 	decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP">,
 ): string {
-	const tier = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(8);
+	// How hard the message was, then the slot that answers it: `easy → fast`.
+	const tier = `${decision.tier} → ${SLOTS[decision.tier]}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(18);
 	const p = decision.probabilities;
 	const short = (n: number) => n.toFixed(2).replace(/^0/, "");
 	// A door that sent the turn to hard reads with its confidence: `door: one_way .94`.
@@ -453,9 +471,9 @@ export function orqHarness(deps: HarnessDeps) {
 		 * the theme is in main.ts: the global value survives pi's save() rebuilding its merged settings, and is never
 		 * written, because save() writes only the fields it marked modified. The window changes with the model, so
 		 * this runs again on every model_select. Unset, it touches nothing, so a session without it is pi's own.
-		 * ponytail: one reserve, sized on the selected model. Under orq/auto that is the hard rung's window while pi
-		 * measures the rung that answered, so a smaller-window rung compacts later than the percent (never past
-		 * overflow recovery); per-rung compaction.modelOverrides if anyone notices.
+		 * ponytail: one reserve, sized on the selected model. Under orq/auto that is the smallest window of its three
+		 * models while pi measures the rung that answered, so a larger-window rung compacts earlier than the percent;
+		 * per-rung compaction.modelOverrides if anyone notices.
 		 */
 		const applyCompactAt = (ctx: ExtensionContext) => {
 			const global = piGlobal();
@@ -1278,7 +1296,7 @@ export function orqHarness(deps: HarnessDeps) {
 			const usage = decision.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: decision.cost } : undefined;
 			// A fallback is the default rung, not a judgement: say so where the decision is listed.
 			const label = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}${decision.fallback ? " (fallback)" : ""}`;
-			trajectory.route(label, `→ ${shortModel(decision.model)}`, usage, decision.latencyMs, decision.classifier);
+			trajectory.route(label, `→ ${SLOTS[decision.tier]} · ${shortModel(decision.model)}`, usage, decision.latencyMs, decision.classifier);
 			try {
 				pi.appendEntry(ROUTE_ENTRY, decision);
 			} catch {
@@ -1365,6 +1383,134 @@ export function orqHarness(deps: HarnessDeps) {
 			ctx.ui.notify(lines.join("\n"));
 			ctx.ui.setWidget(ROUTE_WIDGET, undefined);
 		};
+		/**
+		 * `/route models`: the three models orq/auto picks between, each automatic (derived from the catalogue)
+		 * or put there by the user. Bare, it lists the slots (a panel in the TUI: enter opens pi's model
+		 * selector, `a` goes back to auto); `<slot> <id|auto> [--save]` sets one by typing. Enter in the selector
+		 * is this session, ctrl+s saves to orqi.json, as with /model and /decider.
+		 */
+		const saveRung = (tier: Tier, id: string | undefined) => {
+			const fresh = readPrefs(deps.agentDir);
+			const next = { ...fresh.routeModels };
+			if (id) next[tier] = id;
+			else delete next[tier];
+			fresh.routeModels = next;
+			writePrefs(deps.agentDir, fresh);
+			prefs.routeModels = fresh.routeModels;
+		};
+		const setRung = async (ctx: ExtensionContext, tier: Tier, id: string | undefined, save: boolean) => {
+			const routing = deps.routing!;
+			const lines: string[] = [];
+			try {
+				// `auto` always clears the saved pick too: a slot is either automatic or someone's choice.
+				if (save || !id) saveRung(tier, id);
+			} catch (error) {
+				lines.push(`Could not save it: ${(error as Error).message}`);
+			}
+			routing.pick(tier, id);
+			// The pick re-registered orq/auto with the new rungs' limits; pi's session holds the model object
+			// it was given, so hand it the new one or compaction keeps planning for the old window.
+			if (ctx.model?.provider === "orq" && ctx.model.id === "auto") {
+				const fresh = deps.modelRuntime?.getModel("orq", "auto");
+				if (fresh) await pi.setModel(fresh).catch(() => false);
+			}
+			const model = routing.pool[tier];
+			const how = !id ? `back to auto → ${model}` : `→ ${model}${save && !lines.length ? " · saved" : " (this session)"}`;
+			lines.unshift(`${SLOTS[tier]} ${how}`);
+			if (routing.source(tier) === "env") lines.push(`ORQI_ROUTE_POOL sets ${tier}, so ${routing.pool[tier]} answers until it is unset`);
+			const warning = priceWarning(routing.pool, deps.catalogue());
+			if (warning) lines.push(`⚠ ${warning}`);
+			if (!(ctx.model?.provider === "orq" && ctx.model.id === "auto"))
+				lines.push("They answer when orq/auto picks the model: /model orq/auto");
+			ctx.ui.notify(lines.join("\n"), warning ? "warning" : "info");
+		};
+		const chooseModels = async (args: string, ctx: ExtensionContext): Promise<void> => {
+			const routing = deps.routing!;
+			const words = args.trim().split(/\s+/).filter(Boolean);
+			const save = words.includes("--save");
+			const [slot, id, extra] = words.filter((word) => word !== "--save");
+			const usage = "usage: /route models [fast|default|frontier] [<model id>|auto] [--save]";
+			const chat = new Set(
+				deps
+					.catalogue()
+					.filter((model) => !model.kind || model.kind === "chat")
+					.map((model) => model.id),
+			);
+			if (slot) {
+				const tier = slotOf(slot);
+				if (!tier || !id || extra) {
+					ctx.ui.notify(usage, "warning");
+					return;
+				}
+				if (id !== "auto" && !chat.has(id)) {
+					ctx.ui.notify(`${id} is not a chat model in this workspace; /model lists them`, "warning");
+					return;
+				}
+				await setRung(ctx, tier, id === "auto" ? undefined : id, save);
+				return;
+			}
+			const rows = () =>
+				TIERS.map(
+					(tier) =>
+						`${SLOTS[tier].padEnd(9)} ${shortModel(routing.pool[tier]).padEnd(24)} ${(routing.pool[tier].split("/")[0] ?? "").padEnd(10)} ${RUNG_SOURCE[routing.source(tier)]}`,
+				);
+			const reasons = () =>
+				TIERS.map(
+					(tier) =>
+						`${SLOTS[tier]}: ${routing.source(tier) === "auto" ? routing.why(tier) : `${RUNG_SOURCE[routing.source(tier)]}; auto would be ${routing.why(tier)}`}`,
+				);
+			if (!(ctx.mode === "tui" && deps.modelRuntime)) {
+				ctx.ui.notify(
+					[`orq/auto models (${usage.slice(7)})`, ...rows().map((row) => `  ${row}`), ...reasons().map((row) => `  ${row}`)].join("\n"),
+				);
+				return;
+			}
+			let chosen: Tier | undefined;
+			let live: Panel | undefined;
+			const spec = (): PanelSpec => {
+				const slots = rows();
+				const notes = reasons();
+				return {
+					title: "orq/auto models",
+					rows: [...slots, "", ...notes],
+					selectable: true,
+					filterable: false,
+					// The explanations under the slots are not slots.
+					disabled: new Set(notes.map((_, i) => slots.length + 1 + i).concat(slots.length)),
+					keys: {
+						enter: (i) => {
+							chosen = TIERS[i];
+							return chosen !== undefined;
+						},
+						a: (i) => {
+							const tier = TIERS[i];
+							if (!tier) return false;
+							void setRung(ctx, tier, undefined, false).then(() => live?.update(spec()));
+							return false;
+						},
+					},
+					hint: "enter pick model · a back to auto · esc close",
+				};
+			};
+			await panel(
+				ctx,
+				() => spec(),
+				96,
+				(p) => {
+					live = p;
+				},
+			);
+			if (!chosen) return;
+			const tier = chosen;
+			const picked = await pickModel(ctx, deps.modelRuntime, deps.catalogue(), routing.pool[tier], {
+				canSave: true,
+				saved: prefs.routeModels?.[tier],
+			});
+			if (picked) await setRung(ctx, tier, picked.id, picked.save);
+			// Back to the list, so the next slot is one keypress away; esc there ends it.
+			await chooseModels("", ctx);
+		};
+
 		pi.registerCommand("decider", {
 			description: "/decider picks the decision model orq/auto and memorq ask (enter: this session, ctrl+s: save); /decider <id> [--save]",
 			handler: (args, ctx) => chooseDecider(args, ctx, "/decider"),
@@ -1372,7 +1518,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerCommand("route", {
 			description:
-				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
+				"orq/auto routing: /route on|off shows the route line, /route explain the question and models, /route models picks the fast, default and frontier models, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
 			handler: async (args, ctx) => {
 				const routing = deps.routing;
 				const arg = args.trim();
@@ -1425,7 +1571,11 @@ export function orqHarness(deps: HarnessDeps) {
 					await chooseDecider(arg.slice("classifier".length), ctx, "/route classifier");
 					return;
 				}
-				const pool = TIERS.map((t: Tier) => `${t} ${shortModel(routing.pool[t])}`).join(" · ");
+				if (arg === "models" || arg.startsWith("models ")) {
+					await chooseModels(arg.slice("models".length), ctx);
+					return;
+				}
+				const pool = TIERS.map((t: Tier) => `${SLOTS[t]} ${shortModel(routing.pool[t])} (${RUNG_SOURCE[routing.source(t)]})`).join(" · ");
 				if (arg === "explain" || arg === "") {
 					ctx.ui.notify(
 						[
@@ -1435,7 +1585,7 @@ export function orqHarness(deps: HarnessDeps) {
 							"door question (evaluatorq's door criteria, asked in the same call)",
 							`  ${DOOR_QUESTION.instructions}`,
 							...Object.entries(DOOR_QUESTION.criteria).map(([door, text]) => `  ${door.padEnd(7)} ${text}`),
-							`pool  ${pool}`,
+							`models   ${pool}`,
 							`decider  ${routing.decider.id ?? "none"}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
 							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
 							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
@@ -1445,7 +1595,7 @@ export function orqHarness(deps: HarnessDeps) {
 					);
 					return;
 				}
-				ctx.ui.notify("usage: /route on|off|explain|classifier [id] [--save]|platform", "warning");
+				ctx.ui.notify("usage: /route on|off|explain|models|classifier [id] [--save]|platform", "warning");
 			},
 		});
 
@@ -1666,7 +1816,7 @@ function branchMessages(ctx: ExtensionContext): any[] {
 				{
 					role: "route",
 					label,
-					detail: `→ ${shortModel(d.model)}`,
+					detail: `→ ${SLOTS[d.tier] ?? d.tier} · ${shortModel(d.model)}`,
 					usage: d.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: d.cost } : undefined,
 					durationMs: d.latencyMs,
 					model: d.classifier,

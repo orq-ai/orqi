@@ -31,6 +31,7 @@ import { agentUrl, autoRouter, conversationLines, shortId, studioHost, threadUrl
 import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step } from "./trajectory.ts";
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 import { createDecider } from "./decider.ts";
+import { registerRouting } from "./router.ts";
 import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
 import { ALLOW_ONCE, ALLOW_TURN, DENY, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
 import type { PermissionMode } from "./permission-mode.ts";
@@ -611,6 +612,7 @@ function harnessOn(
 		now?: () => number;
 		permissionMode?: PermissionMode;
 		routing?: unknown;
+		catalogue?: ModelInfo[];
 		settingsManager?: SettingsManager;
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
 		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
@@ -655,7 +657,7 @@ function harnessOn(
 	};
 	orqHarness({
 		agentDir,
-		catalogue: () => [],
+		catalogue: () => options.catalogue ?? [],
 		toolCount: () => 0,
 		callTool: async () => ({ text: "", isError: false }),
 		workspace: () => undefined,
@@ -2721,6 +2723,66 @@ test("/compact-at unset leaves pi's settings alone, and a project's own reserve 
 		expect(reserve()).toBe(50_000);
 		await h.stop();
 	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("/route models sets a slot by typing: this session, --save into orqi.json, auto clears both", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-route-models-"));
+	const env = process.env.ORQI_ROUTE_POOL;
+	delete process.env.ORQI_ROUTE_POOL;
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6, cost: { input: 4, output: 20, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6, cost: { input: 2, output: 12, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1, cost: { input: 0.2, output: 1.2, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "anthropic/claude-opus-5", intelligence: 60.7, cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "typesafe/jev-latest", kind: "classifier" },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra", undefined, undefined, () => readPrefs(dir).routeModels ?? {});
+	const h = harnessOn(dir, { routing, catalogue });
+	const route = h.commands.get("route")!;
+	try {
+		await h.start();
+		await route("models frontier anthropic/claude-opus-5", h.ctx);
+		expect(routing.pool.hard).toBe("anthropic/claude-opus-5");
+		expect(routing.source("hard")).toBe("session");
+		expect(readPrefs(dir).routeModels).toBeUndefined();
+		expect(h.notices.at(-1)).toContain("frontier → anthropic/claude-opus-5 (this session)");
+		// The rung's name works as well as the slot's; --save keeps it.
+		await route("models hard anthropic/claude-opus-5 --save", h.ctx);
+		expect(readPrefs(dir).routeModels).toEqual({ hard: "anthropic/claude-opus-5" });
+		expect(routing.source("hard")).toBe("saved");
+		expect(h.notices.at(-1)).toContain("frontier → anthropic/claude-opus-5 · saved");
+		// A section toggle rewrites orqi.json whole and keeps the slot.
+		await h.commands.get("tips")!("off", h.ctx);
+		expect(readPrefs(dir).routeModels).toEqual({ hard: "anthropic/claude-opus-5" });
+		// Prices running backwards: said, not refused.
+		await route("models fast openai/gpt-5.6-sol", h.ctx);
+		expect(routing.pool.easy).toBe("openai/gpt-5.6-sol");
+		expect(h.notices.at(-1)).toContain("⚠ fast now costs more than default");
+		await route("models fast auto", h.ctx);
+		expect(routing.pool.easy).toBe("openai/gpt-5.6-luna");
+		expect(h.notices.at(-1)).toContain("fast back to auto → openai/gpt-5.6-luna");
+		await route("models frontier auto", h.ctx);
+		expect(readPrefs(dir).routeModels).toBeUndefined();
+		expect(routing.pool.hard).toBe("openai/gpt-5.6-sol");
+		// Only the workspace's chat models: not a classifier, not a typo.
+		await route("models default typesafe/jev-latest", h.ctx);
+		expect(h.notices.at(-1)).toContain("typesafe/jev-latest is not a chat model in this workspace");
+		await route("models turbo openai/gpt-5.6-sol", h.ctx);
+		expect(h.notices.at(-1)).toContain("usage: /route models");
+		// No picker here (no model runtime): the bare command lists the slots and why each holds its model.
+		await route("models", h.ctx);
+		const listed = h.notices.at(-1)!;
+		expect(listed).toContain("fast      gpt-5.6-luna");
+		expect(listed).toContain("frontier: highest-scoring openai model (gpt-5.6-sol 53.6)");
+		await route("explain", h.ctx);
+		expect(h.notices.at(-1)).toContain("models   fast gpt-5.6-luna (auto) · default gpt-5.6-terra (auto) · frontier gpt-5.6-sol (auto)");
+	} finally {
+		await h.stop();
+		if (env === undefined) delete process.env.ORQI_ROUTE_POOL;
+		else process.env.ORQI_ROUTE_POOL = env;
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
