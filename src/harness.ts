@@ -53,7 +53,8 @@ import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type Step } from "./trajectory.ts";
 import { cardLine, cardLines, pickCard, type Concept } from "./teach.ts";
 import { toolGate } from "./gate.ts";
-import { createExitPlanTool, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
+import { registerHandoff } from "./handoff.ts";
+import { createExitPlanTool, PLAN_ENTRY, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import { DIFFICULTY_QUESTION, DOOR_QUESTION, TIERS, type Decision, type Routing, type Tier } from "./router.ts";
 import { Text } from "@earendil-works/pi-tui";
@@ -88,8 +89,6 @@ export interface HarnessDeps {
 }
 
 const ROUTE_ENTRY = "orqi-route";
-/** Plan mode on or off, persisted on every change so a resumed session keeps it. */
-const PLAN_ENTRY = "orqi-plan";
 /** How long a loaded memorq has to publish its first state before the section says it is not answering. */
 const MEMORQ_GRACE_MS = 5_000;
 /** A learn memorq reported, persisted so /trajectory exports it and a resume shows it. */
@@ -1570,6 +1569,8 @@ export function orqHarness(deps: HarnessDeps) {
 				togglePlan(arg ? arg === "on" : !planning, ctx);
 			},
 		});
+
+		registerHandoff(pi, { agentDir: deps.agentDir, medium: () => deps.routing?.pool.medium, planning: () => planning });
 
 		/** What to do about a greyed memory row: the update, or where to look. */
 		const memoryHelp = (row: string) =>

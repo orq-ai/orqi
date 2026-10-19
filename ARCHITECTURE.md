@@ -46,6 +46,7 @@ orqi
 | `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, the dialog before a call that cannot be undone, and plan mode's read-only allowlist |
 | `src/plan.ts` | Plan mode: what the model is told, the `exit_plan` tool and its approval dialog, where plans are saved |
+| `src/handoff.ts` | `/handoff <goal>`: pi's handoff example, adapted. Drafts a fresh session's first message from this branch on a plain chat model, points at the plan, keeps plan mode |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
 | `src/prefs.ts` | `<agentDir>/orqi.json`: which inspector sections show, the saved decider and `/compact-at`'s percent, read forgivingly and written whole |
 | `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
