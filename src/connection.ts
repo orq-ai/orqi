@@ -94,6 +94,7 @@ export const ORQI_COMMANDS = [
 	"teach",
 	"tips",
 	"context",
+	"plan",
 	"compact-at",
 ] as const;
 

@@ -44,7 +44,8 @@ orqi
 | `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the inspector (side panel), working indicator, agent mode, exit summary, `alt+i`, and the commands that own state: `/route /teach /panel /compact-at` |
 | `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /traces /analytics /overview /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
 | `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
-| `src/gate.ts` | The one-way gate: a door per orq tool from its verb, and the dialog before a call that cannot be undone |
+| `src/gate.ts` | The one-way gate: a door per orq tool from its verb, the dialog before a call that cannot be undone, and plan mode's read-only allowlist |
+| `src/plan.ts` | Plan mode: what the model is told, the `exit_plan` tool and its approval dialog, where plans are saved |
 | `src/teach.ts` | Teach mode's glossary: one concept per orq tool, the card the inspector shows after a run |
 | `src/prefs.ts` | `<agentDir>/orqi.json`: which inspector sections show, the saved decider and `/compact-at`'s percent, read forgivingly and written whole |
 | `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
@@ -129,6 +130,14 @@ started with `--permission-mode=auto` (or `--auto`); headless runs still block B
 can confirm it. Orq tools read their door off the verb: reads are benign, `create_`/`update_` are
 two-way and only recorded, while `delete_`/`submit_`/`invoke_` and any verb not in the table are
 one-way and always wait for the dialog.
+
+Plan mode (`/plan`, `alt+p`, `--plan`) is a third permission mode the gate reads on every call.
+It lets through reads only (`read`, `ask_user`, `web_*`, benign orq tools, the built-in subagents),
+asks for every Bash command whatever `--auto` said, and blocks everything else, including a tool it
+has never heard of. The model hands its plan over with `exit_plan` (`src/plan.ts`), whose dialog is
+the only way out besides the user switching it off: approve and run here, approve and run in a
+fresh session (`/plan run`), or keep planning with feedback. The plan is written to
+`<agentDir>/plans/<session>.md`.
 
 `/trace` reads the router's `x-orq-trace-id` header off each response and asks `list_spans` for the
 spans, leading with the `auto-router` span when a smart router answered: that is how platform
