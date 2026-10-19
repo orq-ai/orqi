@@ -1205,6 +1205,29 @@ function routingOn(dir: string, fetchImpl: typeof fetch) {
 	return { pool: { easy: "e", medium: "m", hard: "h" }, decider, onDecision: () => () => {}, refresh: () => {} };
 }
 
+test("the routing row is greyed with the way in until orq/auto picks the model", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-routing-row-"));
+	const h = harnessOn(dir, { routing: routingOn(dir, (async () => new Response("{}")) as unknown as typeof fetch) });
+	try {
+		await h.start();
+		await h.commands.get("sidebar")!("", h.ctx);
+		const at = panelRows(h.opened.panel!).findIndex((row) => row.includes("routing"));
+		expect(panelRows(h.opened.panel!)[at]).toBe("[ ] routing  · /model orq/auto");
+		// Space on it says how to get there, and switches nothing.
+		for (let i = 0; i < at; i++) h.opened.panel!.handleInput("\x1b[B");
+		h.opened.panel!.handleInput(" ");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(h.notices.at(-1)).toContain("/model orq/auto");
+		expect(readPrefs(dir).sections.routing).toBe(true);
+		(h.ctx as { model?: unknown }).model = { provider: "orq", id: "auto" };
+		await h.commands.get("sidebar")!("", h.ctx);
+		expect(panelRows(h.opened.panel!)[at]).toBe("[x] routing");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("/decider switches for this session, --save keeps it in orqi.json, /route classifier is the same command", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-decider-"));
 	const saved = process.env.ORQI_ROUTE_CLASSIFIER;

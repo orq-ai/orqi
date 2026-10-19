@@ -113,8 +113,8 @@ memory (what memorq last published, below), process (orqi's resident memory, sam
 the render path: now, the last minute, the peak) and tips (`/tips off` hides it; `/teach` is the old
 name). Each section is an `InspectorSection` in `src/harness.ts`; bare `/sidebar` lists them with a
 checkbox each, and the choice lives in `<agentDir>/orqi.json` (`src/prefs.ts`). Process starts off;
-the rest start on. A section that cannot show (an installed memorq that is silent or too old) is
-greyed in the list with the reason, and space on it says what to do; with no memorq at all the memory
+the rest start on. A section that cannot show (an installed memorq that is silent or too old, routing while another
+model than `orq/auto` answers) is greyed in the list with the reason, and space on it says what to do; with no memorq at all the memory
 section is not listed.
 
 Memory comes from memorq, a separate pi package (orq-ai/orq-knowledge-notes) that orqi neither
