@@ -15,18 +15,19 @@
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type SectionId = "trajectory" | "signals" | "context" | "memory" | "process" | "tips";
+export type SectionId = "trajectory" | "signals" | "context" | "routing" | "memory" | "process" | "tips";
 
 /**
  * Draw order, top down. The trajectory takes the height the others leave; off, the panel is only as tall
  * as its sections. Tips last: the panel ends above the editor, and a short terminal clips it from the bottom.
  */
-export const SECTIONS: readonly SectionId[] = ["trajectory", "signals", "context", "memory", "process", "tips"];
+export const SECTIONS: readonly SectionId[] = ["trajectory", "signals", "context", "routing", "memory", "process", "tips"];
 
 export const DEFAULT_SECTIONS: Readonly<Record<SectionId, boolean>> = Object.freeze({
 	trajectory: true,
 	signals: true,
 	context: true,
+	routing: true,
 	memory: true,
 	process: false,
 	tips: true,

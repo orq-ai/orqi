@@ -104,9 +104,11 @@ the footer's cost and pi's `/session` are real numbers rather than zero.
 
 The sidebar: the trajectory on top (one row per step, the mouse wheel scrolls
 it, and it takes whatever height the rest leave; switched off, the panel is only as tall as the rest),
-then up to five sections, in this order: signals (a tool called three times with the same
+then up to six sections, in this order: signals (a tool called three times with the same
 arguments in one turn, errors, irreversible calls), the context split (system prompt, tool schemas,
 skills index, messages, as characters over four, measured after each run and never in a render),
+routing (while `orq/auto` routes: picks per slot, model switches and the cache they lost, the
+decider's calls, and an estimated saving against the default model, `src/routing-section.ts`),
 memory (what memorq last published, below), process (orqi's resident memory, sampled every 5 s off
 the render path: now, the last minute, the peak) and tips (`/tips off` hides it; `/teach` is the old
 name). Each section is an `InspectorSection` in `src/harness.ts`; bare `/sidebar` lists them with a
