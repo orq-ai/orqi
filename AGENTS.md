@@ -369,6 +369,16 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **Subagents reach the orq tools through the parent's `executeTool`.** pi connects the server in
   the parent session; a subagent's child session gets proxies (same names, same schemas) that run
   each call through `ctx.executeTool`, so no second MCP handshake and the parent's hooks apply.
+- **`/plugin update` swaps a private method on its package manager.** pi's `DefaultPackageManager`
+  runs git and npm through `spawnCommand` with `stdio: "inherit"`, which in a running session paints
+  their raw output over the TUI and leaves it looking frozen. `captureCommandOutput`
+  (`src/connection.ts`) points that one instance's `spawnCommand` at its `spawnCaptureCommand`
+  sibling, reads both pipes (an unread one would block npm), and keeps the last lines for the error
+  message. The footer names the package being updated, and the session reloads when it is done,
+  because a plugin's new code only runs once loaded. A test runs a command through `runCommand`, so
+  a pi that renames either method fails it. pi's "Package Updates Available" notice names
+  `orqi update --extensions`, which `extensionsUpdate` (`src/update.ts`) turns into
+  `orqi plugin update`.
 - **`/tools` is orqi's, not only pi's `/mcp` list.** pi's Tools view (`extensions/mcp/index.js`,
   `showTools`) is a flat list where enter and escape both go back. `/tools` reads
   `pi.getAllTools()` and opens a tool on enter: parameters first (`schemaLines`), then the full

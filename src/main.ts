@@ -72,7 +72,7 @@ import { createLocalTools, EXCLUDED_TOOLS } from "./local-tools.ts";
 import { takePermissionModeFlag } from "./permission-mode.ts";
 import { createAskUserTool } from "./ask-user.ts";
 import { createSubagentTool } from "./subagent.ts";
-import { runUpdate } from "./update.ts";
+import { extensionsUpdate, runUpdate } from "./update.ts";
 import { resolveSession } from "./resume.ts";
 import { projectTrusted, rebrandTrustWarning } from "./trust.ts";
 
@@ -115,6 +115,8 @@ if (permissionFlag.error) {
 }
 process.argv = permissionFlag.argv;
 const permissionMode = permissionFlag.mode;
+
+process.argv = extensionsUpdate(process.argv);
 
 // `orqi --session <id>` resumes a session (the command pi's quit hint names);
 // anything else in argv[2] is a one-shot prompt.

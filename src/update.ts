@@ -449,6 +449,14 @@ export async function verifyChecksum(
 }
 
 /**
+ * pi's "Package Updates Available" notice names `orqi update --extensions`. orqi's own `update`
+ * swaps the binary and refuses the flag, so that exact command becomes `orqi plugin update`.
+ */
+export function extensionsUpdate(argv: string[]): string[] {
+	return argv.length === 4 && argv[2] === "update" && argv[3] === "--extensions" ? [...argv.slice(0, 2), "plugin", "update"] : argv;
+}
+
+/**
  * `orqi update`'s entry point; returns a process exit code.
  *
  * Deliberately never auto-updates: this is the only path that writes to

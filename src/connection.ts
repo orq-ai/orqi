@@ -171,7 +171,37 @@ async function showPanel(ctx: unknown, spec: PanelSpec, width = "70%"): Promise<
 	return true;
 }
 
+/**
+ * Keeps a pi package manager's git and npm output off the terminal. pi runs them with the terminal
+ * as their output (`stdio: "inherit"`), which in a running session paints raw text over the TUI and
+ * leaves it looking frozen. This swaps that one instance's private `spawnCommand` for its captured
+ * sibling and keeps the last lines, so a failure can still say what went wrong. A pi that renames
+ * either method fails the test that runs a command through it.
+ */
+export function captureCommandOutput(pm: object, keep = 12): () => string {
+	type Child = { stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null };
+	const host = pm as { spawnCommand: unknown; spawnCaptureCommand: (command: string, args: string[], options?: unknown) => Child };
+	let lines: string[] = [];
+	const collect = (data: Buffer | string) => {
+		lines = [
+			...lines,
+			...String(data)
+				.split(/\r?\n|\r/)
+				.filter((line) => line.trim()),
+		].slice(-keep);
+	};
+	host.spawnCommand = (command: string, args: string[], options?: unknown) => {
+		const child = host.spawnCaptureCommand(command, args, options);
+		// Both pipes are read to the end, or a chatty npm would block on a full buffer.
+		child.stdout?.on("data", collect);
+		child.stderr?.on("data", collect);
+		return child;
+	};
+	return () => lines.join("\n");
+}
+
 const HEADER_ENTRY = "orqi-header";
+const PLUGIN_STATUS = "orqi-plugin";
 const WORKSPACE_STATUS = "orq-workspace";
 const AUTH_WIDGET = "orq-auth";
 const UPDATE_WIDGET = "orqi-update";
@@ -810,8 +840,24 @@ export function orqCommands(
 						if (pkgs.length === 0) ctx.ui.notify("No plugins installed. Run: orqi plugin install <source>");
 						else ctx.ui.notify(pkgs.map((p) => `  ${p.source} [${p.scope}]${p.installedPath ? ` -> ${p.installedPath}` : ""}`).join("\n"));
 					} else if (cmd === "update") {
-						await pm.update(src);
-						ctx.ui.notify(src ? `Updated ${src}` : "Updated plugins");
+						const output = captureCommandOutput(pm);
+						const what = src ?? "plugins";
+						// The footer says what is running, so a git fetch that takes a while does not read as a hang.
+						pm.setProgressCallback((event) => {
+							if (event.type === "start") ctx.ui.setStatus(PLUGIN_STATUS, `updating ${event.source}…`);
+						});
+						ctx.ui.setStatus(PLUGIN_STATUS, `updating ${what}…`);
+						try {
+							await pm.update(src);
+						} catch (e) {
+							const tail = output();
+							throw new Error(`Could not update ${what}: ${e instanceof Error ? e.message : String(e)}${tail ? `\n${tail}` : ""}`);
+						} finally {
+							ctx.ui.setStatus(PLUGIN_STATUS, undefined);
+						}
+						// A plugin's new code only runs once loaded again, so reload now rather than leave a step to remember.
+						ctx.ui.notify(`Updated ${what}. Reloading…`);
+						await ctx.reload();
 					} else {
 						ctx.ui.notify("Usage: /plugin [list|update [source]] — or run orqi plugin install|remove outside");
 					}

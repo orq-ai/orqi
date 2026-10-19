@@ -28,6 +28,7 @@ import {
 } from "./auth.ts";
 import {
 	authLines,
+	captureCommandOutput,
 	LOGIN_CTA,
 	LOGIN_REFUSED,
 	NO_CREDENTIAL,
@@ -943,4 +944,22 @@ test("main.ts builds orqCommands once, so its connection state outlives /new, /r
 	expect(body.length).toBeGreaterThan(0);
 	expect(body).not.toContain("orqCommands(");
 	expect(source).toContain("const commands = orqCommands(");
+});
+
+test("a plugin update's git and npm output is captured, not painted over the TUI", async () => {
+	const { DefaultPackageManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+	const dir = mkdtempSync(join(tmpdir(), "orqi-plugin-"));
+	try {
+		const pm = new DefaultPackageManager({ cwd: dir, agentDir: dir, settingsManager: SettingsManager.inMemory() });
+		const output = captureCommandOutput(pm, 2);
+		// runCommand is the one path pi's git and npm calls take; a pi that renames it fails here.
+		const run = (pm as unknown as { runCommand(command: string, args: string[]): Promise<void> }).runCommand.bind(pm);
+		// Only the last lines are kept (one stream here, so their order is fixed).
+		await run("sh", ["-c", "echo one; echo two; echo three"]);
+		expect(output()).toBe("two\nthree");
+		await expect(run("sh", ["-c", "echo nope >&2; exit 3"])).rejects.toThrow("failed with code 3");
+		expect(output()).toContain("nope");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
