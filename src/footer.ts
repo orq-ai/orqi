@@ -154,13 +154,21 @@ function footerBand(state: FooterState, width: number, paint: Paint, wide: boole
 	if (wide && state.tools > 0) right.push(paint.dim(`${state.tools} tools`));
 	// pi reports a detached HEAD as "detached"; Conductor-style worktree branches carry a generated prefix.
 	const branch = state.branch === "detached" && state.git?.detached ? `@${state.git.detached}` : state.branch?.replace(/^worktree\//, "");
-	if (branch) right.push(paint.dim(branch) + (state.git?.badges ? ` ${paint.text(state.git.badges)}` : ""));
+	const badges = state.git?.badges ? ` ${paint.text(state.git.badges)}` : "";
+	if (branch) right.push(paint.dim(branch) + badges);
 
 	const l = ` ${left.join(sep)}`;
 	const r = `${right.join(sep)} `;
 	const gap = width - visibleWidth(l) - visibleWidth(r);
 	if (gap >= 2) return `${l}${" ".repeat(gap)}${r}`;
-	return cut ? truncateToWidth(`${l}${sep}${r}`, width) : undefined;
+	if (!cut) return undefined;
+	// Nothing fits even in the narrowest band: shorten the branch name, not the git state after it.
+	const over = visibleWidth(l) + visibleWidth(sep) + visibleWidth(r) - width;
+	if (branch && over > 0 && branch.length - over - 1 >= 4) {
+		right[right.length - 1] = paint.dim(`${branch.slice(0, branch.length - over - 1)}…`) + badges;
+		return `${l}${sep}${right.join(sep)} `;
+	}
+	return truncateToWidth(`${l}${sep}${r}`, width);
 }
 
 /** Other extensions' statuses as one line under the footer, or nothing when there are none. */

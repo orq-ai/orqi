@@ -523,6 +523,21 @@ test("footerLine: a long branch keeps its git badges by dropping the sparkline a
 	expect(footerLine({ ...state, branch: "main" }, 150)).toContain("49 tools");
 });
 
+test("footerLine: when nothing fits, the branch name is shortened and the git state stays", () => {
+	const state = {
+		input: 0,
+		output: 0,
+		cost: 0.1,
+		samples: [],
+		tools: 0,
+		branch: "arianpasquali/orqi-component-review",
+		git: { badges: "MERGING !1 ~2" },
+	};
+	const line = footerLine({ ...state, workspace: "orq:acme", selection: "openai/gpt-5.6-terra" }, 70);
+	expect(line).toEndWith("… MERGING !1 ~2 ");
+	expect(visibleWidth(line)).toBeLessThanOrEqual(70);
+});
+
 test("footer git badges: a refresh that fails after a newer one finished leaves the newer badges", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-footer-git-"));
 	const calls: { args: string[]; ok: (out: { stdout: string; code: number }) => void; fail: (error: Error) => void }[] = [];

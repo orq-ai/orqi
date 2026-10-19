@@ -417,7 +417,7 @@ export function orqHarness(deps: HarnessDeps) {
 		let reserveTokens = 16_384;
 		let headerShown = false;
 		let statusOf: (key: string) => string | undefined = () => undefined;
-		let lastFooter: string[] = [];
+		let lastFooter: string[] = [""];
 		let git: GitSummary | undefined;
 		let gitDir: string | undefined;
 		let gitRun = 0;
