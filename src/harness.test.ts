@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import { startupTheme, VERSION } from "./branding.ts";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -2867,6 +2867,35 @@ test("/route explain says how orq/auto decides in plain words; /route questions 
 		expect(questions).toContain("Classify whether doing what this request asks can be undone");
 		expect(questions).not.toMatch(/RES-\d|general_v2|evaluatorq/);
 	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("review: a slot whose saved pick cannot be cleared says so instead of claiming auto", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-route-clear-"));
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6, cost: { input: 4, output: 20, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6, cost: { input: 2, output: 12, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1, cost: { input: 0.2, output: 1.2, cacheRead: 0, cacheWrite: 0 } },
+		{ id: "anthropic/claude-opus-5", intelligence: 60.7, cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 } },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra", undefined, undefined, () => readPrefs(dir).routeModels ?? {});
+	const h = harnessOn(dir, { routing, catalogue });
+	const route = h.commands.get("route")!;
+	try {
+		await h.start();
+		await route("models frontier anthropic/claude-opus-5 --save", h.ctx);
+		expect(routing.source("hard")).toBe("saved");
+		// orqi.json cannot be replaced: the agent dir is read-only.
+		chmodSync(dir, 0o500);
+		await route("models frontier auto", h.ctx);
+		expect(routing.pool.hard).toBe("anthropic/claude-opus-5");
+		expect(h.notices.at(-1)).not.toContain("back to auto");
+		expect(h.notices.at(-1)).toContain("frontier is still anthropic/claude-opus-5: the saved pick could not be cleared");
+	} finally {
+		chmodSync(dir, 0o700);
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}

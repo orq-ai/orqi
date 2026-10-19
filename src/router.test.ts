@@ -620,3 +620,13 @@ test("review: a choice answer without probabilities never triggers the unsure ru
 		policy({ reason: "user", text: "x", state: { tier: "hard", model: "m" }, classified: {} as Record<Tier, number> }, 0.5).why,
 	).toBeUndefined();
 });
+
+test("review: orq/auto advertises the smallest output limit of its three models, as it does the window", () => {
+	const registered: any[] = [];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: (v: any) => registered.push(v) };
+	const limits = CATALOGUE.map((model) => ({ ...model, maxTokens: model.id.startsWith("anthropic/") ? 32_000 : 128_000 }));
+	const routing = registerRouting(runtime, limits, "openai/gpt-5.6-terra");
+	expect(registered.at(-1).maxTokens).toBe(128_000);
+	routing.pick("easy", "anthropic/claude-opus-5");
+	expect(registered.at(-1).maxTokens).toBe(32_000);
+});

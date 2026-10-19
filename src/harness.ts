@@ -1437,8 +1437,13 @@ export function orqHarness(deps: HarnessDeps) {
 				if (fresh) await pi.setModel(fresh).catch(() => false);
 			}
 			const model = routing.pool[tier];
-			const how = !id ? `back to auto → ${model}` : `→ ${model}${save && !lines.length ? " · saved" : " (this session)"}`;
-			lines.unshift(`${SLOTS[tier]} ${how}`);
+			// Clearing a saved pick that could not be written leaves it in force: say so rather than "auto".
+			const head = !id
+				? routing.source(tier) === "saved"
+					? `${SLOTS[tier]} is still ${model}: the saved pick could not be cleared`
+					: `${SLOTS[tier]} back to auto → ${model}`
+				: `${SLOTS[tier]} → ${model}${save && !lines.length ? " · saved" : " (this session)"}`;
+			lines.unshift(head);
 			if (routing.source(tier) === "env") lines.push(`ORQI_ROUTE_POOL sets ${tier}, so ${routing.pool[tier]} answers until it is unset`);
 			const warning = priceWarning(routing.pool, deps.catalogue());
 			if (warning) lines.push(`⚠ ${warning}`);
@@ -1507,7 +1512,9 @@ export function orqHarness(deps: HarnessDeps) {
 						a: (i) => {
 							const tier = TIERS[i];
 							if (!tier) return false;
-							void setRung(ctx, tier, undefined, false).then(() => live?.update(spec()));
+							void setRung(ctx, tier, undefined, false)
+								.catch((error) => ctx.ui.notify(`Could not change ${SLOTS[tier]}: ${(error as Error).message}`, "warning"))
+								.finally(() => live?.update(spec()));
 							return false;
 						},
 					},

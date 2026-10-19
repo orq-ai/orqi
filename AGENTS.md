@@ -220,8 +220,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   both. `ORQI_ROUTE_POOL` outranks a pick and is named as the source; a saved id this workspace lacks
   falls through without being erased, and session picks outlive a catalogue refresh, as the decider's
   do. A pick whose prices run backwards (fast dearer than frontier) is warned about, never refused. The
-  virtual model's context window is the smallest of the three, because any of them may answer and a
-  picked one can be another provider's.
+  virtual model's context window and output limit are the smallest of the three, because any of them
+  may answer and a picked one can be another provider's.
 - **A dry run still pays for the decider.** `/route dry on` (or `ORQI_ROUTE_DRY_RUN=1`) asks the
   decider on every user turn and answers on the default slot, so a user can see what `orq/auto` would
   have picked (the route line's `· would <model>`, `/route explain`'s per-slot counts) before trusting

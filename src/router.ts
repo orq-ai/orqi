@@ -419,17 +419,20 @@ export function registerRouting(
 	/**
 	 * Register (again) the virtual model with limits for the rungs as they are now. pi replaces a
 	 * virtual model registered again under the same id, so a pick or a fresher catalogue moves them.
-	 * Any rung may answer, and a picked one can be another provider's: the smallest window is the one to plan for.
+	 * Any rung may answer, and a picked one can be another provider's: the smallest window and the smallest
+	 * output limit are the ones to plan for.
 	 */
 	function advertise() {
-		const windows = TIERS.map((tier) => current.find((model) => model.id === routing.pool[tier])?.contextWindow).filter(
-			(window): window is number => window !== undefined,
-		);
-		const hard = current.find((model) => model.id === routing.pool.hard);
+		const smallest = (limit: "contextWindow" | "maxTokens") => {
+			const known = TIERS.map((tier) => current.find((model) => model.id === routing.pool[tier])?.[limit]).filter(
+				(value): value is number => value !== undefined,
+			);
+			return known.length ? Math.min(...known) : undefined;
+		};
 		runtime.registerVirtualModel({
 			...definition,
-			contextWindow: windows.length ? Math.min(...windows) : hard?.contextWindow,
-			maxTokens: hard?.maxTokens,
+			contextWindow: smallest("contextWindow"),
+			maxTokens: smallest("maxTokens"),
 		});
 	}
 
