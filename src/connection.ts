@@ -91,8 +91,6 @@ export const ORQI_COMMANDS = [
 	"decider",
 	"tools",
 	"skills",
-	"teach",
-	"tips",
 	"context",
 	"plan",
 	"handoff",

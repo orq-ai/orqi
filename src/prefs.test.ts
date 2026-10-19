@@ -16,15 +16,15 @@ test("prefs default, survive garbage, round-trip and ignore unknown ids", () => 
 		expect(readPrefs(dir).sections.process).toBe(false);
 		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { process: true, bogus: true } }));
 		expect(readPrefs(dir).sections).toEqual({ ...DEFAULT_SECTIONS, process: true });
-		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS, tips: false } });
-		expect(readPrefs(dir).sections.tips).toBe(false);
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS, memory: false } });
+		expect(readPrefs(dir).sections.memory).toBe(false);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
-test("the draw order ends with tips, and process starts off", () => {
-	expect(SECTIONS).toEqual(["trajectory", "signals", "context", "routing", "memory", "process", "tips"]);
+test("the draw order ends with process, which starts off", () => {
+	expect(SECTIONS).toEqual(["trajectory", "signals", "context", "routing", "memory", "process"]);
 	expect(DEFAULT_SECTIONS).toEqual({
 		trajectory: true,
 		signals: true,
@@ -32,7 +32,6 @@ test("the draw order ends with tips, and process starts off", () => {
 		routing: true,
 		memory: true,
 		process: false,
-		tips: true,
 	});
 });
 
@@ -46,8 +45,8 @@ test("orqi.json that is missing, unreadable or the wrong shape reads as the defa
 			expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS });
 		}
 		// A value that is not a boolean is not a choice: that id keeps its default.
-		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { context: "no", process: 1, tips: false } }));
-		expect(readPrefs(dir).sections).toEqual({ ...DEFAULT_SECTIONS, tips: false });
+		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { context: "no", process: 1, memory: false } }));
+		expect(readPrefs(dir).sections).toEqual({ ...DEFAULT_SECTIONS, memory: false });
 		// Unreadable: a directory where the file should be.
 		rmSync(join(dir, "orqi.json"));
 		mkdirSync(join(dir, "orqi.json"));

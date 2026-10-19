@@ -3,7 +3,7 @@
  * /tools /context /skills /cost /whatsnew /agent /agents. Each reads the
  * session's state and shows it, in a panel or the browser; none of them
  * changes what the harness tracks, so they take that state as an argument
- * rather than living in its closure. /route, /teach and /sidebar own state and
+ * rather than living in its closure. /route and /sidebar own state and
  * stay in harness.ts.
  */
 

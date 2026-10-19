@@ -93,10 +93,10 @@ export const SIGN_IN = [
 	"  or run `orq auth login` in another terminal; orqi picks it up on your next message.",
 ];
 
-/** The orqi views worth knowing on day one: what the harness adds, then the workspace. Each fits 80 columns. */
-const VIEWS = [
-	"/plan · /handoff · /route · /context · /btw · /trajectory · alt+s sidebar",
-	"/agents · /trace · /overview · /garden · /cost · /skills · /learn · /whatsnew",
+/** The commands worth knowing on day one, under a heading each: what the harness adds, then the orq.ai platform. */
+const VIEWS: readonly (readonly [string, string])[] = [
+	["Harness commands", "/plan · /handoff · /route · /context · /cost · /btw · alt+s sidebar"],
+	["orq.ai platform commands", "/agents · /trace · /overview · /garden · /skills · /learn · /whatsnew"],
 ];
 
 export const CHANGELOG_URL = "https://docs.orq.ai/docs/changelog/";
@@ -136,7 +136,11 @@ export function headerLines(info: HeaderInfo): string[] {
 		"",
 		...(info.signedOut ? SIGN_IN.map((line, i) => color(line, i === 0 ? TEXT : MUTED)) : PITCH.map((line) => color(line, MUTED))),
 	];
-	const footer = ["", ...[...VIEWS, HINTS].map((line) => `${indent}${color(line, MUTED)}`)];
+	const footer = [
+		"",
+		...VIEWS.flatMap(([title, line]) => [`${indent}${color(title, TEXT)}`, `${indent}  ${color(line, MUTED)}`, ""]),
+		`${indent}${color(HINTS, MUTED)}`,
+	];
 	const logo = ORQI_LOGO.map((row) => {
 		return color(row, PULSE_ORANGE);
 	});

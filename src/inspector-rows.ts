@@ -2,7 +2,7 @@
  * The sidebar's rows, pure: one row per trajectory step, so the shape of a
  * session (who spoke, which tools ran, where a subagent went, what the router
  * picked) is visible at a glance while the transcript scrolls, then the
- * signals, context and teach sections below it.
+ * sections below it.
  *
  * Where they are drawn is `attachMinimap` in harness.ts: a fixed side column
  * beside the transcript in fullscreen, a non-capturing overlay on the right
@@ -48,9 +48,9 @@ function descendants(step: Step): number {
 
 /**
  * One row, exactly `width` columns. `current` gets the `▌` gutter, `frame`
- * animates a running step, `marked` adds the `▸` of the step a teach card is about.
+ * animates a running step.
  */
-export function minimapRow(step: Step, width: number, current: boolean, frame = 0, paint: RowPaint = plainRows, marked = false): string {
+export function minimapRow(step: Step, width: number, current: boolean, frame = 0, paint: RowPaint = plainRows): string {
 	const running = step.status === "running";
 	const glyph = running && step.role !== "user" ? SPINNER[frame % SPINNER.length]! : GLYPH[step.role];
 	const outcome = running ? "" : step.status === "error" ? " ✗" : step.role === "tool" || step.role === "subagent" ? " ✓" : "";
@@ -72,7 +72,6 @@ export function minimapRow(step: Step, width: number, current: boolean, frame = 
 		default:
 			body = step.detail || (step.role === "assistant" ? (running ? "streaming…" : "(tool calls)") : "");
 	}
-	if (marked) body += " ▸";
 	const gutter = current ? paint.bright("▌") : " ";
 	const tone = step.status === "error" ? paint.error : step.role === "user" ? paint.bright : step.role === "tool" ? paint.dim : paint.text;
 	// A managed agent's reply reads as the agent's, not orqi's.
@@ -98,15 +97,12 @@ export function minimapRows(
 	selected?: number,
 	frame = 0,
 	paint: RowPaint = plainRows,
-	marked?: number,
 ): string[] {
 	if (steps.length === 0) return [paint.dim(fit(" no steps yet", width))];
 	const current = selected ?? steps.length - 1;
 	const end = Math.max(Math.min(steps.length, current + 1), Math.min(steps.length, height));
 	const start = Math.max(0, Math.min(current, end - height));
-	return steps
-		.slice(start, start + height)
-		.map((step, i) => minimapRow(step, width, start + i === current, frame, paint, step.id === marked));
+	return steps.slice(start, start + height).map((step, i) => minimapRow(step, width, start + i === current, frame, paint));
 }
 
 /** The panel's own footer: `15 steps · turn 3 · $0.113`, and `· ⚠ N` while a warning fires. */

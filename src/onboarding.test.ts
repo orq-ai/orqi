@@ -127,8 +127,8 @@ test("the header names the day-one views", () => {
 		.join("\n")
 		.replace(/\x1b\[[0-9;]*m/g, "");
 	expect(text).toContain("orqi (aka TonyBot) v0.2.0");
-	expect(text).toContain("/plan · /handoff · /route · /context · /btw · /trajectory · alt+s sidebar");
-	expect(text).toContain("/agents · /trace · /overview · /garden · /cost · /skills · /learn · /whatsnew");
+	expect(text).toContain("Harness commands\n    /plan · /handoff · /route · /context · /cost · /btw · alt+s sidebar");
+	expect(text).toContain("orq.ai platform commands\n    /agents · /trace · /overview · /garden · /skills · /learn · /whatsnew");
 	// Each fits an 80-column terminal with its indent.
 	expect(
 		text
