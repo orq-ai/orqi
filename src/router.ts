@@ -273,6 +273,22 @@ export function logRoute(path: string, text: string, state: RouteState): void {
 	);
 }
 
+/** How much of the newest message the decider reads. */
+export const PROMPT_CHARS = 16_000;
+
+/**
+ * `text` within `max` characters, keeping its start and its end around an
+ * omission marker: the actual ask often follows a pasted log or file.
+ */
+export function clipMiddle(text: string, max: number): string {
+	if (text.length <= max) return text;
+	const marker = (omitted: number) => `\n\n[… ${omitted} characters omitted …]\n\n`;
+	const budget = Math.max(0, max - marker(text.length).length);
+	const head = Math.ceil(budget / 2);
+	const tail = budget - head;
+	return `${text.slice(0, head)}${marker(text.length - head - tail)}${text.slice(text.length - tail)}`;
+}
+
 /** Text of the newest user message in a request's transcript. */
 export function lastUserText(messages: readonly { role: string; content?: unknown }[]): string {
 	const content = [...messages].reverse().find((message) => message.role === "user")?.content;
@@ -418,7 +434,7 @@ export function registerRouting(
 					try {
 						const result = await decider.decide(
 							"router",
-							{ state: { prompt: text.slice(0, 16_000) }, questions: { difficulty: DIFFICULTY_QUESTION, door: DOOR_QUESTION } },
+							{ state: { prompt: clipMiddle(text, PROMPT_CHARS) }, questions: { difficulty: DIFFICULTY_QUESTION, door: DOOR_QUESTION } },
 							request.signal,
 						);
 						const answer = result.answers.difficulty;

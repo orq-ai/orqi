@@ -18,6 +18,7 @@ import {
 	policy,
 	registerRouting,
 	autoReason,
+	clipMiddle,
 	priceWarning,
 	routePool,
 	tierOf,
@@ -455,4 +456,16 @@ test("review fixes: a session pick the refreshed catalogue lacks is set aside, a
 	const regional: ModelInfo[] = [...CATALOGUE, { id: "openai/eu.gpt-9", intelligence: 99 }];
 	expect(routePool(regional, "openai/gpt-5.6-terra").hard).toBe("openai/gpt-5.6-sol");
 	expect(autoReason(regional, "openai/gpt-5.6-terra", "hard")).toBe("highest-scoring openai model (gpt-5.6-sol 53.6)");
+});
+
+test("long prompts keep their start and end", () => {
+	expect(clipMiddle("short", 100)).toBe("short");
+	const exact = "x".repeat(100);
+	expect(clipMiddle(exact, 100)).toBe(exact);
+	const long = `${"A".repeat(500)}${"m".repeat(10_000)}${"Z".repeat(500)}`;
+	const clipped = clipMiddle(long, 2_000);
+	expect(clipped.length).toBeLessThanOrEqual(2_000);
+	expect(clipped.startsWith("A".repeat(500))).toBe(true);
+	expect(clipped.endsWith("Z".repeat(500))).toBe(true);
+	expect(clipped).toMatch(/\[… \d+ characters omitted …\]/);
 });
