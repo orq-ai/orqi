@@ -144,10 +144,15 @@ const BARS = "▁▂▃▄▅▆▇█";
  *   route › medium  ▁▅▂   easy .12 · medium .71 · hard .17   → gpt-5.6-terra   jev 0.6 s $0.00003
  */
 export function routeLine(
-	decision: Pick<Decision, "tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP">,
+	decision: Pick<
+		Decision,
+		"tier" | "probabilities" | "why" | "model" | "latencyMs" | "cost" | "classifier" | "arrow" | "door" | "doorP" | "would"
+	>,
 ): string {
 	// How hard the message was, then the slot that answers it: `easy → fast`.
-	const tier = `${decision.tier} → ${SLOTS[decision.tier]}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(18);
+	// In a dry run the head is what the decision named, and the tail what answered instead.
+	const named = decision.would?.tier ?? decision.tier;
+	const tier = `${named} → ${SLOTS[named]}${decision.would ? " (dry run)" : ""}${decision.arrow ? ` ${decision.arrow}` : ""}`.padEnd(18);
 	const p = decision.probabilities;
 	const short = (n: number) => n.toFixed(2).replace(/^0/, "");
 	// A door that sent the turn to hard reads with its confidence: `door: one_way .94`.
@@ -165,7 +170,20 @@ export function routeLine(
 		: "";
 	const timing =
 		decision.latencyMs !== undefined ? `   ${classifier} ${(decision.latencyMs / 1000).toFixed(1)} s ${dollars(decision.cost ?? 0)}` : "";
-	return `route › ${tier} ${middle}${why}   → ${shortModel(decision.model)}${timing}`;
+	const would = decision.would ? ` · would ${shortModel(decision.would.model)}` : "";
+	return `route › ${tier} ${middle}${why}   → ${shortModel(decision.model)}${would}${timing}`;
+}
+
+/**
+ * A routing decision as a trajectory row, live or replayed: `easy` / `→ fast · luna`, and in a dry run
+ * `easy (dry)` / `→ default · terra · would fast`. An entry written before dry runs has no `would`.
+ */
+export function routeRow(d: Pick<Decision, "tier" | "model" | "arrow" | "fallback" | "would">): { label: string; detail: string } {
+	const named = d.would?.tier ?? d.tier;
+	return {
+		label: `${named}${d.would ? " (dry)" : ""}${d.arrow ? ` ${d.arrow}` : ""}${d.fallback ? " (fallback)" : ""}`,
+		detail: `→ ${SLOTS[d.tier] ?? d.tier} · ${shortModel(d.model)}${d.would ? ` · would ${SLOTS[d.would.tier]}` : ""}`,
+	};
 }
 
 const WORKSPACE_STATUS = "orq-workspace";
@@ -1293,11 +1311,14 @@ export function orqHarness(deps: HarnessDeps) {
 			if (!routeShown || !entry.data) return undefined;
 			return new Text(theme.fg("dim", routeLine(entry.data)), 1, 0);
 		});
+		/** What the decider named on each user turn this session, dry run or not: `/route explain` counts them. */
+		const picks: Record<Tier, number> = { easy: 0, medium: 0, hard: 0 };
 		const stopDecisions = deps.routing?.onDecision((decision) => {
 			const usage = decision.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: decision.cost } : undefined;
 			// A fallback is the default rung, not a judgement: say so where the decision is listed.
-			const label = `${decision.tier}${decision.arrow ? ` ${decision.arrow}` : ""}${decision.fallback ? " (fallback)" : ""}`;
-			trajectory.route(label, `→ ${SLOTS[decision.tier]} · ${shortModel(decision.model)}`, usage, decision.latencyMs, decision.classifier);
+			const { label, detail } = routeRow(decision);
+			trajectory.route(label, detail, usage, decision.latencyMs, decision.classifier);
+			if (decision.reason === "user") picks[decision.would?.tier ?? decision.tier] += 1;
 			try {
 				pi.appendEntry(ROUTE_ENTRY, decision);
 			} catch {
@@ -1519,7 +1540,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerCommand("route", {
 			description:
-				"orq/auto routing: /route on|off shows the route line, /route explain the question and models, /route models picks the fast, default and frontier models, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
+				"orq/auto routing: /route on|off shows the route line, /route explain the question and models, /route models picks the fast, default and frontier models, /route dry on|off shows its picks without following them, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
 			handler: async (args, ctx) => {
 				const routing = deps.routing;
 				const arg = args.trim();
@@ -1572,6 +1593,20 @@ export function orqHarness(deps: HarnessDeps) {
 					await chooseDecider(arg.slice("classifier".length), ctx, "/route classifier");
 					return;
 				}
+				if (arg === "dry" || arg.startsWith("dry ")) {
+					const want = arg.slice("dry".length).trim();
+					if (want !== "on" && want !== "off") {
+						ctx.ui.notify(`usage: /route dry on|off (now ${routing.dryRun ? "on" : "off"})`, "warning");
+						return;
+					}
+					routing.dryRun = want === "on";
+					ctx.ui.notify(
+						routing.dryRun
+							? `Dry run on: orq/auto still asks the decider but answers every turn on ${shortModel(routing.pool.medium)}; the route line shows what it would have picked.`
+							: "Dry run off: orq/auto answers with the model it picks.",
+					);
+					return;
+				}
 				if (arg === "models" || arg.startsWith("models ")) {
 					await chooseModels(arg.slice("models".length), ctx);
 					return;
@@ -1587,6 +1622,7 @@ export function orqHarness(deps: HarnessDeps) {
 							`  ${DOOR_QUESTION.instructions}`,
 							...Object.entries(DOOR_QUESTION.criteria).map(([door, text]) => `  ${door.padEnd(7)} ${text}`),
 							`models   ${pool}`,
+							`dry run  ${routing.dryRun ? "on" : "off"}${picks.easy + picks.medium + picks.hard ? ` · this session's picks: ${TIERS.map((t) => `${SLOTS[t]} ${picks[t]}`).join(" · ")}` : ""}`,
 							`decider  ${routing.decider.id ?? "none"}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
 							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
 							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
@@ -1597,7 +1633,7 @@ export function orqHarness(deps: HarnessDeps) {
 					);
 					return;
 				}
-				ctx.ui.notify("usage: /route on|off|explain|models|classifier [id] [--save]|platform", "warning");
+				ctx.ui.notify("usage: /route on|off|explain|models|dry on|off|classifier [id] [--save]|platform", "warning");
 			},
 		});
 
@@ -1813,12 +1849,12 @@ function branchMessages(ctx: ExtensionContext): any[] {
 		if (entry.type === "message") return [entry.message];
 		if (entry.type === "custom" && entry.customType === ROUTE_ENTRY && entry.data) {
 			const d = entry.data as Decision;
-			const label = `${d.tier}${d.arrow ? ` ${d.arrow}` : ""}`;
+			const { label, detail } = routeRow(d);
 			return [
 				{
 					role: "route",
 					label,
-					detail: `→ ${SLOTS[d.tier] ?? d.tier} · ${shortModel(d.model)}`,
+					detail,
 					usage: d.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: d.cost } : undefined,
 					durationMs: d.latencyMs,
 					model: d.classifier,

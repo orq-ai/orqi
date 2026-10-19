@@ -167,6 +167,8 @@ export function priceWarning(pool: Pool, catalogue: ModelInfo[]): string | undef
 // ── the policy ─────────────────────────────────────────────────────────────
 
 export interface RouteState {
+	/** In a dry run, the rung and model the decision named, when the default answered instead. */
+	would?: { tier: Tier; model: string };
 	tier: Tier;
 	model: string;
 	probabilities?: Record<Tier, number>;
@@ -328,6 +330,11 @@ export interface Routing {
 	decider: Decider;
 	/** Returns the unsubscribe: each session's harness listens, and stops when that session ends. */
 	onDecision(listener: (decision: Decision) => void): () => void;
+	/**
+	 * Dry run: the decider is asked (and paid for) on every user turn, but the default slot answers and
+	 * the decision is only shown. `ORQI_ROUTE_DRY_RUN=1` starts with it on; `/route dry` switches it.
+	 */
+	dryRun: boolean;
 	/** Recompute the pool and the decider from a fresher catalogue (after a first sign-in). */
 	refresh(catalogue: ModelInfo[]): void;
 }
@@ -389,6 +396,7 @@ export function registerRouting(
 			recompute();
 		},
 		decider,
+		dryRun: process.env.ORQI_ROUTE_DRY_RUN === "1",
 		onDecision: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
@@ -480,13 +488,17 @@ export function registerRouting(
 				classified,
 				door: door?.door,
 			});
-			const model = runtime.getModel("orq", pool()[decision.tier]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
-			if (!model) throw new Error(`orq/auto: no model for the ${decision.tier} rung (${pool()[decision.tier]})`);
+			// A dry run answers on the default slot; retries still escalate, or an overflow would fail the turn.
+			const dry = routing.dryRun && request.reason === "user" && decision.tier !== "medium";
+			const tier: Tier = dry ? "medium" : decision.tier;
+			const model = runtime.getModel("orq", pool()[tier]) ?? runtime.getModel("orq", pool().medium) ?? request.previous?.model;
+			if (!model) throw new Error(`orq/auto: no model for the ${tier} rung (${pool()[tier]})`);
 			const changed = request.reason === "user" || (request.reason === "retry" && decision.arrow);
 			if (!changed) return { model, thinkingLevel: request.thinkingLevel };
 			const next: RouteState = {
-				tier: decision.tier,
+				tier,
 				model: model.id,
+				...(dry ? { would: { tier: decision.tier, model: pool()[decision.tier] } } : {}),
 				...(classified && !("error" in classified) ? { probabilities: classified } : {}),
 				...(decision.why ? { why: decision.why } : {}),
 				...(cost !== undefined ? { cost } : {}),

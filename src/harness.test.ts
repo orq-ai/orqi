@@ -10,7 +10,7 @@ import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, gitBadges, gitOperation, headerBar, hostLabel, sparkline, statusLine, tokens } from "./footer.ts";
-import { exitSummary, orqHarness, repoOf, reserveFor, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
+import { exitSummary, orqHarness, repoOf, reserveFor, routeRow, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
@@ -2783,6 +2783,52 @@ test("/route models sets a slot by typing: this session, --save into orqi.json, 
 		await h.stop();
 		if (env === undefined) delete process.env.ORQI_ROUTE_POOL;
 		else process.env.ORQI_ROUTE_POOL = env;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an old route entry replays without would; a dry one names both", () => {
+	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra" })).toEqual({ label: "medium", detail: "→ default · gpt-5.6-terra" });
+	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra", fallback: true })).toEqual({
+		label: "medium (fallback)",
+		detail: "→ default · gpt-5.6-terra",
+	});
+	expect(routeRow({ tier: "medium", model: "openai/gpt-5.6-terra", would: { tier: "easy", model: "openai/gpt-5.6-luna" } })).toEqual({
+		label: "easy (dry)",
+		detail: "→ default · gpt-5.6-terra · would fast",
+	});
+});
+
+test("/route dry on|off switches it for the session and says so", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-route-dry-"));
+	const env = process.env.ORQI_ROUTE_DRY_RUN;
+	delete process.env.ORQI_ROUTE_DRY_RUN;
+	const catalogue: ModelInfo[] = [
+		{ id: "openai/gpt-5.6-sol", intelligence: 53.6 },
+		{ id: "openai/gpt-5.6-terra", intelligence: 45.6 },
+		{ id: "openai/gpt-5.6-luna", intelligence: 38.1 },
+	];
+	const runtime = { getModel: () => undefined, registerProvider: () => {}, registerVirtualModel: () => {} };
+	const routing = registerRouting(runtime, catalogue, "openai/gpt-5.6-terra");
+	const h = harnessOn(dir, { routing, catalogue });
+	const route = h.commands.get("route")!;
+	try {
+		await h.start();
+		expect(routing.dryRun).toBe(false);
+		await route("dry on", h.ctx);
+		expect(routing.dryRun).toBe(true);
+		expect(h.notices.at(-1)).toContain("Dry run on: orq/auto still asks the decider but answers every turn on gpt-5.6-terra");
+		await route("explain", h.ctx);
+		expect(h.notices.at(-1)).toContain("dry run  on");
+		await route("dry", h.ctx);
+		expect(h.notices.at(-1)).toContain("usage: /route dry on|off (now on)");
+		await route("dry off", h.ctx);
+		expect(routing.dryRun).toBe(false);
+		expect(h.notices.at(-1)).toContain("Dry run off");
+	} finally {
+		await h.stop();
+		if (env === undefined) delete process.env.ORQI_ROUTE_DRY_RUN;
+		else process.env.ORQI_ROUTE_DRY_RUN = env;
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

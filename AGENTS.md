@@ -222,6 +222,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   do. A pick whose prices run backwards (fast dearer than frontier) is warned about, never refused. The
   virtual model's context window is the smallest of the three, because any of them may answer and a
   picked one can be another provider's.
+- **A dry run still pays for the decider.** `/route dry on` (or `ORQI_ROUTE_DRY_RUN=1`) asks the
+  decider on every user turn and answers on the default slot, so a user can see what `orq/auto` would
+  have picked (the route line's `· would <model>`, `/route explain`'s per-slot counts) before trusting
+  it. The router state records the slot that answered, not the one named, so follow-ups stay on what
+  is cached. Retries still escalate in a dry run: holding an overflowed turn on default would fail it.
 - **The door question rides beside difficulty, and the keyword floor is only its fallback.**
   `orq/auto` asks both in one Decisions call on every user turn, so "tell me which tool would delete
   a dataset" routes on its difficulty instead of flooring to hard on the word. `floorOf()` still
