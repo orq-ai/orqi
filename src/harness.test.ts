@@ -9,7 +9,7 @@ import { readSkill, skillOrigin } from "./skills.ts";
 import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
-import { contextBar, dollars, footerLine, headerBar, hostLabel, sparkline, tokens } from "./footer.ts";
+import { contextBar, dollars, footerLine, gitBadges, gitOperation, headerBar, hostLabel, sparkline, statusLine, tokens } from "./footer.ts";
 import { exitSummary, orqHarness, repoOf, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
@@ -238,6 +238,54 @@ test("the footer degrades by width band", () => {
 	expect(footerLine({ ...state, selection: "openai/gpt-5.6-terra", physical: "openai/gpt-5.6-terra" }, 140)).toContain(
 		"· gpt-5.6-terra · think high  ",
 	);
+});
+
+test("the footer shows the cache rate, git badges and a cleaned branch", () => {
+	const state = { selection: "openai/gpt-5.6-terra", input: 88_100, output: 6_200, cost: 0.113, samples: [], tools: 0, cache: 0.724 };
+	expect(footerLine({ ...state, branch: "main" }, 110)).toContain("↑88k ↓6.2k ↺72% · $0.113");
+	expect(footerLine({ ...state, branch: "main" }, 96)).not.toContain("↺"); // needs the medium band, like the counts
+	expect(footerLine({ ...state, branch: "worktree/bratislava", git: { badges: "+2 ~3" } }, 110)).toEndWith(" bratislava +2 ~3 ");
+	expect(footerLine({ ...state, branch: "detached", git: { badges: "", detached: "a1b2c3d" } }, 110)).toEndWith(" @a1b2c3d ");
+	expect(footerLine({ ...state, branch: "main", git: { badges: "" } }, 110)).toEndWith(" main ");
+});
+
+test("git badges come from porcelain v2", () => {
+	const porcelain = [
+		"# branch.oid 0123456789abcdef0123456789abcdef01234567",
+		"# branch.head main",
+		"# branch.upstream origin/main",
+		"# branch.ab +2 -1",
+		"1 M. N... 100644 100644 100644 a b src/a.ts",
+		"1 .M N... 100644 100644 100644 a b src/b.ts",
+		"1 MM N... 100644 100644 100644 a b src/c.ts",
+		"2 R. N... 100644 100644 100644 a b R100 src/d.ts\tsrc/e.ts",
+		"u UU N... 100644 100644 100644 100644 a b c src/f.ts",
+		"? notes.md",
+		"? tmp/",
+	].join("\n");
+	expect(gitBadges(porcelain)).toEqual({ badges: "!1 +3 ~2 ?2 ↑2 ↓1", detached: "0123456" });
+	expect(gitBadges(porcelain, "REBASE 3/7").badges).toStartWith("REBASE 3/7 !1");
+	expect(gitBadges("# branch.oid (initial)\n# branch.head main")).toEqual({ badges: "", detached: undefined });
+	const dir = mkdtempSync(join(tmpdir(), "orqi-git-"));
+	try {
+		expect(gitOperation(dir)).toBeUndefined();
+		mkdirSync(join(dir, "rebase-merge"));
+		writeFileSync(join(dir, "rebase-merge/msgnum"), "3\n");
+		writeFileSync(join(dir, "rebase-merge/end"), "7\n");
+		expect(gitOperation(dir)).toBe("REBASE 3/7");
+		rmSync(join(dir, "rebase-merge"), { recursive: true });
+		writeFileSync(join(dir, "MERGE_HEAD"), "abc\n");
+		expect(gitOperation(dir)).toBe("MERGING");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("other extensions' statuses get a line only when there are any", () => {
+	expect(statusLine([], 80)).toBeUndefined();
+	expect(statusLine(["  ", "\n"], 80)).toBeUndefined();
+	expect(statusLine(["memorq 14 notes", "ponytail\nfull"], 80)).toBe(" memorq 14 notes · ponytail full");
+	expect(visibleWidth(statusLine(["x".repeat(200)], 40)!)).toBeLessThanOrEqual(40);
 });
 
 test("tokens and dollars read like the wireframes", () => {

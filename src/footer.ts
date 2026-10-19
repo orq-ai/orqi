@@ -2,12 +2,17 @@
  * The footer: one line that says where tool calls go, which model answered,
  * what the session has cost, and how full the context is.
  *
- *   orq.ai · acme · orq/auto → gpt-5.6-sol · think high      ↑88k ↓6.2k · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools · main
+ *   orq.ai · acme · orq/auto → gpt-5.6-sol · think high   ↑88k ↓6.2k ↺72% · $0.113 · ctx ▇▇▇▁▁▁▁┊ 31% 84k/272k ▁▂▃ · 44 tools · main +2 ~3
+ *   memorq 14 notes · ponytail full
+ *
+ * The second line is other extensions' `setStatus` texts, drawn only when there are any.
  *
  * `footerLine` is pure (state and width in, string out) so every width band
  * and fill state is testable; `paint` carries the theme.
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { VERSION } from "./branding.ts";
 import type { ContextSample } from "./trajectory.ts";
@@ -24,12 +29,21 @@ export interface FooterState {
 	input: number;
 	output: number;
 	cost: number;
+	/** Cache hits over prompt tokens on the latest answer, 0..1. */
+	cache?: number;
 	/** Latest context sample, and pi's compaction threshold as a fraction of the window. */
 	context?: { used: number; window: number; threshold?: number };
 	samples: ContextSample[];
 	tools: number;
 	minimapHidden?: boolean;
 	branch?: string | null;
+	git?: GitSummary;
+}
+
+/** Local git state worth acting on: `REBASE 3/7 !1 +2 ~3 ?1 ↑1 ↓2`, empty when clean; the short commit for a detached HEAD. */
+export interface GitSummary {
+	badges: string;
+	detached?: string;
 }
 
 export interface Paint {
@@ -109,7 +123,10 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 	if (state.minimapHidden) left.push(paint.dim("inspector alt+i"));
 
 	const right: string[] = [];
-	if (medium && (state.input || state.output)) right.push(paint.dim(`↑${tokens(state.input)} ↓${tokens(state.output)}`));
+	if (medium && (state.input || state.output)) {
+		const cache = state.cache === undefined ? "" : ` ↺${Math.floor(state.cache * 100)}%`;
+		right.push(paint.dim(`↑${tokens(state.input)} ↓${tokens(state.output)}${cache}`));
+	}
 	right.push(paint.text(dollars(state.cost)));
 	if (state.context && state.context.window > 0) {
 		const ratio = state.context.used / state.context.window;
@@ -122,13 +139,83 @@ export function footerLine(state: FooterState, width: number, paint: Paint = pla
 		right.push(ctx);
 	}
 	if (wide && state.tools > 0) right.push(paint.dim(`${state.tools} tools`));
-	if (state.branch) right.push(paint.dim(state.branch));
+	// pi reports a detached HEAD as "detached"; Conductor-style worktree branches carry a generated prefix.
+	const branch = state.branch === "detached" && state.git?.detached ? `@${state.git.detached}` : state.branch?.replace(/^worktree\//, "");
+	if (branch) right.push(paint.dim(branch) + (state.git?.badges ? ` ${paint.text(state.git.badges)}` : ""));
 
 	const l = ` ${left.join(sep)}`;
 	const r = `${right.join(sep)} `;
 	const gap = width - visibleWidth(l) - visibleWidth(r);
 	if (gap >= 2) return `${l}${" ".repeat(gap)}${r}`;
 	return truncateToWidth(`${l}${sep}${r}`, width);
+}
+
+/** Other extensions' statuses as one line under the footer, or nothing when there are none. */
+export function statusLine(statuses: string[], width: number, paint: Paint = plain): string | undefined {
+	const texts = statuses.map((text) => text.replace(/[\r\n]+/g, " ").trim()).filter(Boolean);
+	return texts.length ? truncateToWidth(` ${texts.join(paint.dim(" · "))}`, width, paint.dim("…")) : undefined;
+}
+
+/**
+ * `git status --porcelain=v2 --branch` as badges. Ported from @henryqw/pi-footer (MIT,
+ * github.com/HenryQW/pi-harness): conflicts, staged, unstaged, untracked, ahead, behind.
+ */
+export function gitBadges(porcelain: string, operation?: string): GitSummary {
+	let staged = 0;
+	let unstaged = 0;
+	let untracked = 0;
+	let conflicts = 0;
+	let ahead = 0;
+	let behind = 0;
+	let detached: string | undefined;
+	for (const line of porcelain.split(/\r?\n/)) {
+		if (line.startsWith("# branch.oid ")) {
+			const oid = line.slice(13).trim();
+			if (oid !== "(initial)") detached = oid.slice(0, 7);
+		} else if (line.startsWith("# branch.ab ")) {
+			const match = /^# branch\.ab \+(\d+) -(\d+)$/.exec(line);
+			if (match) [ahead, behind] = [Number(match[1]), Number(match[2])];
+		} else if (line.startsWith("? ")) untracked++;
+		else if (line.startsWith("u ")) conflicts++;
+		else if (line.startsWith("1 ") || line.startsWith("2 ")) {
+			if (line[2] !== ".") staged++;
+			if (line[3] !== ".") unstaged++;
+		}
+	}
+	const badges = [
+		operation,
+		conflicts && `!${conflicts}`,
+		staged && `+${staged}`,
+		unstaged && `~${unstaged}`,
+		untracked && `?${untracked}`,
+		ahead && `↑${ahead}`,
+		behind && `↓${behind}`,
+	]
+		.filter(Boolean)
+		.join(" ");
+	return { badges, detached };
+}
+
+/** The operation in progress in a git dir (`REBASE 3/7`, `MERGING`, …), from the files git leaves there. */
+export function gitOperation(gitDir: string): string | undefined {
+	const read = (name: string) => {
+		try {
+			return readFileSync(join(gitDir, name), "utf8").trim();
+		} catch {
+			return undefined;
+		}
+	};
+	const progress = (current?: string, total?: string) =>
+		Number(current) > 0 && Number(total) > 0 ? ` ${Number(current)}/${Number(total)}` : "";
+	if (existsSync(join(gitDir, "rebase-merge"))) return `REBASE${progress(read("rebase-merge/msgnum"), read("rebase-merge/end"))}`;
+	if (existsSync(join(gitDir, "rebase-apply"))) {
+		const verb = existsSync(join(gitDir, "rebase-apply/applying")) ? "AM" : "REBASE";
+		return `${verb}${progress(read("rebase-apply/next"), read("rebase-apply/last"))}`;
+	}
+	if (existsSync(join(gitDir, "MERGE_HEAD"))) return "MERGING";
+	if (existsSync(join(gitDir, "CHERRY_PICK_HEAD"))) return "CHERRY-PICKING";
+	if (existsSync(join(gitDir, "REVERT_HEAD"))) return "REVERTING";
+	return undefined;
 }
 
 /** The header's name for the orq host: none for the default, the host without its scheme otherwise. */

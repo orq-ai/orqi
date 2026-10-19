@@ -86,6 +86,14 @@ const section = (prompt: string, name: string) => {
  * is the messages. Characters over four: an estimate, which is all the panel
  * claims.
  */
+/** Cache hits over prompt tokens on the latest answer that sent a prompt, 0..1. */
+export function cacheRate(steps: Step[]): number | undefined {
+	const usage = [...steps]
+		.reverse()
+		.find((step) => step.role === "assistant" && step.usage && step.usage.input + step.usage.cacheRead > 0)?.usage;
+	return usage ? usage.cacheRead / (usage.input + usage.cacheRead) : undefined;
+}
+
 export function contextSplit(input: {
 	systemPrompt: string;
 	tools: { name: string; description?: string; parameters?: unknown; exposure?: string }[];
@@ -112,16 +120,14 @@ export function contextSplit(input: {
 		tools: live.reduce((n, tool) => n + schema(tool), 0),
 		skills: tok(skills),
 	};
-	const last = [...input.steps]
-		.reverse()
-		.find((step) => step.role === "assistant" && step.usage && step.usage.input + step.usage.cacheRead > 0);
+	const cache = cacheRate(input.steps);
 	return {
 		...fixed,
 		hidden: hidden.reduce((n, tool) => n + schema(tool), 0),
 		messages: Math.max(0, input.used - fixed.prompt - fixed.hints - fixed.project - fixed.tools - fixed.skills),
 		window: input.window,
 		...(input.agent ? { agent: input.agent } : {}),
-		...(last?.usage ? { cache: last.usage.cacheRead / (last.usage.input + last.usage.cacheRead) } : {}),
+		...(cache === undefined ? {} : { cache }),
 		counts: {
 			orq: live.filter((tool) => tool.name.startsWith(TOOL_PREFIX)).length,
 			builtin: live.filter((tool) => !tool.name.startsWith(TOOL_PREFIX)).length,
