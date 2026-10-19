@@ -468,7 +468,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   exported `ModelSelectorComponent` over a proxy of the model runtime that lists one kind only
   (`getModels`, `getAvailableSnapshot`, `getAvailable`): memorq gets the workspace's chat models, so
   neither of the selector's scopes offers it an agent, a classifier or `orq/auto`; `/decider` gets the
-  `orq-decisions` classifiers, plus the selector's own ctrl+s and `· default` badge. After bumping pi, recheck which
+  `orq-decisions` classifiers, plus the selector's own ctrl+s and `· default` badge. `/decider`'s takes
+  the editor's place with no scope tab, exactly as `/model` does; memorq's is an overlay, because it
+  opens from memorq's own screen, which replacing the editor would tear down. After bumping pi, recheck which
   runtime methods `model-selector.js` reads: the test's runtime fake throws on any other.
 - **The ATIF export is `/trajectory`, not `/export trajectory`.** `/export` is a pi built-in (HTML),
   and pi drops colliding extension commands; the collision test now covers the harness too.

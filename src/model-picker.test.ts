@@ -79,9 +79,13 @@ function ctxWith(drive: (component: any) => void, mode = "tui") {
 
 test("esc resolves undefined: memorq writes nothing", async () => {
 	const { ctx, seen } = ctxWith((component) => component.handleInput("\x1b"));
-	expect(await pickModel(ctx, runtime, catalogue, "openai/gpt-5")).toBeUndefined();
-	// Over whatever memorq has open (its /memory screen), not instead of it.
+	// memorq asks for an overlay: over its /memory screen, not instead of it.
+	expect(await pickModel(ctx, runtime, catalogue, "openai/gpt-5", { overlay: true })).toBeUndefined();
 	expect(seen.options.overlay).toBe(true);
+	// /decider takes the editor's place, as /model does.
+	const decider = ctxWith((component) => component.handleInput("\x1b"));
+	await pickModel(decider.ctx, runtime, catalogue, "orq/decider-4b", { kind: "classifier", canSave: true });
+	expect(decider.seen.options).toBeUndefined();
 });
 
 test("enter resolves the chosen model's id; the list starts on the current one", async () => {
@@ -131,6 +135,7 @@ test("/decider: only classifiers, in either scope; ctrl+s saves, as in /model, a
 	expect(shown).toContain("orq/decider-4b");
 	expect(shown).toContain("typesafe/jev-latest [orq-decisions] · default");
 	expect(shown).toContain("to set as default");
+	expect(shown).not.toContain("Scope:"); // /model has no scope tab either
 	expect(shown).not.toContain("openai/gpt-5");
 	expect(shown).not.toContain("agent/support-triage");
 	// Enter picks for this session only.
