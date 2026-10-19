@@ -1,6 +1,6 @@
 {
 	"name": "orqi",
-	"version": "0.37.2",
+	"version": "0.38.0",
 	"private": true,
 	"type": "module",
 	"description": "orqi - the orq.ai helper agent CLI: pi coding agent with orq MCP tools and skills built in",
