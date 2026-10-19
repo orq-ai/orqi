@@ -371,38 +371,43 @@ export function orqHarness(deps: HarnessDeps) {
 		// Which inspector sections show: orqi.json in the agent dir, read once per session (makeServices builds
 		// this extension again for /new, /resume and /fork) and written whole on every toggle.
 		const prefs = readPrefs(deps.agentDir);
-		/**
-		 * Switch one section and save it. The file is read again and only this id changed, so a second
-		 * orqi window's choices since this one started are kept rather than overwritten, and come back
-		 * into this one. Never from a render: it reads and writes the file.
-		 */
-		// pi's own global reserve as this session read it from settings.json: `/compact-at off` puts it back.
+		// pi's own global reserve, taken just before /compact-at first overrides it: `off` puts it back.
 		let piReserve: number | undefined;
+		let overriding = false;
 		const piGlobal = () =>
 			(deps.settingsManager as unknown as { globalSettings?: { compaction?: { reserveTokens?: number } } } | undefined)?.globalSettings;
+		/** A trusted project's own compaction.reserveTokens: it wins, as it would after pi's next save() anyway. */
+		const projectReserve = () => deps.settingsManager?.getProjectSettings().compaction?.reserveTokens;
 		/**
 		 * Turn orqi.json's `compactAt` into pi's reserve for the model in use, so pi's own compaction (mid-run checks,
 		 * overflow recovery, session_before_compact, which memorq learns on) just starts earlier. In memory only, as
 		 * the theme is in main.ts: the global value survives pi's save() rebuilding its merged settings, and is never
 		 * written, because save() writes only the fields it marked modified. The window changes with the model, so
-		 * this runs again on every model_select.
+		 * this runs again on every model_select. Unset, it touches nothing, so a session without it is pi's own.
 		 * ponytail: one reserve, sized on the selected model. Under orq/auto that is the hard rung's window while pi
 		 * measures the rung that answered, so a smaller-window rung compacts later than the percent (never past
-		 * overflow recovery); per-rung compaction.modelOverrides if anyone notices. A trusted project's own
-		 * compaction.reserveTokens wins again after pi's next save().
+		 * overflow recovery); per-rung compaction.modelOverrides if anyone notices.
 		 */
 		const applyCompactAt = (ctx: ExtensionContext) => {
 			const global = piGlobal();
 			const window = ctx.model?.contextWindow;
-			if (deps.settingsManager && global) {
-				const reserve = prefs.compactAt && window ? reserveFor(prefs.compactAt, window) : piReserve;
+			const wanted = prefs.compactAt && window && projectReserve() === undefined ? reserveFor(prefs.compactAt, window) : undefined;
+			if (deps.settingsManager && global && (wanted !== undefined || overriding)) {
+				if (!overriding) piReserve = global.compaction?.reserveTokens;
+				const reserve = wanted ?? piReserve;
 				global.compaction ??= {};
 				if (reserve === undefined) delete global.compaction.reserveTokens;
 				else global.compaction.reserveTokens = reserve;
-				deps.settingsManager.applyOverrides({ compaction: { reserveTokens: reserve ?? 16_384 } });
+				deps.settingsManager.applyOverrides({ compaction: { reserveTokens: wanted ?? projectReserve() ?? reserve ?? 16_384 } });
+				overriding = wanted !== undefined;
 			}
 			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
 		};
+		/**
+		 * Switch one section and save it. The file is read again and only this id changed, so a second
+		 * orqi window's choices since this one started are kept rather than overwritten, and come back
+		 * into this one. Never from a render: it reads and writes the file.
+		 */
 		const setSection = (ctx: ExtensionContext | undefined, id: SectionId, value: boolean) => {
 			prefs.sections[id] = value;
 			try {
@@ -944,7 +949,6 @@ export function orqHarness(deps: HarnessDeps) {
 			// Every session is a thread: /new and /fork mint a new id, /resume keeps
 			// the file's own. The provider headers read this per request.
 			process.env.ORQI_THREAD_ID = ctx.sessionManager.getSessionId();
-			piReserve = piGlobal()?.compaction?.reserveTokens;
 			applyCompactAt(ctx);
 			// The bus has no replay: ask memorq for its state now, in case it published before this instance listened.
 			try {
@@ -1290,7 +1294,7 @@ export function orqHarness(deps: HarnessDeps) {
 			handler: toggleTips,
 		});
 
-		const COMPACT_AT_CHOICES = ["off", "50", "60", "70", "80", "90"];
+		const COMPACT_AT_CHOICES = ["off", ...[50, 60, 70, 80, 90].filter(isCompactAt).map(String)];
 		pi.registerCommand("compact-at", {
 			description: `/compact-at ${COMPACT_AT_MIN}-${COMPACT_AT_MAX}|off: auto-compact at this percent of the context window`,
 			handler: async (args, ctx) => {
@@ -1321,9 +1325,11 @@ export function orqHarness(deps: HarnessDeps) {
 				render();
 				const window = ctx.model?.contextWindow;
 				ctx.ui.notify(
-					pct === undefined
-						? "Auto-compaction is back to pi's default, near the end of the window."
-						: `Auto-compaction at ${pct}% of the context window${window ? ` (${tokens(window - reserveTokens)} of ${tokens(window)})` : ""}.`,
+					pct !== undefined && projectReserve() !== undefined
+						? "Saved, but this project pins compaction.reserveTokens in .orqi/settings.json, and that wins here."
+						: pct === undefined
+							? "Auto-compaction is back to pi's default, near the end of the window."
+							: `Auto-compaction at ${pct}% of the context window${window ? ` (${tokens(window - reserveTokens)} of ${tokens(window)})` : ""}.`,
 				);
 			},
 		});

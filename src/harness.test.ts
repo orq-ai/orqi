@@ -2213,3 +2213,35 @@ test("/compact-at moves pi's compaction reserve in memory, follows the model and
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+/** pi settings with a global and a trusted project file, in memory. */
+function settingsWith(global: object, project: object) {
+	const files: Record<string, string | undefined> = { global: JSON.stringify(global), project: JSON.stringify(project) };
+	return SettingsManager.fromStorage({
+		withLock: (scope: "global" | "project", fn: (current: string | undefined) => string | undefined) => {
+			const next = fn(files[scope]);
+			if (next !== undefined) files[scope] = next;
+		},
+	});
+}
+
+test("/compact-at unset leaves pi's settings alone, and a project's own reserve wins", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-compact-at-"));
+	try {
+		const settings = settingsWith({}, { compaction: { reserveTokens: 50_000 } });
+		const h = harnessOn(dir, { settingsManager: settings });
+		const reserve = () => settings.getCompactionSettings(undefined).reserveTokens;
+		(h.ctx as any).model = { provider: "orq", id: "big", contextWindow: 200_000 };
+		// No compactAt: the project's value stands, as it would without orqi.
+		await h.start();
+		expect(reserve()).toBe(50_000);
+		await h.commands.get("compact-at")!("70", h.ctx);
+		expect(reserve()).toBe(50_000);
+		expect(h.notices.at(-1)).toBe("Saved, but this project pins compaction.reserveTokens in .orqi/settings.json, and that wins here.");
+		await h.commands.get("compact-at")!("off", h.ctx);
+		expect(reserve()).toBe(50_000);
+		await h.stop();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

@@ -399,6 +399,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   for the selected model's window, in memory only, the way the theme is applied: written into pi's
   global settings without marking them modified, so it survives pi's `save()` and is never written to
   `settings.json`. It runs again on every `model_select`, because the window moves with the model.
+  Unset, it touches nothing, so a session without it is pi's own; `off` puts back the reserve read
+  right before the first override. A trusted project's own `compaction.reserveTokens` wins, since pi's
+  next `save()` would bring it back anyway, and the command says so.
   pi keeps owning compaction: mid-run checks, overflow recovery, and the `session_before_compact` that
   memorq learns on. A package that replaces pi's compaction (pi-auto-compact) writes its own entries
   and never fires that event, so memorq would miss them. Under `orq/auto` the reserve is sized on the
