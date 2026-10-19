@@ -4,8 +4,10 @@
  *
  * - The Decisions API (`POST /v3/router/decisions`) is registered as a pi
  *   classifier provider, `orq-decisions`, one classifier model per
- *   `model_type: "classify"` entry in the workspace catalogue. It follows
- *   TypeSafe's contract except that a yes/no question is spelled `noul`.
+ *   `model_type: "classify"` entry in the workspace catalogue (the adapter
+ *   lives in src/decider.ts). It follows TypeSafe's contract except that a
+ *   yes/no question is spelled `noul`. Which model is asked is the decider's:
+ *   the one `/decider` picked.
  * - `orq/auto` classifies the newest user message with the `general_v2`
  *   difficulty question from orq-smart-router (RES-1619, the wording behind
  *   its 56% / 28% savings at 95% quality) and routes to the easy, medium or
@@ -23,17 +25,11 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
-import type { ClassifierContext, ClassifierModel, ClassifierResult, Usage } from "@earendil-works/pi-ai";
-import { routerUrl } from "./auth.ts";
+import type { Usage } from "@earendil-works/pi-ai";
+import { createDecider, DECIDE_TIMEOUT_MS, DECISIONS_PROVIDER, type Decider, decisionsProvider } from "./decider.ts";
 import { BASE_MODEL, type ModelInfo } from "./model.ts";
 
-export const DECISIONS_PROVIDER = "orq-decisions";
-export const DECISIONS_API = "orq-decisions";
 export const AUTO_ID = "auto";
-/** orq's own decision model: measured 2026-10-15 at ~0.3 s and a third of jev's cost per call. */
-export const DEFAULT_CLASSIFIER = "orq/decider-4b";
-/** Tried in order when ORQI_ROUTE_CLASSIFIER is unset; a workspace with neither uses its first classifier. */
-export const CLASSIFIER_PREFERENCE = [DEFAULT_CLASSIFIER, "typesafe/jev-latest"];
 
 export type Tier = "easy" | "medium" | "hard";
 export const TIERS: Tier[] = ["easy", "medium", "hard"];
@@ -73,103 +69,6 @@ export const DOOR_QUESTION = {
 };
 
 export type Door = keyof typeof DOOR_QUESTION.criteria;
-
-// ── Decisions API ──────────────────────────────────────────────────────────
-
-/** Map pi's classifier questions to the Decisions API's: only `bool` is spelled differently. */
-export function toDecisionsQuestions(questions: ClassifierContext["questions"]): Record<string, unknown> {
-	return Object.fromEntries(Object.entries(questions).map(([key, q]) => [key, q.type === "bool" ? { ...q, type: "noul" } : q]));
-}
-
-/** Map a Decisions API answer body to pi's ClassifierResult. */
-export function fromDecisions(body: any, model: string): ClassifierResult {
-	const answers: ClassifierResult["answers"] = {};
-	for (const [key, answer] of Object.entries<any>(body?.answers ?? {})) {
-		if (answer?.type === "noul") answers[key] = { type: "bool", probability: Number(answer.noul ?? answer.probability ?? 0) };
-		else if (answer?.type === "choice")
-			answers[key] = {
-				type: "choice",
-				choice: answer.choice,
-				probabilities: answer.probabilities ?? {},
-				confidence: answer.confidence ?? 0,
-			};
-		else if (answer?.type === "score") answers[key] = { type: "score", score: answer.score, confidence: answer.confidence ?? 0 };
-	}
-	const usage = body?.usage;
-	return {
-		api: DECISIONS_API,
-		provider: DECISIONS_PROVIDER,
-		model,
-		answers,
-		usage: usage
-			? {
-					input: usage.input_tokens ?? 0,
-					output: usage.output_tokens ?? 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
-					cost: { input: usage.input_cost ?? 0, output: usage.output_cost ?? 0, cacheRead: 0, cacheWrite: 0, total: usage.total_cost ?? 0 },
-				}
-			: undefined,
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
-}
-
-/** Raised for a 403: the key lacks `classify.execute`. Shown once, as a widget line. */
-export class ClassifyForbidden extends Error {}
-
-/** One Decisions API call. `fetchImpl` is injectable for tests. */
-export async function classifyWithOrq(
-	model: string,
-	context: ClassifierContext,
-	options: { apiKey?: string; signal?: AbortSignal; headers?: Record<string, string> } = {},
-	fetchImpl: typeof fetch = fetch,
-): Promise<ClassifierResult> {
-	const res = await fetchImpl(`${routerUrl()}/decisions`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${options.apiKey ?? process.env.ORQ_API_KEY ?? ""}`,
-			// Same thread as the turn it routes, so the classify span sits beside it.
-			...(process.env.ORQI_THREAD_ID ? { "X-ORQ-THREAD-ID": process.env.ORQI_THREAD_ID } : {}),
-			"X-ORQ-METADATA-source": "orqi",
-			...options.headers,
-		},
-		body: JSON.stringify({ model, state: context.state, questions: toDecisionsQuestions(context.questions) }),
-		signal: options.signal,
-	});
-	if (res.status === 403) throw new ClassifyForbidden("routing unavailable: API key lacks the classify permission");
-	if (!res.ok) throw new Error(`decisions ${res.status}: ${(await res.text()).slice(0, 200)}`);
-	return fromDecisions(await res.json(), model);
-}
-
-/** The pi provider config: one classifier model per workspace classifier. */
-export function decisionsProvider(classifiers: ModelInfo[]) {
-	return {
-		name: "orq Decisions",
-		baseUrl: routerUrl(),
-		apiKey: "$ORQ_API_KEY",
-		models: classifiers.map((model) => ({
-			type: "classifier" as const,
-			id: model.id,
-			name: model.id,
-			api: DECISIONS_API,
-			input: ["text"] as ("text" | "image")[],
-			contextWindow: model.contextWindow ?? 32_000,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		})),
-		classifiers: {
-			[DECISIONS_API]: {
-				classify: (
-					model: ClassifierModel<any>,
-					context: ClassifierContext,
-					options?: { apiKey?: string; signal?: AbortSignal; headers?: Record<string, string> },
-				) => classifyWithOrq(model.id, context, options ?? {}),
-			},
-		},
-	};
-}
 
 // ── the pool ───────────────────────────────────────────────────────────────
 
@@ -326,14 +225,6 @@ export function lastUserText(messages: readonly { role: string; content?: unknow
 
 // ── wiring ─────────────────────────────────────────────────────────────────
 
-/** A routing call sits before the first token: past this, route on the default rung instead. */
-const CLASSIFY_TIMEOUT_MS = 5_000;
-
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-	const timeout = AbortSignal.timeout(ms);
-	return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
 /** One routing decision, as the harness draws it above the turn. */
 export interface Decision extends RouteState {
 	reason: PolicyInput["reason"];
@@ -342,13 +233,12 @@ export interface Decision extends RouteState {
 
 export interface Routing {
 	pool: Pool;
-	classifier?: string;
+	/** The decision model it asks: the harness's one decider (src/decider.ts). */
+	decider: Decider;
 	/** Returns the unsubscribe: each session's harness listens, and stops when that session ends. */
 	onDecision(listener: (decision: Decision) => void): () => void;
-	/** Recompute the pool and classifier from a fresher catalogue (after a first sign-in). */
+	/** Recompute the pool and the decider from a fresher catalogue (after a first sign-in). */
 	refresh(catalogue: ModelInfo[]): void;
-	/** Set once a 403 says the key cannot classify: the widget line. */
-	unavailable?: string;
 }
 
 interface RuntimeLike {
@@ -362,11 +252,18 @@ interface RuntimeLike {
  * session exists, so `ORQI_MODEL=orq/auto` can be the boot model and
  * subagents can resolve the rungs. Returns the pool and a decision feed.
  */
-export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], defaultModel: string, routeLog?: string): Routing {
+export function registerRouting(
+	runtime: RuntimeLike,
+	catalogue: ModelInfo[],
+	defaultModel: string,
+	routeLog?: string,
+	decider: Decider = createDecider(),
+): Routing {
 	const listeners = new Set<(decision: Decision) => void>();
 	const base = defaultModel === `orq/${AUTO_ID}` ? BASE_MODEL : defaultModel;
 	const routing: Routing = {
 		pool: routePool(catalogue, base),
+		decider,
 		onDecision: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
@@ -374,11 +271,7 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 		refresh: (next) => {
 			const classifiers = next.filter((model) => model.kind === "classifier");
 			routing.pool = routePool(next, base);
-			routing.classifier =
-				process.env.ORQI_ROUTE_CLASSIFIER ??
-				CLASSIFIER_PREFERENCE.find((id) => classifiers.some((model) => model.id === id)) ??
-				classifiers[0]?.id;
-			routing.unavailable = undefined;
+			decider.resolve(next);
 			if (classifiers.length) runtime.registerProvider(DECISIONS_PROVIDER, decisionsProvider(classifiers));
 		},
 	};
@@ -403,17 +296,18 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 			let door: { door: Door; p: number } | undefined;
 			let cost: number | undefined;
 			let latencyMs: number | undefined;
+			let classifier: string | undefined;
 			if (request.reason === "user") {
-				const classifier = routing.classifier;
+				classifier = decider.id;
 				if (!classifier) classified = { error: "no classifier model in this workspace" };
-				else if (routing.unavailable) classified = { error: routing.unavailable };
+				else if (decider.unavailable) classified = { error: decider.unavailable };
 				else {
 					const started = Date.now();
 					try {
-						const result = await classifyWithOrq(
-							classifier,
+						const result = await decider.decide(
+							"router",
 							{ state: { prompt: text.slice(0, 16_000) }, questions: { difficulty: DIFFICULTY_QUESTION, door: DOOR_QUESTION } },
-							{ signal: withTimeout(request.signal, CLASSIFY_TIMEOUT_MS) },
+							request.signal,
 						);
 						const answer = result.answers.difficulty;
 						classified =
@@ -427,11 +321,10 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 						}
 						cost = result.usage?.cost.total;
 					} catch (error) {
-						if (error instanceof ClassifyForbidden) routing.unavailable = error.message;
 						const timedOut = error instanceof Error && (error.name === "TimeoutError" || /timed? ?out/i.test(error.message));
 						classified = {
 							error: timedOut
-								? `classifier timed out after ${CLASSIFY_TIMEOUT_MS / 1000} s`
+								? `classifier timed out after ${DECIDE_TIMEOUT_MS / 1000} s`
 								: error instanceof Error
 									? error.message.slice(0, 80)
 									: String(error),
@@ -459,7 +352,7 @@ export function registerRouting(runtime: RuntimeLike, catalogue: ModelInfo[], de
 				...(decision.why ? { why: decision.why } : {}),
 				...(cost !== undefined ? { cost } : {}),
 				...(latencyMs !== undefined ? { latencyMs } : {}),
-				...(routing.classifier && request.reason === "user" && latencyMs !== undefined ? { classifier: routing.classifier } : {}),
+				...(classifier && request.reason === "user" && latencyMs !== undefined ? { classifier } : {}),
 				...(door ? { door: door.door, doorP: door.p } : {}),
 				...(decision.fallback ? { fallback: true as const } : {}),
 			};

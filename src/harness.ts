@@ -97,6 +97,13 @@ export function learnLine(learned: Learned): string {
 	return `${step.label} ${step.detail}${typeof learned.costUsd === "number" ? ` · ${dollars(learned.costUsd)}` : ""}`;
 }
 const ROUTE_WIDGET = "orqi-route";
+/** Where the decider came from, as `/route explain` says it. */
+const DECIDER_SOURCE = {
+	env: "ORQI_ROUTE_CLASSIFIER",
+	saved: "saved with /decider",
+	session: "this session",
+	default: "default",
+} as const;
 const BARS = "▁▂▃▄▅▆▇█";
 
 /**
@@ -515,10 +522,23 @@ export function orqHarness(deps: HarnessDeps) {
 				},
 			},
 			// memorq keeps this object; once this session has ended its ctx is stale, and the next session offers a new host.
-			pickModel: (current) =>
+			pickModel: async (current) =>
 				ctxRef && deps.modelRuntime && !sessionEnded
-					? pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current)
-					: Promise.resolve(undefined),
+					? (await pickModel(ctxRef, deps.modelRuntime, deps.catalogue(), current))?.id
+					: undefined,
+			// The user's decider (/decider), the same one orq/auto asks. Never rejects: no decider, a 403, a
+			// timeout or an ended session all answer undefined, and memorq goes on without a decision.
+			decide: async (context, signal) => {
+				const decider = deps.routing?.decider;
+				if (!decider || sessionEnded) return undefined;
+				try {
+					return await decider.decide("memorq", context, signal);
+				} catch {
+					// A 403 sticks for every asker; say so here too, or only the router's next turn would.
+					if (decider.unavailable && !sessionEnded) ctxRef?.ui.setWidget(ROUTE_WIDGET, [decider.unavailable]);
+					return undefined;
+				}
+			},
 			// Pi cannot calculate a percentage for router or agent models whose window it does not know; orqi's
 			// own measure has the catalogue window and the same visible-context accounting.
 			contextPercent: () => {
@@ -1004,6 +1024,7 @@ export function orqHarness(deps: HarnessDeps) {
 			releaseKeys?.();
 			releaseKeys = undefined;
 			stopDecisions?.();
+			stopDeciderCalls?.();
 		});
 		pi.on("session_tree", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
 		pi.on("session_compact", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
@@ -1163,12 +1184,95 @@ export function orqHarness(deps: HarnessDeps) {
 			} catch {
 				// A stale handle after /new: the step is in the trajectory regardless.
 			}
-			if (deps.routing?.unavailable) ctxRef?.ui.setWidget(ROUTE_WIDGET, [deps.routing.unavailable]);
+			// The line follows the decider: a refresh that cleared the 403 takes it down with the next decision.
+			const unavailable = deps.routing?.decider.unavailable;
+			ctxRef?.ui.setWidget(ROUTE_WIDGET, unavailable ? [unavailable] : undefined);
+		});
+		// orq/auto's calls are drawn with its decisions above; anyone else's (memorq) is a step of its own, so /cost counts it.
+		const stopDeciderCalls = deps.routing?.decider.onCall((call) => {
+			if (call.asker === "router") return;
+			const usage = call.cost !== undefined ? { input: 0, output: 0, cacheRead: 0, cost: call.cost } : undefined;
+			trajectory.route("decide", `for ${call.asker}`, usage, call.latencyMs, call.id);
+		});
+
+		/**
+		 * `/decider`, as `/model` is for the chat model: bare opens pi's selector over the workspace's
+		 * classifiers (enter for this session, ctrl+s to save as the default), `<id>` switches for this
+		 * session and `<id> --save` saves too. Every Decisions call reads `decider.id`, so it applies on the next one.
+		 */
+		const chooseDecider = async (args: string, ctx: ExtensionContext, usage: string) => {
+			const decider = deps.routing?.decider;
+			if (!decider) {
+				ctx.ui.notify("No decision model in this session.", "warning");
+				return;
+			}
+			const words = args.trim().split(/\s+/).filter(Boolean);
+			const save = words.includes("--save");
+			const named = words.filter((word) => word !== "--save");
+			if (named.length > 1) {
+				ctx.ui.notify(`usage: ${usage} [id] [--save]`, "warning");
+				return;
+			}
+			const available = decider.classifiers;
+			const saved = prefs.decider;
+			let wanted = named[0];
+			let keep = save;
+			if (!wanted) {
+				if (!(ctx.mode === "tui" && deps.modelRuntime && available.length)) {
+					ctx.ui.notify(
+						[
+							`decision models in this workspace (${usage} <id> to switch, --save to keep)`,
+							...(available.length
+								? available.map((id) => `  ${id === decider.id ? "●" : "○"} ${id}${id === saved ? "  · default" : ""}`)
+								: ["  none: orq/auto falls back to medium on every turn"]),
+						].join("\n"),
+					);
+					return;
+				}
+				const picked = await pickModel(ctx, deps.modelRuntime, deps.catalogue(), decider.id ?? "", {
+					kind: "classifier",
+					canSave: true,
+					saved,
+				});
+				if (!picked) return; // esc
+				wanted = picked.id;
+				keep = picked.save;
+			}
+			if (!available.includes(wanted)) {
+				ctx.ui.notify(`${wanted} is not a decision model in this workspace; ${usage} lists them`, "warning");
+				return;
+			}
+			// A sticky 403 is cleared too: a different model deserves its own answer.
+			decider.use(wanted, "session");
+			const lines = [`orq/auto now asks ${wanted} (this session)`];
+			if (keep) {
+				// Marked saved only once the write lands, or the next catalogue refresh would read the old file and revert.
+				try {
+					const fresh = readPrefs(deps.agentDir);
+					fresh.decider = wanted;
+					writePrefs(deps.agentDir, fresh);
+					prefs.decider = wanted;
+					decider.use(wanted, "saved");
+					lines[0] = `orq/auto now asks ${wanted} · saved as default`;
+				} catch (error) {
+					lines.push(`Could not save it: ${(error as Error).message}`);
+				}
+				if (process.env.ORQI_ROUTE_CLASSIFIER)
+					lines.push(`ORQI_ROUTE_CLASSIFIER=${process.env.ORQI_ROUTE_CLASSIFIER} overrides it at the next start`);
+			}
+			if (!(ctx.model?.provider === "orq" && ctx.model.id === "auto"))
+				lines.push("It decides when orq/auto picks the model: /model orq/auto");
+			ctx.ui.notify(lines.join("\n"));
+			ctx.ui.setWidget(ROUTE_WIDGET, undefined);
+		};
+		pi.registerCommand("decider", {
+			description: "/decider picks the decision model orq/auto and memorq ask (enter: this session, ctrl+s: save); /decider <id> [--save]",
+			handler: (args, ctx) => chooseDecider(args, ctx, "/decider"),
 		});
 
 		pi.registerCommand("route", {
 			description:
-				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route classifier lists or picks the decision model, /route platform the workspace's smart routers",
+				"orq/auto routing: /route on|off shows the route line, /route explain the question and pool, /route classifier picks the decision model (as /decider), /route platform the workspace's smart routers",
 			handler: async (args, ctx) => {
 				const routing = deps.routing;
 				const arg = args.trim();
@@ -1218,30 +1322,7 @@ export function orqHarness(deps: HarnessDeps) {
 					return;
 				}
 				if (arg === "classifier" || arg.startsWith("classifier ")) {
-					const wanted = arg.slice("classifier".length).trim();
-					const available = deps
-						.catalogue()
-						.filter((model) => model.kind === "classifier")
-						.map((model) => model.id);
-					if (!wanted) {
-						ctx.ui.notify(
-							[
-								"classifiers in this workspace (/route classifier <id> to switch)",
-								...(available.length
-									? available.map((id) => `  ${id === routing.classifier ? "●" : "○"} ${id}`)
-									: ["  none: orq/auto falls back to medium on every turn"]),
-							].join("\n"),
-						);
-						return;
-					}
-					if (!available.includes(wanted)) {
-						ctx.ui.notify(`${wanted} is not a classifier in this workspace; /route classifier lists them`, "warning");
-						return;
-					}
-					// Until orqi exits. A sticky 403 is cleared too: a different model deserves its own answer.
-					routing.classifier = wanted;
-					routing.unavailable = undefined;
-					ctx.ui.notify(`orq/auto now asks ${wanted}. ORQI_ROUTE_CLASSIFIER=${wanted} makes it stick.`);
+					await chooseDecider(arg.slice("classifier".length), ctx, "/route classifier");
 					return;
 				}
 				const pool = TIERS.map((t: Tier) => `${t} ${shortModel(routing.pool[t])}`).join(" · ");
@@ -1255,7 +1336,7 @@ export function orqHarness(deps: HarnessDeps) {
 							`  ${DOOR_QUESTION.instructions}`,
 							...Object.entries(DOOR_QUESTION.criteria).map(([door, text]) => `  ${door.padEnd(7)} ${text}`),
 							`pool  ${pool}`,
-							`classifier  ${routing.classifier ?? "none"}${routing.unavailable ? ` (${routing.unavailable})` : ""}`,
+							`decider  ${routing.decider.id ?? "none"}${routing.decider.source ? ` (${DECIDER_SOURCE[routing.decider.source]})` : ""}${routing.decider.unavailable ? ` (${routing.decider.unavailable})` : ""}`,
 							"rules  tool follow-ups and retries stay on the turn's model; overload or context overflow on retry",
 							"       goes one rung up; a two_way or one_way request never goes below hard; when the classifier",
 							"       cannot answer, a keyword floor (delete / auto_run / agent or evaluator changes) stands in",
@@ -1264,7 +1345,7 @@ export function orqHarness(deps: HarnessDeps) {
 					);
 					return;
 				}
-				ctx.ui.notify("usage: /route on|off|explain|classifier [id]|platform", "warning");
+				ctx.ui.notify("usage: /route on|off|explain|classifier [id] [--save]|platform", "warning");
 			},
 		});
 
