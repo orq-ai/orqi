@@ -3,7 +3,8 @@
  * `settings.json`. pi's SettingsManager has no setter for a key it does not
  * know, so orqi keeps its own small file rather than writing into pi's, and it
  * is never in a project's `.orqi/`, which is read only when the project is
- * trusted. Today it holds which inspector sections show.
+ * trusted. It holds which inspector sections show and the decider saved with
+ * `/decider` (ctrl+s or `--save`).
  *
  * Read forgivingly (a missing, unreadable or odd file is the defaults; an id
  * orqi does not know is ignored) and written whole, so the next write drops
@@ -28,25 +29,29 @@ export const DEFAULT_SECTIONS: Readonly<Record<SectionId, boolean>> = Object.fre
 
 export interface Prefs {
 	sections: Record<SectionId, boolean>;
+	/** The decision model `/decider` saved; resolved against the workspace at boot (src/decider.ts). */
+	decider?: string;
 }
 
 const FILE = "orqi.json";
 
 export function readPrefs(agentDir: string): Prefs {
 	const sections = { ...DEFAULT_SECTIONS };
-	let saved: unknown;
+	let file: { sections?: unknown; decider?: unknown } | null = null;
 	try {
-		saved = (JSON.parse(readFileSync(join(agentDir, FILE), "utf8")) as { sections?: unknown } | null)?.sections;
+		file = JSON.parse(readFileSync(join(agentDir, FILE), "utf8"));
 	} catch {
 		// Missing, unreadable or not JSON: the defaults.
 	}
+	const saved = file?.sections;
+	const decider = typeof file?.decider === "string" && file.decider.trim() ? file.decider.trim() : undefined;
 	if (saved && typeof saved === "object" && !Array.isArray(saved)) {
 		for (const id of SECTIONS) {
 			const value = (saved as Record<string, unknown>)[id];
 			if (typeof value === "boolean") sections[id] = value;
 		}
 	}
-	return { sections };
+	return decider ? { sections, decider } : { sections };
 }
 
 /** The whole file, through a staging dir and a rename, so a reader never sees half of it. Throws when it cannot be written. */
@@ -56,7 +61,9 @@ export function writePrefs(agentDir: string, prefs: Prefs): void {
 	const staging = mkdtempSync(join(agentDir, ".orqi-prefs-"));
 	const tmp = join(staging, FILE);
 	try {
-		writeFileSync(tmp, `${JSON.stringify({ sections }, null, 2)}\n`, { mode: 0o600 });
+		writeFileSync(tmp, `${JSON.stringify(prefs.decider ? { sections, decider: prefs.decider } : { sections }, null, 2)}\n`, {
+			mode: 0o600,
+		});
 		renameSync(tmp, join(agentDir, FILE));
 	} finally {
 		rmSync(staging, { recursive: true, force: true });

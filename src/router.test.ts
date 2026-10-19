@@ -7,21 +7,18 @@ import { join } from "node:path";
 import { routeLine } from "./harness.ts";
 import { selectionName } from "./harness-views.ts";
 import type { ModelInfo } from "./model.ts";
+import { ClassifyForbidden, classifyWithOrq, fromDecisions, toDecisionsQuestions } from "./decider.ts";
 import {
-	ClassifyForbidden,
-	classifyWithOrq,
 	DIFFICULTY_QUESTION,
 	DOOR_QUESTION,
 	escalates,
 	floorOf,
-	fromDecisions,
 	lastUserText,
 	logRoute,
 	policy,
 	registerRouting,
 	routePool,
 	tierOf,
-	toDecisionsQuestions,
 } from "./router.ts";
 
 const CATALOGUE: ModelInfo[] = [
@@ -41,7 +38,7 @@ test("orq/auto asks orq/decider-4b when the workspace has it, then jev, then wha
 	try {
 		const chat = CATALOGUE.filter((model) => model.kind !== "classifier");
 		const classifier = (...ids: string[]) =>
-			registerRouting(runtime, [...chat, ...ids.map((id) => ({ id, kind: "classifier" as const }))], "openai/gpt-5.6-terra").classifier;
+			registerRouting(runtime, [...chat, ...ids.map((id) => ({ id, kind: "classifier" as const }))], "openai/gpt-5.6-terra").decider.id;
 		expect(classifier("alibaba/decision-model-preview", "typesafe/jev-latest", "orq/decider-4b")).toBe("orq/decider-4b");
 		expect(classifier("alibaba/decision-model-preview", "typesafe/jev-latest")).toBe("typesafe/jev-latest");
 		expect(classifier("alibaba/decision-model-preview")).toBe("alibaba/decision-model-preview");
@@ -347,11 +344,11 @@ test("orq/auto routes a user turn through the classifier and keeps follow-ups on
 		globalThis.fetch = (async () => new Response("", { status: 403 })) as unknown as typeof fetch;
 		const forbidden = await virtual.route({ reason: "user", thinkingLevel: "medium", messages: [{ role: "user", content: "hi" }] });
 		expect(forbidden.state.tier).toBe("medium");
-		expect(routing.unavailable).toContain("classify permission");
+		expect(routing.decider.unavailable).toContain("classify permission");
 		// A fresher catalogue (after the first sign-in) recomputes the pool and clears the 403 memo.
 		routing.refresh(CATALOGUE.filter((m) => m.id !== "openai/gpt-5.6-luna"));
 		expect(routing.pool.easy).not.toBe("openai/gpt-5.6-luna");
-		expect(routing.unavailable).toBeUndefined();
+		expect(routing.decider.unavailable).toBeUndefined();
 	} finally {
 		globalThis.fetch = realFetch;
 	}

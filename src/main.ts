@@ -63,6 +63,8 @@ import { memorqInstalled } from "./memorq-detect.ts";
 import { createOrqModelRuntime, DEFAULT_MODEL, pickModel, refreshOrqModels, repointOrqModels, talkable } from "./model.ts";
 import { createSessionRenewal } from "./session.ts";
 import { registerRouting } from "./router.ts";
+import { createDecider } from "./decider.ts";
+import { readPrefs } from "./prefs.ts";
 import { maybeUpdateSkills, pluginResources } from "./skills.ts";
 import { orqHarness, repoOf } from "./harness.ts";
 import { createLocalTools } from "./local-tools.ts";
@@ -536,6 +538,8 @@ const routing = registerRouting(
 	models.catalogue,
 	DEFAULT_MODEL,
 	process.env.ORQI_ROUTE_LOG === "1" ? join(AGENT_DIR, "routes.jsonl") : undefined,
+	// The one decider every Decisions call asks; /decider saves its pick in orqi.json.
+	createDecider(() => readPrefs(AGENT_DIR).decider),
 );
 const model = pickModel(models);
 // `edit` retains pi's native before/after diff preview. Bash is exposed through
