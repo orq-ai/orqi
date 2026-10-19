@@ -14,7 +14,9 @@
 // titles that intentionally ship no release.
 export const CONVENTIONAL_TYPES = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test"] as const;
 
-const PATTERN = new RegExp(`^(${CONVENTIONAL_TYPES.join("|")})(\\([^)\\n]+\\))?!?: .+`);
+// `: \S` (not `: .+`) so a whitespace-only summary like "feat:   " is rejected,
+// not just an empty one: that is the no-release / no-changelog case the gate exists for.
+const PATTERN = new RegExp(`^(${CONVENTIONAL_TYPES.join("|")})(\\([^)\\n]+\\))?!?: \\S`);
 
 /** Whether a PR title is a valid Conventional Commits subject. */
 export function isConventionalTitle(title: string): boolean {

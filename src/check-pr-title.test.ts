@@ -14,6 +14,7 @@ describe("isConventionalTitle", () => {
 		expect(isConventionalTitle("Feat: capitalised type")).toBe(false);
 		expect(isConventionalTitle("feat add fallbacks")).toBe(false);
 		expect(isConventionalTitle("feat:")).toBe(false);
+		expect(isConventionalTitle("feat:   ")).toBe(false);
 		expect(isConventionalTitle("wip(router): half done")).toBe(false);
 		expect(isConventionalTitle("")).toBe(false);
 	});
