@@ -117,7 +117,7 @@ the rest start on. A section that cannot show (an installed memorq that is silen
 model than `orq/auto` answers) is greyed in the list with the reason, and space on it says what to do; with no memorq at all the memory
 section is not listed.
 
-Memory comes from memorq, a separate pi package (orq-ai/orq-knowledge-notes) that orqi neither
+Memory comes from memorq, a separate pi package (orq-ai/memorq) that orqi neither
 carries nor installs. The two extensions share only pi's
 in-process event bus: memorq publishes `memorq:state` (notes, notes used this turn, the last learn,
 the next review, the folders it writes to) and asks `memorq:host?`; orqi answers with `memorq:host`

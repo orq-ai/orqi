@@ -462,7 +462,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   smallest window of its three models while pi measures the rung that answered, so a larger-window rung
   compacts earlier than the percent.
 - **orqi does not carry memorq, and only mentions memory once memorq is there.** memorq
-  (orq-ai/orq-knowledge-notes, a pi package) ships on its own schedule and is not something every orqi
+  (orq-ai/memorq, a pi package) ships on its own schedule and is not something every orqi
   user can install, so orqi never tells anyone to install it: with no memorq, `/sidebar` has no memory
   row and `/doctor` no memorq or python3 row. `src/memorq-detect.ts` tells the cases apart without
   asking memorq: its commands are registered (only a memorq new enough to publish its state registers
