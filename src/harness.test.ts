@@ -17,7 +17,7 @@ import {
 	contextLines,
 	minimapRow,
 	minimapRows,
-	minimapSummary,
+	trajectoryTitle,
 	peekLines,
 	processLines,
 	sectionLines,
@@ -337,7 +337,11 @@ test("minimap rows stay pinned to the newest step unless a row is selected", () 
 	expect(back[0]).toStartWith(" ⚙ tool   t1");
 	expect(back[3]).toStartWith("▌⚙ tool   t4");
 	expect(minimapRows([], 30, 10)[0]).toContain("no steps yet");
-	expect(minimapSummary(steps, 3, 0.113)).toBe("30 steps · turn 3 · $0.113");
+	// The counts ride on the trajectory's title rule; a long session drops "steps" before it outgrows the panel.
+	expect(trajectoryTitle(0, 0, 36)).toBe(` ─ trajectory ${"─".repeat(22)}`);
+	expect(trajectoryTitle(30, 3, 36)).toBe(" ─ trajectory · 30 steps · turn 3 ──");
+	expect(trajectoryTitle(999, 99, 36)).toBe(" ─ trajectory · 999 · turn 99 ──────");
+	expect(visibleWidth(trajectoryTitle(99999, 9999, 36))).toBe(36);
 });
 
 test("peek shows a step's arguments, spend and full content", () => {
@@ -2043,7 +2047,6 @@ test("panel sections: a rule, an indented body, one calm line when empty", () =>
 			.map((line) => line.trimEnd()),
 	).toEqual(["  ⚠ tool loop  get_span ×4 same args", "  errors 1/6 · irreversible calls 0"]);
 	expect(signalLines({ errors: 0, tools: 2, oneWay: 0, pending: 1 }, 36)[1]!.trimEnd()).toBe("  irreversible calls 0 · pending 1");
-	expect(minimapSummary([], 2, 0.014, 1)).toBe("0 steps · turn 2 · $0.014 · ⚠ 1");
 });
 
 test("the process section: resident memory now, the last minute scaled to the peak, and the peak", () => {

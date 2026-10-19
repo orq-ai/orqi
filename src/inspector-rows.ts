@@ -110,8 +110,17 @@ export function minimapRows(
 }
 
 /** The panel's own footer: `15 steps · turn 3 · $0.113`, and `· ⚠ N` while a warning fires. */
-export function minimapSummary(steps: Step[], turn: number, cost: number, warnings = 0): string {
-	return `${steps.length} steps · turn ${turn} · ${dollars(cost)}${warnings ? ` · ⚠ ${warnings}` : ""}`;
+/**
+ * The trajectory's title rule, with its counts: ` ─ trajectory · 9 steps · turn 3 ───`. Cost is the
+ * footer's and warnings are the signals section's, so neither is repeated here. A long session
+ * drops the word "steps" before the rule outgrows the panel.
+ */
+export function trajectoryTitle(steps: number, turn: number, width: number): string {
+	if (!steps) return sectionLines("trajectory", [], width)[0]!;
+	const title = `trajectory · ${steps} steps · turn ${turn}`;
+	// Two columns of rule at least, so it still reads as a rule.
+	const fits = visibleWidth(` ─ ${title} `) + 2 <= width;
+	return fit(sectionLines(fits ? title : `trajectory · ${steps} · turn ${turn}`, [], width)[0]!, width);
 }
 
 /** A panel section under the minimap: a ` ─ title ───` rule, then the body indented. */
