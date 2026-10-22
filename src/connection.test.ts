@@ -22,7 +22,8 @@ import {
 	stageServer,
 	staged,
 	TOKEN_ARGS,
-	tokenOf,
+	askToken,
+	credentialCandidates,
 	takeServerFlag,
 	WHOAMI_ARGS,
 	workspaceOfKey,
@@ -966,12 +967,49 @@ test("a plugin update's git and npm output is captured, not painted over the TUI
 	}
 });
 
-test("tokenOf takes the login token from orq auth token, and gives way on an older CLI", () => {
-	const answer = (ok: boolean, stdout: string) => ({ ok, stdout, stderr: "" });
-	expect(tokenOf(answer(true, '{"token":"tok","expires_at":"2100-01-01T00:00:00.000Z","workspace":"acme"}'))).toBe("tok");
-	// A CLI without the command: an unknown-command exit, or help text on stdout.
-	expect(tokenOf(answer(false, ""))).toBeUndefined();
-	expect(tokenOf(answer(true, "Manage authentication\n\nUsage:\n  orq auth [command]"))).toBeUndefined();
-	expect(tokenOf(answer(true, '{"token":""}'))).toBeUndefined();
+test("askToken sends only a CLI without the command back to the session file", () => {
+	const answer = (ok: boolean, stdout: string, stderr = "") => ({ ok, stdout, stderr });
+	expect(askToken(answer(true, '{"token":"tok","expires_at":"2100-01-01T00:00:00Z","workspace":"acme"}'))).toEqual({
+		token: "tok",
+		workspace: "acme",
+	});
+	// orq 11.4.1's answer to a command it does not have.
+	expect(askToken(answer(false, "", 'Error: unknown command "token" for "orq auth"\n'))).toEqual({ unsupported: true });
+	expect(askToken(answer(false, "", "Error: refresh token rejected; run orq auth login\n"))).toEqual({
+		error: "Error: refresh token rejected; run orq auth login",
+	});
+	expect(askToken(answer(true, '{"token":""}'))).toEqual({ error: "orq auth token did not answer with a token" });
 	expect(TOKEN_ARGS).toEqual(["auth", "token", "-o", "json"]);
+});
+
+test("the login session candidate takes the CLI's token and workspace, the file's only from an older CLI", () => {
+	const saved = process.env.ORQ_API_KEY;
+	delete process.env.ORQ_API_KEY;
+	try {
+		const file = JSON.stringify({
+			activeWorkspaceKey: "acme",
+			activeProjectId: "p1",
+			workspaceTokens: { "acme#p1": { token: "file-tok" } },
+		});
+		const pick = (token: { ok: boolean; stdout: string; stderr: string }) => {
+			const run = (args: string[]) => (args[1] === "whoami" ? { ok: true, stdout: '{"session_file":"/s.json"}', stderr: "" } : token);
+			const { candidates, failure } = credentialCandidates("/nonexistent/auth.json", { run, read: () => file });
+			return { session: candidates.find((candidate) => candidate.source === SESSION_SOURCE), failure };
+		};
+		// ORQ_WORKSPACE scoped the CLI to another workspace than the file's active one.
+		expect(pick({ ok: true, stdout: '{"token":"cli-tok","workspace":"other"}', stderr: "" }).session).toMatchObject({
+			token: "cli-tok",
+			workspace: "other",
+		});
+		expect(pick({ ok: false, stdout: "", stderr: 'Error: unknown command "token" for "orq auth"' }).session).toMatchObject({
+			token: "file-tok",
+			workspace: "acme",
+		});
+		const failed = pick({ ok: false, stdout: "", stderr: "orq CLI timed out after 15s" });
+		expect(failed.session).toBeUndefined();
+		expect(failed.failure).toBe("orq auth token: orq CLI timed out after 15s");
+	} finally {
+		if (saved === undefined) delete process.env.ORQ_API_KEY;
+		else process.env.ORQ_API_KEY = saved;
+	}
 });

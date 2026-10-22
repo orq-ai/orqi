@@ -300,19 +300,28 @@ export const WHOAMI_ARGS = ["auth", "whoami", "-o", "json"];
  */
 export const TOKEN_ARGS = ["auth", "token", "-o", "json"];
 
+/** What `orq auth token -o json` said: a token, a CLI without the command, or a failure. */
+export type TokenAnswer = { token: string; workspace?: string } | { unsupported: true } | { error: string };
+
 /**
- * The token in an `orq auth token -o json` answer, or undefined when it is not
- * that: a CLI that predates the command (unknown command, or help on stdout)
- * or a failed exchange. The caller then falls back to the session file.
+ * Read an `orq auth token -o json` answer.
+ *
+ * Only a CLI that predates the command (orq 11.x exits 1 with `unknown
+ * command "token" for "orq auth"`) sends the caller back to the session file.
+ * Any other failure, a rejected refresh token or a stalled backend, is
+ * reported: the file's copy would be a stale token that fails later, further
+ * from the cause.
  */
-export function tokenOf(answer: OrqResult): string | undefined {
-	if (!answer.ok) return undefined;
-	try {
-		const token = JSON.parse(answer.stdout)?.token;
-		return typeof token === "string" && token ? token : undefined;
-	} catch {
-		return undefined;
+export function askToken(answer: OrqResult): TokenAnswer {
+	if (!answer.ok) {
+		if (/unknown command "token"/.test(answer.stderr)) return { unsupported: true };
+		return { error: answer.stderr.trim() || "orq auth token failed" };
 	}
+	try {
+		const { token, workspace } = JSON.parse(answer.stdout) ?? {};
+		if (typeof token === "string" && token) return { token, workspace: typeof workspace === "string" && workspace ? workspace : undefined };
+	} catch {}
+	return { error: "orq auth token did not answer with a token" };
 }
 
 /**
@@ -365,6 +374,8 @@ export interface Whoami {
 	session?: Session;
 	/** That session's token: from `orq auth token`, else out of the session file. */
 	sessionAccess?: string;
+	/** The workspace `sessionAccess` is scoped to. */
+	sessionWorkspace?: string;
 	/** The key `orq auth login --api-key` stored (CLI 11.1.1+), unless rejected. */
 	apiKeyLogin?: string;
 	/** Why there is no session or login key, for when nothing else turns up either. */
@@ -429,14 +440,30 @@ export function readWhoami(json: string, read: (file: string) => string = (file)
  * store leaves the file without one; the file's copy is the fallback for a
  * CLI that predates the command.
  */
-function readSession(): Whoami {
-	const whoami = runOrq(WHOAMI_ARGS);
+function readSession({ run = runOrq, read }: SessionDeps = {}): Whoami {
+	const whoami = run(WHOAMI_ARGS);
 	if (!whoami.ok) return { failure: whoami.stderr.trim() || "orq auth whoami failed" };
-	const read = readWhoami(whoami.stdout);
-	cliServer = read.server;
-	cliProfile = read.profile;
-	if (read.session) read.sessionAccess = tokenOf(runOrq(TOKEN_ARGS)) ?? sessionToken(read.session);
-	return read;
+	const result = readWhoami(whoami.stdout, read);
+	cliServer = result.server;
+	cliProfile = result.profile;
+	if (!result.session) return result;
+	const answer = askToken(run(TOKEN_ARGS));
+	if ("token" in answer) {
+		result.sessionAccess = answer.token;
+		result.sessionWorkspace = answer.workspace ?? result.session.activeWorkspaceKey;
+	} else if ("unsupported" in answer) {
+		result.sessionAccess = sessionToken(result.session);
+		result.sessionWorkspace = result.session.activeWorkspaceKey;
+	} else {
+		result.failure ??= `orq auth token: ${answer.error}`;
+	}
+	return result;
+}
+
+/** The CLI runner and file reader `credentialCandidates` uses, injectable for tests. */
+export interface SessionDeps {
+	run?: (args: string[]) => OrqResult;
+	read?: (file: string) => string;
 }
 
 /**
@@ -528,13 +555,15 @@ export const SESSION_SOURCE = "orq login session";
 /** `orq auth login --api-key`: below an exported key, as the CLI ranks it, above the browser session. */
 export const API_KEY_LOGIN_SOURCE = "orq api-key login";
 
-export function credentialCandidates(authPath?: string): { candidates: Credential[]; failure?: string; profileGap?: string } {
+export function credentialCandidates(
+	authPath?: string,
+	deps: SessionDeps = {},
+): { candidates: Credential[]; failure?: string; profileGap?: string } {
 	const candidates: Credential[] = [];
-	const { session, sessionAccess, apiKeyLogin, failure } = readSession();
+	const { session, sessionAccess, sessionWorkspace, apiKeyLogin, failure } = readSession(deps);
 	const login = loginKey(authPath);
 	// A browser sign-in stores the CLI session's own token: its workspace is the session's active one.
-	const loginWorkspace =
-		login && login === sessionAccess ? session?.activeWorkspaceKey : login ? workspaceOfKey(login, session) : undefined;
+	const loginWorkspace = login && login === sessionAccess ? sessionWorkspace : login ? workspaceOfKey(login, session) : undefined;
 	if (login) candidates.push({ token: login, source: "/login key", workspace: loginWorkspace });
 	// A profile outranks an exported key, because it does for the CLI: it warns
 	// and uses the profile (applyProfileAPIKey), and orqi disagreeing would put
@@ -549,8 +578,7 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 	if (apiKeyLogin && ![login, profile, process.env.ORQ_API_KEY].includes(apiKeyLogin)) {
 		candidates.push({ token: apiKeyLogin, source: API_KEY_LOGIN_SOURCE, workspace: workspaceOfKey(apiKeyLogin, session) });
 	}
-	const workspace = session?.activeWorkspaceKey;
-	if (sessionAccess) candidates.push({ token: sessionAccess, source: SESSION_SOURCE, workspace });
+	if (sessionAccess) candidates.push({ token: sessionAccess, source: SESSION_SOURCE, workspace: sessionWorkspace });
 	// Only when the file moved or the profile is keyless: `orq orqi` has already
 	// put the profile's key in ORQ_API_KEY, so that launch never gets here.
 	const profileGap =
