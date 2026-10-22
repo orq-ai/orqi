@@ -21,6 +21,8 @@ import {
 	spawnFailure,
 	stageServer,
 	staged,
+	TOKEN_ARGS,
+	tokenOf,
 	takeServerFlag,
 	WHOAMI_ARGS,
 	workspaceOfKey,
@@ -962,4 +964,14 @@ test("a plugin update's git and npm output is captured, not painted over the TUI
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("tokenOf takes the login token from orq auth token, and gives way on an older CLI", () => {
+	const answer = (ok: boolean, stdout: string) => ({ ok, stdout, stderr: "" });
+	expect(tokenOf(answer(true, '{"token":"tok","expires_at":"2100-01-01T00:00:00.000Z","workspace":"acme"}'))).toBe("tok");
+	// A CLI without the command: an unknown-command exit, or help text on stdout.
+	expect(tokenOf(answer(false, ""))).toBeUndefined();
+	expect(tokenOf(answer(true, "Manage authentication\n\nUsage:\n  orq auth [command]"))).toBeUndefined();
+	expect(tokenOf(answer(true, '{"token":""}'))).toBeUndefined();
+	expect(TOKEN_ARGS).toEqual(["auth", "token", "-o", "json"]);
 });

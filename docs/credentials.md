@@ -23,7 +23,7 @@ says the check did not answer; when every candidate was refused, it reports each
 | 1 | the pinned profile's key | a profile is in force | `credentials.json`, by the name whoami reports (see [6](#6-pinning-a-profile)) | `orq profile <name>` |
 | 2 | `ORQ_API_KEY` | it is set, and differs from 0 and 1 | the environment | `ORQ_API_KEY` |
 | 3 | the stored api-key login | `orq auth login --api-key` was run (CLI 11.1.1+), and it differs from 0 to 2 | `api_key_login_file` named by whoami (`~/.orq/sessions/<host>.apikey.json`, field `apiKey`) | `orq api-key login` |
-| 4 | the login session | there is one | `orq auth login`, read through the CLI | `orq login session` |
+| 4 | the login session | there is one | `orq auth login`: the token from `orq auth token -o json`, or out of the session file whoami names on a CLI without that command | `orq login session` |
 
 The stored `/login` key comes first because pi's model runtime already prefers it over
 `ORQ_API_KEY`: ranking it lower would put the model and the tools on different credentials after a

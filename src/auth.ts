@@ -292,6 +292,30 @@ export function sessionToken(session: Session | undefined): string | undefined {
 export const WHOAMI_ARGS = ["auth", "whoami", "-o", "json"];
 
 /**
+ * How to ask the CLI for the login session's token (orq-cli#146).
+ *
+ * A CLI that keeps the session's secrets in the OS credential store
+ * (orq-cli#121) leaves none in the session file, so `sessionToken()` finds
+ * nothing there. This asks instead, and the CLI refreshes the token first.
+ */
+export const TOKEN_ARGS = ["auth", "token", "-o", "json"];
+
+/**
+ * The token in an `orq auth token -o json` answer, or undefined when it is not
+ * that: a CLI that predates the command (unknown command, or help on stdout)
+ * or a failed exchange. The caller then falls back to the session file.
+ */
+export function tokenOf(answer: OrqResult): string | undefined {
+	if (!answer.ok) return undefined;
+	try {
+		const token = JSON.parse(answer.stdout)?.token;
+		return typeof token === "string" && token ? token : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * Server the CLI resolved, from the same whoami payload as the session file.
  *
  * whoami answers in two shapes and names the host differently in each: a
@@ -339,6 +363,8 @@ export interface Whoami {
 	profile?: string;
 	/** The browser login session, unless whoami said the server rejected it. */
 	session?: Session;
+	/** That session's token: from `orq auth token`, else out of the session file. */
+	sessionAccess?: string;
 	/** The key `orq auth login --api-key` stored (CLI 11.1.1+), unless rejected. */
 	apiKeyLogin?: string;
 	/** Why there is no session or login key, for when nothing else turns up either. */
@@ -398,7 +424,10 @@ export function readWhoami(json: string, read: (file: string) => string = (file)
  * The file's name under `~/.orq/sessions/` and its internal shape are both the
  * CLI's business, and both have already changed across releases (RES-1500), so
  * ask `whoami` for the path rather than guessing. whoami also refreshes an
- * expired token and proves the session is live.
+ * expired token and proves the session is live. The token itself comes from
+ * `orq auth token`, because a CLI that keeps secrets in the OS credential
+ * store leaves the file without one; the file's copy is the fallback for a
+ * CLI that predates the command.
  */
 function readSession(): Whoami {
 	const whoami = runOrq(WHOAMI_ARGS);
@@ -406,6 +435,7 @@ function readSession(): Whoami {
 	const read = readWhoami(whoami.stdout);
 	cliServer = read.server;
 	cliProfile = read.profile;
+	if (read.session) read.sessionAccess = tokenOf(runOrq(TOKEN_ARGS)) ?? sessionToken(read.session);
 	return read;
 }
 
@@ -500,11 +530,11 @@ export const API_KEY_LOGIN_SOURCE = "orq api-key login";
 
 export function credentialCandidates(authPath?: string): { candidates: Credential[]; failure?: string; profileGap?: string } {
 	const candidates: Credential[] = [];
-	const { session, apiKeyLogin, failure } = readSession();
+	const { session, sessionAccess, apiKeyLogin, failure } = readSession();
 	const login = loginKey(authPath);
 	// A browser sign-in stores the CLI session's own token: its workspace is the session's active one.
 	const loginWorkspace =
-		login && login === sessionToken(session) ? session?.activeWorkspaceKey : login ? workspaceOfKey(login, session) : undefined;
+		login && login === sessionAccess ? session?.activeWorkspaceKey : login ? workspaceOfKey(login, session) : undefined;
 	if (login) candidates.push({ token: login, source: "/login key", workspace: loginWorkspace });
 	// A profile outranks an exported key, because it does for the CLI: it warns
 	// and uses the profile (applyProfileAPIKey), and orqi disagreeing would put
@@ -520,8 +550,7 @@ export function credentialCandidates(authPath?: string): { candidates: Credentia
 		candidates.push({ token: apiKeyLogin, source: API_KEY_LOGIN_SOURCE, workspace: workspaceOfKey(apiKeyLogin, session) });
 	}
 	const workspace = session?.activeWorkspaceKey;
-	const token = sessionToken(session);
-	if (token) candidates.push({ token, source: SESSION_SOURCE, workspace });
+	if (sessionAccess) candidates.push({ token: sessionAccess, source: SESSION_SOURCE, workspace });
 	// Only when the file moved or the profile is keyless: `orq orqi` has already
 	// put the profile's key in ORQ_API_KEY, so that launch never gets here.
 	const profileGap =
