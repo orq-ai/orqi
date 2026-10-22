@@ -23,7 +23,7 @@ says the check did not answer; when every candidate was refused, it reports each
 | 1 | the pinned profile's key | a profile is in force | `credentials.json`, by the name whoami reports (see [6](#6-pinning-a-profile)) | `orq profile <name>` |
 | 2 | `ORQ_API_KEY` | it is set, and differs from 0 and 1 | the environment | `ORQ_API_KEY` |
 | 3 | the stored api-key login | `orq auth login --api-key` was run (CLI 11.1.1+), and it differs from 0 to 2 | `api_key_login_file` named by whoami (`~/.orq/sessions/<host>.apikey.json`, field `apiKey`) | `orq api-key login` |
-| 4 | the login session | there is one | `orq auth login`, read through the CLI | `orq login session` |
+| 4 | the login session | there is one | `orq auth login`: the token from `orq auth token -o json`, or out of the session file whoami names on a CLI without that command | `orq login session` |
 
 The stored `/login` key comes first because pi's model runtime already prefers it over
 `ORQ_API_KEY`: ranking it lower would put the model and the tools on different credentials after a
@@ -87,12 +87,13 @@ mentions when it applies.
 orqi keeps no copy of the host: the CLI's `config.json` is the one store. The fixed header names
 the host (`server my.staging.orq.ai`) whenever it is not the default `https://my.orq.ai`.
 
-## 3. Which session file, and which token inside it
+## 3. Which session file, and which token
 
 ```
-orq auth whoami -o json ──▶ session_file ──▶ read JSON ──▶ workspaceTokens[…] ──▶ token
+orq auth whoami -o json ──▶ session_file ──▶ read JSON ──▶ orq auth token -o json ──▶ token
         │                        │                              │
-   fails: §4            missing: §4                    no match: §4
+   fails: §4            missing: §4              unknown command: workspaceTokens[…]
+                                                  any other failure: §4
 ```
 
 Every step is the CLI's answer, not orqi's guess:
@@ -102,7 +103,12 @@ Every step is the CLI's answer, not orqi's guess:
 | Find the file | runs `orq auth whoami -o json`, reads `session_file` and `server` | the name has changed three times: `<profile>.json`, then `default.json`, now `<host>.json` |
 | Ask in the right dialect | `-o json`, never `--json` | orq-cli 8.4 removed the `--json` alias; `-o json` works from 5.0 onwards |
 | Refresh | none: `whoami` already refreshed an expiring token and proved the session is live | a second call costs another round trip against a backend that stalls |
-| Read the token | `sessionToken()`, three keys (below) | the map's key scheme changed in 6.x |
+| Get the token | `orq auth token -o json` (orq-cli#146), which also names the workspace it is scoped to | a CLI that keeps secrets in the OS credential store (orq-cli#121) leaves none in the file |
+| Older CLI | only on `unknown command "token"`, `sessionToken()` reads the file, three keys (below) | the map's key scheme changed in 6.x |
+
+The token costs one more `orq` spawn after whoami. Any failure of `orq auth token` other than the
+unknown command is reported (§4), not papered over with the file's copy, which would be a stale
+token that fails later.
 
 `workspaceTokens` is keyed by workspace in CLI 5.x and by workspace **and project** from 6.x on, so
 the lookup tries three keys and stops at the first hit:
@@ -126,6 +132,7 @@ the CLI's own stderr above the login hint.
 | CLI call took over 15 s | `orq CLI timed out after 15s (the orq API may be slow)` |
 | CLI rejected the call | its own stderr, e.g. `Error: unknown flag: --json` |
 | whoami named no file | `orq auth whoami named no session file` |
+| `orq auth token` failed | `orq auth token: <its stderr>` |
 | the file is gone or corrupt | `session file unreadable: <path> (…)` |
 | session expired | the CLI's own message, e.g. `Error: Invalid refresh token!` |
 | whoami says `authenticated: false` (CLI 11.0.1+) | the credential whoami vouched for (the login session, or the api-key login) is not tried; its `auth_error` is shown, e.g. `orq login session rejected: 401 …`. A failed check (`auth_check_error`: timeout, 5xx) is no verdict and changes nothing |
@@ -174,7 +181,7 @@ The header names the active workspace, because it scopes every tool call and
 
 | Credential | Workspace label comes from |
 |---|---|
-| login session | `activeWorkspaceKey` in the session file |
+| login session | the `workspace` `orq auth token` answered; `activeWorkspaceKey` in the session file on an older CLI |
 | API key, session present | the key's own `workspace_id` claim, mapped to a human key via the session's workspace list |
 | API key, no session | the first 8 characters of that `workspace_id`: a UUID beats a guessed name |
 
@@ -220,10 +227,10 @@ whoami answers in four shapes, all read by `readWhoami()`:
 Every shape still names `session_file`, so an API-key launch keeps the workspace names for the
 header.
 
-orq-cli PR #121 (open as of 2026-10-13) moves the session tokens into the OS keychain, leaving
-`session_file` without `workspaceTokens`. If it lands before orqi reads the keychain, the login
-session drops out of the candidate list. The workaround is the one that PR keeps: run the CLI with
-`ORQ_CREDENTIAL_STORE=file` (export it, then `orq auth login` again) so the tokens stay in the file.
+orq-cli PR #121 moves the session tokens into the OS keychain, leaving `session_file` without
+`workspaceTokens`. orqi asks `orq auth token` for the token instead (§3), so that needs a CLI with
+the command (orq-cli#146). On an older orqi, the workaround is `ORQ_CREDENTIAL_STORE=file` (export
+it, then `orq auth login` again) so the tokens stay in the file.
 
 ## 8. Recipes
 

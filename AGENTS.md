@@ -38,6 +38,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   key, and is reported ahead of the rejections when nothing was accepted. A credential change
   re-registers the server with a NEW config object: pi reconnects a registered server exactly when
   its config object changes (identity, not content).
+- **The login session's token is asked for, not read.** `orq auth token -o json` (orq-cli#146)
+  answers it, refreshed, with the workspace it is scoped to. A CLI that keeps the session's secrets
+  in the OS credential store (orq-cli#121) leaves `workspaceTokens` empty in the file. `askToken`
+  falls back to the file only on `unknown command "token"`; any other failure becomes `failure`,
+  because the file's copy would be stale. It costs one more `orq` spawn per credential read.
 - **`sessionToken()` tries three keys, not one.** CLI 5.x keyed `workspaceTokens` by workspace key;
   6.x keys it `<workspaceKey>#<projectId>`, because a token is now project-scoped. An exact-key
   lookup on 6.x finds nothing and silently loses the login-session credential, so the lookup tries
