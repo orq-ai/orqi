@@ -1121,18 +1121,20 @@ test("a read of a note counts, wherever memorq keeps it; other reads and failed 
 		// The repo folder, relative to the working directory, when rules are written there.
 		await h.read("r2", ".memorq/rules/r.md");
 		expect(readCount(h)).toBe(2);
-		// The machine root still holds the other kinds' notes: ORQ_NOTES_HOME/<key>/<kind>/.
+		// The machine root still holds the other kinds: ORQ_NOTES_HOME/<key>/<kind>/. A skill read is an event,
+		// but not one of the notes read: the count is of the notes memorq counts.
 		await h.read("r3", join(dir, "notes-home", "orq-ai__orqi", "skills", "s", "SKILL.md"));
-		expect(readCount(h)).toBe(3);
+		expect(readCount(h)).toBe(2);
+		expect(h.memory()[1]).toMatch(/^◇ S +now$/);
 		await h.read("r4", "src/main.ts");
 		await h.read("r5", "/home/me/.memorq/orq-ai__orqi/notes/missing.md", true);
-		expect(readCount(h)).toBe(3);
+		expect(readCount(h)).toBe(2);
 		// A subagent opening a note is a read too.
 		await h.read("r6", "/home/me/.memorq/orq-ai__orqi/notes/b.md", false, "subagent-1");
-		expect(readCount(h)).toBe(4);
+		expect(readCount(h)).toBe(3);
 		// The same note again is the same read: notes read, not reads.
 		await h.read("r7", "/home/me/.memorq/orq-ai__orqi/notes/a.md");
-		expect(readCount(h)).toBe(4);
+		expect(readCount(h)).toBe(3);
 		// Newest first, by title: no file to open here, so the file name's words.
 		expect(h.memory()[1]).toMatch(/^◇ A +now$/);
 	} finally {
@@ -1723,6 +1725,26 @@ test("memorq's recalls and saves join the reads as events, newest first; misses 
 			expect.stringMatching(/^↳ "q8" → nothing +1m$/),
 			"alt+m more",
 		]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("memorq's counters going backwards (it restarted) forget the misses seen before", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const h = harnessOn(dir);
+	const entry = (text: string, ago: number, hits = 0) => ({ kind: "recall" as const, text, at: Date.now() - ago * 1000, hits });
+	const [a, b, c, d] = [entry("a", 30), entry("b", 20), entry("c", 5), entry("d", 2, 3)];
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ activity: { recalls: 2, remembers: 0, recent: [b, a] } }));
+		expect(h.memory()[1]).toBe("recall 2 · 2 missed");
+		// A new memorq session: its counts start again, and the old misses do not count in them.
+		h.bus.emit("memorq:state", memorqState({ activity: { recalls: 1, remembers: 0, recent: [c] } }));
+		expect(h.memory()[1]).toBe("recall 1 · 1 missed");
+		h.bus.emit("memorq:state", memorqState({ activity: { recalls: 2, remembers: 0, recent: [d, c] } }));
+		expect(h.memory()[1]).toBe("recall 2 · 1 missed");
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });

@@ -114,8 +114,23 @@ test("the bar fills in proportion, a cell at least for a read, never past the en
 	expect(bar(1, 400)).toBe("█░░░░░░░░░░░");
 	expect(bar(11, 22)).toBe("██████░░░░░░");
 	expect(bar(22, 22)).toBe("████████████");
-	// More paths read than notes counted (a rule, a skill): still a full bar.
+	// More paths read than notes counted (a note saved since): a full bar, and the count never past the total.
 	expect(bar(30, 22)).toBe("████████████");
+	expect(draw(state({ notes: 22 }), "compact", { reads: reads(30) }).text[1]).toBe(lr("read ████████████", "22 of 22"));
+});
+
+test("a skill read is an event but not one of the notes read: the bar counts notes and rules", () => {
+	const some: NoteRead[] = [
+		{ path: "/m/orq/notes/a.md", at: NOW - MIN, kind: "notes" },
+		{ path: "/m/orq/rules/r.md", at: NOW - 2 * MIN, kind: "rules" },
+		{ path: "/m/orq/skills/s/SKILL.md", at: NOW - 3 * MIN, kind: "skills" },
+	];
+	const shown = draw(state(), "compact", { reads: some });
+	expect(shown.text[1]).toBe(lr("read █░░░░░░░░░░░", "2 of 22"));
+	expect(draw(state(), "expanded", { reads: some }).text[0]).toBe(header("22 notes · 2 read"));
+	expect(draw(state(), "expanded", { reads: some }).text.join("\n")).toContain("Some note");
+	// A skill read alone: an event, and nothing of the notes read.
+	expect(draw(state(), "compact", { reads: some.slice(2) }).text[1]).toBe(lr("read ░░░░░░░░░░░░", "0 of 22"));
 });
 
 test("recall that found notes: the count, and the query with how many it found", () => {
@@ -129,7 +144,7 @@ test("recall that found notes: the count, and the query with how many it found",
 	expect(shown.runs.slice(1)).toEqual([
 		["muted:read", "dim:░░░░░░░░░░░░", "text:0", "dim:of 22"],
 		["muted:recall", "text:3"],
-		["success:↳", 'text:"mkdocs strict build"', "text:→ 5", "dim:now"],
+		["success:↳", 'text:"', "text:mkdocs strict build", 'text:"', "text:→ 5", "dim:now"],
 	]);
 });
 
@@ -138,7 +153,7 @@ test("a recall that found nothing: the mark and the result warn, and it counts a
 	expect(shown.text.slice(2)).toEqual(["  recall 4 · 1 missed", lr('↳ "k8s rollout" → nothing', "2m")]);
 	expect(shown.runs.slice(2)).toEqual([
 		["muted:recall", "text:4", "dim:· 1 missed"],
-		["warning:↳", 'text:"k8s rollout"', "warning:→ nothing", "dim:2m"],
+		["warning:↳", 'text:"', "text:k8s rollout", 'text:"', "warning:→ nothing", "dim:2m"],
 	]);
 });
 
@@ -173,23 +188,38 @@ test("misses are counted over the session, beyond the five entries memorq sends 
 	expect(draw(active(seen.slice(0, 2), 2, 0), "compact", { seen }).text[2]).toBe("  recall 2 · 2 missed");
 });
 
-test("busy: three-digit counts keep every number whole, the dots closing up only when they must", () => {
+test("busy: three-digit counts keep every number whole, the word shortening before the dots close up", () => {
 	const seen = Array.from({ length: 100 }, (_, i) => recall(`q${i}`, (i + 1) * MIN, 0));
 	const busy = draw(state({ notes: 456, activity: { recalls: 123, remembers: 100, recent: seen.slice(0, 5) } }), "compact", {
 		reads: reads(123),
 		seen,
 	});
 	expect(busy.text[1]).toBe(lr("read ███░░░░░░░░░", "123 of 456"));
-	expect(busy.text[2]).toBe("  recall 123·100 missed·saved 100");
-	// Without the saved part it fits with its spaces.
+	expect(busy.text[2]).toBe("  recall 123 · 100 miss · saved 100");
+	// Without the saved part it fits with the whole word.
 	const fewer = draw(state({ notes: 456, activity: { recalls: 123, remembers: 0, recent: seen.slice(0, 5) } }), "compact", { seen });
 	expect(fewer.text[2]).toBe("  recall 123 · 100 missed");
+	// Four digits: the dots close up as the last resort.
+	const huge = Array.from({ length: 1000 }, (_, i) => recall(`q${i}`, (i + 1) * 1000, 0));
+	const four = draw(state({ notes: 456, activity: { recalls: 1234, remembers: 1000, recent: huge.slice(0, 5) } }), "compact", {
+		seen: huge,
+	});
+	expect(four.text[2]).toBe("  recall 1234·1000 miss·saved 1000");
 });
 
 test("a long title gives way, and the result and the age stay", () => {
 	const long = "Verify docs changes with strict build and tests before you push";
-	expect(draw(active([recall(long, MIN, 0)])).text[3]).toBe('  ↳ "Verify docs chang… → nothing 1m');
+	expect(draw(active([recall(long, MIN, 0)])).text[3]).toBe('  ↳ "Verify docs chan…" → nothing 1m');
 	expect(draw(active([remember(long, MIN)])).text[3]).toBe("  + Verify docs changes with str… 1m");
+	// The query keeps both quotes, around the part that is cut.
+	expect(draw(active([recall(long, MIN, 0)])).runs[3]).toEqual([
+		"warning:↳",
+		'text:"',
+		"text:Verify docs chan…",
+		'text:"',
+		"warning:→ nothing",
+		"dim:1m",
+	]);
 });
 
 test("the urgent status takes the place of the newest event", () => {
@@ -203,8 +233,12 @@ test("the urgent status takes the place of the newest event", () => {
 	const failed = draw(active(events, 0, 1, { review: { dueInSessions: 1, failed: "boom" } }));
 	expect(failed.text[3]).toBe("  ⚠ last review failed");
 	expect(failed.runs[3]).toEqual(["warning:⚠ last review failed"]);
+	// Read-only is the user's own setting: the event keeps its row, and only the expanded footer says it.
 	const readonly = draw(active(events, 0, 1, { enabled: "readonly" }));
-	expect(readonly.text[3]).toBe("  ‖ read-only · learns nothing");
+	expect(readonly.text[3]).toBe(lr("+ Run make test offline", "now"));
+	const readonlyOpen = draw(active(events, 0, 1, { enabled: "readonly" }), "expanded");
+	expect(readonlyOpen.text.at(-1)).toBe("  read-only · alt+m less");
+	expect(readonlyOpen.runs.at(-1)).toEqual(["dim:read-only · alt+m less"]);
 	// The status alone is something to say: with no events the section still draws it.
 	expect(draw(state({ paused: true })).text).toEqual([header("22 notes"), "  ‖ learning paused · /memory"]);
 	// A review that is merely due is not urgent: compact says nothing of it.

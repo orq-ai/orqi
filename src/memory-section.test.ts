@@ -15,6 +15,8 @@ import {
 	learnPhrase,
 	memoryBody,
 	memoryView,
+	mergeRecent,
+	noteKind,
 	printable,
 	type MemorqActivity,
 	type MemorqHost,
@@ -326,10 +328,11 @@ test("a failed review alone still draws, an unknown enabled reads as on, and mem
 	expect(footer(state({ review: { running: false, dueInSessions: 1 } as never }))).toBe("review in 1 session · alt+m less");
 	expect(footer(state({ review: { dueInSessions: 2 } }))).toBe("review in 2 sessions · alt+m less");
 	expect(footer(state({ review: { dueInSessions: 0 } }))).toBe("review at next start · alt+m less");
-	// A running review outranks the last one's failure; learning paused and read-only outrank both.
+	// A running review outranks the last one's failure; learning paused outranks both.
 	expect(footer(state({ review: { running: true, notes: 47, failed: "x" } }))).toBe("⟳ reviewing 47 notes… · alt+m less");
 	expect(expanded(state({ paused: true, review: { running: true, notes: 4 } })).at(-2)).toBe("‖ learning paused · /memory");
-	expect(expanded(state({ enabled: "readonly" })).at(-2)).toBe("‖ read-only · learns nothing");
+	// Read-only is the user's own setting: a dim word in the footer, no mark, nothing to act on.
+	expect(footer(state({ enabled: "readonly" }))).toBe("read-only · alt+m less");
 	expect(
 		memoryBody(
 			memoryView(state({ enabled: "off" }), [], () => ({ title: "x" })),
@@ -351,7 +354,7 @@ test("a failed review alone still draws, an unknown enabled reads as on, and mem
 test("a malformed activity is dropped, never the state", () => {
 	const good = state({ activity: activity({ recent: [{ kind: "recall", text: "q", at: NOW, hits: 1 }] }) });
 	expect(isActivity(good.activity)).toBe(true);
-	expect(eventsOf(good)).toEqual(['recall "q"']);
+	expect(eventsOf(good)).toEqual(["recall q"]);
 	for (const bad of [
 		null,
 		"busy",
@@ -389,7 +392,7 @@ test("a malformed entry is skipped, the rest still draw", () => {
 		] as never,
 	});
 	expect(isActivity(a)).toBe(true);
-	expect(eventsOf(state({ activity: a }))).toEqual(['recall "first good"', "save second good", 'recall "third good"']);
+	expect(eventsOf(state({ activity: a }))).toEqual(["recall first good", "save second good", "recall third good"]);
 });
 
 test("a save's trigger and path, and a recall's top hit, become the event's detail; one that is not text is ignored", () => {
@@ -424,5 +427,40 @@ test("isActivity claims only the shell: counts and a list, whose entries are che
 		const text: string = data.recent[0]!.text;
 		expect(text).toBe("ok");
 	}
-	expect(eventsOf(state({ activity: data as never }))).toEqual(['recall "ok"']);
+	expect(eventsOf(state({ activity: data as never }))).toEqual(["recall ok"]);
+});
+
+test("a read names the kind of store it came from: notes, rules or skills", () => {
+	const home = "/scratch/notes-home";
+	const roots = [home];
+	const repo = "/work/orqi";
+	const inRepo = { notes: `${repo}/.memorq/notes`, rules: `${repo}/.memorq/rules`, skills: `${repo}/.memorq/skills` };
+	expect(noteKind(`${repo}/.memorq/notes/a.md`, inRepo, roots, repo)).toBe("notes");
+	expect(noteKind(`${repo}/.memorq/rules/r.md`, inRepo, roots, repo)).toBe("rules");
+	expect(noteKind("@.memorq/skills/s/SKILL.md", inRepo, roots, repo)).toBe("skills");
+	expect(noteKind(`${home}/orq-ai__orqi/rules/r.md`, inRepo, roots, repo)).toBe("rules");
+	expect(noteKind(`${home}/orq-ai__orqi/skills/s/SKILL.md`, inRepo, roots, repo)).toBe("skills");
+	expect(noteKind("src/main.ts", inRepo, roots, repo)).toBeUndefined();
+	expect(noteKind(`${home}/orq-ai__orqi/log.jsonl`, inRepo, roots, repo)).toBeUndefined();
+});
+
+test("memorq's counters going backwards means it restarted: the recalls and saves seen before are forgotten", () => {
+	const at = (n: number) => NOW - n * MIN;
+	const old = state({ activity: activity({ recalls: 9, remembers: 2, recent: [{ kind: "recall", text: "old", at: at(30), hits: 0 }] }) });
+	const seen = mergeRecent([], old);
+	expect(seen.map((entry) => entry.text)).toEqual(["old"]);
+	const grown = state({
+		activity: activity({ recalls: 10, remembers: 2, recent: [{ kind: "recall", text: "newer", at: at(20), hits: 0 }] }),
+	});
+	expect(mergeRecent(seen, grown, old).map((entry) => entry.text)).toEqual(["newer", "old"]);
+	// A restarted memorq counts from zero, with an activity of its own or none yet.
+	const fresh = state({
+		activity: activity({ recalls: 1, remembers: 0, recent: [{ kind: "recall", text: "new session", at: at(1), hits: 1 }] }),
+	});
+	expect(mergeRecent(seen, fresh, old).map((entry) => entry.text)).toEqual(["new session"]);
+	expect(mergeRecent(seen, state(), old)).toEqual([]);
+	// A malformed activity is no news: what was seen stays.
+	expect(mergeRecent(seen, state({ activity: "busy" as never }), old)).toEqual(seen);
+	// Without a state before, nothing is forgotten.
+	expect(mergeRecent(seen, fresh).map((entry) => entry.text)).toEqual(["new session", "old"]);
 });

@@ -42,7 +42,7 @@ import {
 	isLearned,
 	injectedTokens,
 	isMemorqState,
-	isNoteRead,
+	noteKind,
 	learnHead,
 	learnPhrase,
 	memoryBody,
@@ -721,11 +721,12 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.events.on("memorq:state", (data) => {
 			// The bus is untyped: a payload this renderer cannot read is ignored, and the last good one stays.
 			if (!isMemorqState(data)) return;
+			const before = memorqState;
 			// A malformed learn is dropped; the rest of the state still draws.
 			memorqState = isLearned(data.learned) ? data : { ...data, learned: undefined };
 			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
 			recordLearn(memorqState.learned);
-			seenRecent = mergeRecent(seenRecent, memorqState);
+			seenRecent = mergeRecent(seenRecent, memorqState, before);
 			refreshMemory();
 			// What memorq injected is a part of the context of its own: measure again when it moves.
 			if (ctxRef && split && injectedTokens(memorqState) !== measuredInjected) measure(ctxRef);
@@ -775,13 +776,11 @@ export function orqHarness(deps: HarnessDeps) {
 			const path = readPaths.get(toolCallId);
 			readPaths.delete(toolCallId);
 			if (!path || isError || !memorqState) return;
-			const hit =
-				isNoteRead(path, memorqState.stores, roots, cwd) ||
-				isNoteRead(real(readPath(path, cwd)), realStores ?? memorqState.stores, realRoots, cwd);
-			if (!hit) return;
 			const file = real(readPath(path, cwd));
+			const kind = noteKind(path, memorqState.stores, roots, cwd) ?? noteKind(file, realStores ?? memorqState.stores, realRoots, cwd);
+			if (!kind) return;
 			noteInfos.load(file);
-			noteReads = noteRead(noteReads, file, now());
+			noteReads = noteRead(noteReads, file, now(), kind);
 			refreshMemory();
 			render();
 		};

@@ -532,7 +532,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (`memoryView`) is rebuilt when a state arrives or a note is read, and a render only lays it out. Expanded,
   the frame hands memory the rows the other sections leave (`SectionFrame.rows`), so it lists as many events as
   fit and never loses its footer. The hint `alt+m more` shows until a depth key was pressed once
-  (`depthKeyUsed` in `orqi.json`).
+  (`depthKeyUsed` in `orqi.json`). The `read N of M` count is of notes and rules (what memorq's `notes` counts): a skill read
+  is an event but not in it, and N never passes M. `mergeRecent` forgets what it saw when memorq's totals go
+  down, which is memorq starting a session of its own.
 - **A learn is recorded once.** memorq republishes the same `learned` on every change and answers
   every `memorq:state?`, and a resume replays the `orqi-memory` entries, so each learn is keyed by
   `at|trigger|count`, seeded from the branch at session start; a learn published before that waits

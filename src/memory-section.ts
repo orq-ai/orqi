@@ -84,7 +84,7 @@ export interface MemorqHost {
 	contextPercent?(): number | undefined;
 }
 
-const KINDS = new Set(["notes", "rules", "skills"]);
+const KINDS: readonly NoteKind[] = ["notes", "rules", "skills"];
 
 const TRIGGER: Record<string, string> = {
 	ship: "after git push",
@@ -202,10 +202,14 @@ function readActivity(data: unknown): { recalls: number; remembers: number; rece
 		: undefined;
 }
 
-/** A note the model read: its resolved path, and when. */
+/** The kinds of file memorq keeps: a note, a rule and a skill. */
+export type NoteKind = "notes" | "rules" | "skills";
+
+/** A note the model read: its resolved path, when, and which kind of store it came from (absent: counted as a note). */
 export interface NoteRead {
 	path: string;
 	at: number;
+	kind?: NoteKind;
 }
 
 /** The distinct notes kept as read: more than a session opens, so only the very long one loses its oldest. */
@@ -214,18 +218,28 @@ export const MAX_READS = 100;
 export const MAX_SEEN = 60;
 
 /** `reads` with `path` read at `at`: newest first, a path once (the newest time), the oldest dropped past `MAX_READS`. */
-export function noteRead(reads: NoteRead[], path: string, at: number): NoteRead[] {
-	return [{ path, at }, ...reads.filter((read) => read.path !== path)].slice(0, MAX_READS);
+export function noteRead(reads: NoteRead[], path: string, at: number, kind?: NoteKind): NoteRead[] {
+	return [{ path, at, ...(kind ? { kind } : {}) }, ...reads.filter((read) => read.path !== path)].slice(0, MAX_READS);
 }
 
 const recentKey = (entry: MemorqRecent) => `${entry.kind}|${entry.at}|${entry.text}`;
 
+/** memorq's totals in a state: zero before its first call (no activity at all); undefined for an activity that is malformed. */
+function totalsOf(state: MemorqState): { recalls: number; remembers: number } | undefined {
+	if (state.activity === undefined || state.activity === null) return { recalls: 0, remembers: 0 };
+	return isActivity(state.activity) ? state.activity : undefined;
+}
+
 /**
  * `seen` with the recalls and saves of `state` it did not have, newest first. memorq sends the newest five each
  * time and orqi hears every change, so over a session this holds more than five, and counts what memorq's own
- * totals cannot (how many recalls found nothing).
+ * totals cannot (how many recalls found nothing). A total that went down since `before` means memorq started a
+ * new session of its own: what was seen belongs to the old one and is forgotten.
  */
-export function mergeRecent(seen: MemorqRecent[], state: MemorqState): MemorqRecent[] {
+export function mergeRecent(seen: MemorqRecent[], state: MemorqState, before?: MemorqState): MemorqRecent[] {
+	const now = totalsOf(state);
+	const was = before && totalsOf(before);
+	if (now && was && (now.recalls < was.recalls || now.remembers < was.remembers)) seen = [];
 	const activity = readActivity(state.activity);
 	const known = new Set(seen.map(recentKey));
 	const fresh = activity?.recent.filter((entry) => !known.has(recentKey(entry))) ?? [];
@@ -238,7 +252,7 @@ export interface MemoryEvent {
 	key: string;
 	kind: "read" | "recall" | "save" | "dupe";
 	at: number;
-	/** A note's title, a save's name, or a recall's quoted query. */
+	/** A note's title, a save's name, or a recall's query (the section quotes it). */
 	title: string;
 	/** A recall's notes found: its result reads `→ 5` compact and `found 5` expanded. */
 	hits?: number;
@@ -250,11 +264,17 @@ export interface MemoryEvent {
 export interface MemoryView {
 	state: MemorqState;
 	events: MemoryEvent[];
-	/** Distinct notes read. */
+	/** Distinct notes and rules read: the ones memorq counts in `notes`. A skill read is an event, not one of these. */
 	read: number;
 	recalls: number;
 	missed: number;
 	saved: number;
+}
+
+/** What a recall found, under it: nothing, or its first hit; silent when memorq did not say. */
+function recallDetail(hits: number | undefined, top: string): string | undefined {
+	if (hits === 0) return "memory has no note on this yet";
+	return top ? `top: ${top}` : undefined;
 }
 
 const clean = (value: unknown) => (typeof value === "string" ? printable(value).trim() : "");
@@ -284,9 +304,8 @@ export function memoryView(
 		const text = clean(entry.text);
 		if (!text) continue;
 		if (entry.kind === "recall") {
-			const hit = clean(entry.top);
-			const detail = entry.hits === 0 ? "memory has no note on this yet" : hit ? `top: ${hit}` : undefined;
-			events.push({ key: `recall:${entry.at}:${text}`, kind: "recall", at: entry.at, title: `"${text}"`, hits: entry.hits, detail });
+			const detail = recallDetail(entry.hits, clean(entry.top));
+			events.push({ key: `recall:${entry.at}:${text}`, kind: "recall", at: entry.at, title: text, hits: entry.hits, detail });
 			continue;
 		}
 		const key = `save:${entry.at}:${clean(entry.path) || text}`;
@@ -295,7 +314,7 @@ export function memoryView(
 	events.sort((a, b) => b.at - a.at);
 	const recalls = activity?.recalls ?? 0;
 	const missed = Math.min(recalls, recent.filter((entry) => entry.kind === "recall" && entry.hits === 0).length);
-	return { state, events, read: reads.length, recalls, missed, saved: activity?.remembers ?? 0 };
+	return { state, events, read: reads.filter((read) => read.kind !== "skills").length, recalls, missed, saved: activity?.remembers ?? 0 };
 }
 
 /** The header's answer: `22 notes`, and expanded, how many were read. */
@@ -324,14 +343,15 @@ interface Status {
 
 /**
  * The status line, at most one: why nothing is learned, the review running or failed, or when the next is due.
- * Paused and read-only come first (a review cannot run then), a review running outranks one that failed, and
- * the next review's date is the only one that is not urgent.
+ * Paused comes first (a review cannot run then) and a review running outranks one that failed. Read-only and
+ * the next review's date are not urgent: only the expanded footer says them.
  */
 function statusOf(state: MemorqState): Status | undefined {
 	if (state.paused) return { text: "‖ learning paused · /memory", role: "warning", urgent: true };
-	if (state.enabled === "readonly") return { text: "‖ read-only · learns nothing", role: "warning", urgent: true };
 	if (state.review?.running === true) return { text: `⟳ reviewing ${state.review.notes} notes…`, role: "accent", urgent: true };
 	if (typeof state.review?.failed === "string") return { text: "⚠ last review failed", role: "warning", urgent: true };
+	// The user's own setting, nothing to act on: a word in the expanded footer, never the compact event's row.
+	if (state.enabled === "readonly") return { text: "read-only", role: "dim", urgent: false };
 	const due = state.review?.dueInSessions;
 	if (typeof due !== "number") return undefined;
 	return { text: due > 0 ? `review in ${plural(due, "session")}` : "review at next start", role: "dim", urgent: false };
@@ -371,49 +391,57 @@ const BAR = 12;
 /** `read ██░░░░░░░░░░    3 of 22`: the notes read of the notes there are, the numbers against the right edge. */
 function readRow(view: MemoryView, width: number): Row {
 	const total = Math.max(1, view.state.notes);
-	const filled = view.read === 0 ? 0 : Math.min(BAR, Math.max(1, Math.round((view.read / total) * BAR)));
+	const read = Math.min(view.read, view.state.notes);
+	const filled = read === 0 ? 0 : Math.min(BAR, Math.max(1, Math.round((read / total) * BAR)));
 	const left = seg("muted", "read ");
-	const right = `${view.read} of ${view.state.notes}`;
+	const right = `${read} of ${view.state.notes}`;
 	const spacer = Math.max(1, width - visibleWidth(left.text) - BAR - right.length);
 	return {
 		segs: [
 			left,
 			seg("muted", "█".repeat(filled)),
 			seg("dim", `${"░".repeat(BAR - filled)}${" ".repeat(spacer)}`),
-			seg("text", String(view.read)),
+			seg("text", String(read)),
 			seg("dim", ` of ${view.state.notes}`),
 		].filter((part) => part.text),
 	};
 }
 
 /**
- * `recall 3 · 1 missed · saved 1`, a zero part left out. The dots close up (`recall 123·100 missed·saved 100`)
- * only when the line would not fit with their spaces.
+ * `recall 3 · 1 missed · saved 1`, a zero part left out. Too wide (three-digit counts), `missed` shortens to
+ * `miss` first, and only then do the dots close up (`recall 1234·1000 miss·saved 1000`).
  */
 function countsRow(view: MemoryView, width: number): Row | undefined {
-	const parts: Seg[][] = [];
-	if (view.recalls > 0) parts.push([seg("muted", "recall "), seg("text", String(view.recalls))]);
-	if (view.recalls > 0 && view.missed > 0) parts.push([seg("dim", `${view.missed} missed`)]);
-	if (view.saved > 0) parts.push([seg("muted", "saved "), seg("text", String(view.saved))]);
-	if (parts.length === 0) return undefined;
-	const length = (dots: string) =>
-		parts.reduce((n, part) => n + visibleWidth(part.map((s) => s.text).join("")), 0) + dots.length * (parts.length - 1);
-	const dots = length(" · ") <= width ? " · " : "·";
-	return { segs: joined(parts.flatMap((part, i) => (i === 0 ? part : [seg("dim", dots), ...part]))) };
+	const fit = (missed: string, dots: string) => {
+		const parts: Seg[][] = [];
+		if (view.recalls > 0) parts.push([seg("muted", "recall "), seg("text", String(view.recalls))]);
+		if (view.recalls > 0 && view.missed > 0) parts.push([seg("dim", `${view.missed} ${missed}`)]);
+		if (view.saved > 0) parts.push([seg("muted", "saved "), seg("text", String(view.saved))]);
+		const cells = parts.reduce((n, part) => n + visibleWidth(part.map((s) => s.text).join("")), 0) + dots.length * (parts.length - 1);
+		return { parts, dots, cells };
+	};
+	const tries = [fit("missed", " · "), fit("miss", " · "), fit("miss", "·")];
+	const best = tries.find((attempt) => attempt.cells <= width) ?? tries[2]!;
+	if (best.parts.length === 0) return undefined;
+	return { segs: joined(best.parts.flatMap((part, i) => (i === 0 ? part : [seg("dim", best.dots), ...part]))) };
 }
 
 /** `◇ Title    4m`: mark, title (gives way first), a recall's result, the age against the right edge. */
 function compactEvent(event: MemoryEvent, width: number, now: number): Row {
 	const ageText = age(Math.max(0, now - event.at));
 	const result = resultOf(event, "compact");
-	const fixed = 2 + (result ? visibleWidth(result.text) : 0) + visibleWidth(ageText);
+	// A query keeps its quotes, in segments of their own around the text that gives way.
+	const quote = event.kind === "recall" ? [seg("text", '"')] : [];
+	const fixed = 2 + quote.length * 2 + (result ? visibleWidth(result.text) : 0) + visibleWidth(ageText);
 	const spacer = Math.max(1, width - fixed - visibleWidth(event.title));
 	return {
 		item: event.key,
 		segs: [
 			markOf(event),
 			seg("text", " "),
+			...quote,
 			seg("text", event.title, true),
+			...quote,
 			...(result ? [result] : []),
 			seg("dim", " ".repeat(spacer)),
 			seg("dim", ageText),
@@ -489,7 +517,11 @@ function expandedEvent(event: MemoryEvent, width: number, now: number): Row[] {
 	const result = resultOf(event, "expanded");
 	const room = width - 2;
 	const title = capRows(
-		wrap([seg("text", event.title), ...(result ? [result] : [])], room - visibleWidth(ageText) - 1, room),
+		wrap(
+			[seg("text", event.kind === "recall" ? `"${event.title}"` : event.title), ...(result ? [result] : [])],
+			room - visibleWidth(ageText) - 1,
+			room,
+		),
 		TITLE_ROWS,
 		room,
 	);
@@ -586,7 +618,7 @@ export function readPath(path: string, cwd: string): string {
 }
 
 /**
- * Whether a `read` of `path` opened a note, rule or skill. `stores` names only
+ * Which kind of file a `read` of `path` opened (a note, rule or skill), or undefined when it opened none. `stores` names only
  * the folder each kind is WRITTEN to, and a kind written to the repo is still
  * read from the machine store, so the machine roots (`roots`: ORQ_NOTES_HOME or
  * ~/.memorq, plus the legacy ~/.orq/knowledge) count as `<root>/<key>/<kind>/…`.
@@ -595,14 +627,22 @@ export function readPath(path: string, cwd: string): string {
  * The path is resolved as pi's read tool does (`readPath`); no realpath and no
  * git call here: the caller tests the real path as well, off the render path.
  */
-export function isNoteRead(path: string, stores: MemorqState["stores"], roots: string[], cwd = process.cwd()): boolean {
+export function noteKind(path: string, stores: MemorqState["stores"], roots: string[], cwd = process.cwd()): NoteKind | undefined {
 	const file = readPath(path, cwd);
-	if (Object.values(stores).some((dir) => dir && under(resolve(cwd, dir), file))) return true;
-	return roots.some((root) => {
+	for (const kind of KINDS) {
+		const dir = stores[kind];
+		if (dir && under(resolve(cwd, dir), file)) return kind;
+	}
+	for (const root of roots) {
 		const parts = under(resolve(root), file);
-		return parts !== undefined && parts.length >= 3 && KINDS.has(parts[1]!);
-	});
+		if (parts !== undefined && parts.length >= 3 && KINDS.includes(parts[1] as NoteKind)) return parts[1] as NoteKind;
+	}
+	return undefined;
 }
+
+/** Whether a `read` of `path` opened a note, rule or skill (`noteKind`). */
+export const isNoteRead = (path: string, stores: MemorqState["stores"], roots: string[], cwd = process.cwd()): boolean =>
+	noteKind(path, stores, roots, cwd) !== undefined;
 
 /** The machine roots a note can be read from: memorq's (ORQ_NOTES_HOME, else ~/.memorq) and the legacy one. */
 export function noteRoots(env: NodeJS.ProcessEnv = process.env): string[] {
