@@ -76,7 +76,7 @@ It sits beside the transcript from 140 columns wide. `alt+s` forces it on or off
 
 | Section | Shows |
 |---|---|
-| trajectory | Every step: messages, tool calls, routing, memory. Its title counts steps and turns |
+| trajectory | Every step, one row each, read by its mark: `›` you, `▌` the model, `◇ ↳ +` a memory call, `⚙` any other tool. Its title counts steps and turns |
 | signals | Warnings such as a tool called three times with the same arguments, errors, calls that cannot be undone. Just `signals · ok` while there are none |
 | context | Where the context window goes, and the cache hit rate |
 | routing | Under `orq/auto`: picks per model, switches, the decider's cost, an estimated saving. Its title names the slot answering now |
@@ -158,6 +158,6 @@ saved). A review running, learning paused or a failed review takes the event's l
 events newest first, as many as fit: each with its whole title, and under it the note's trigger, a
 recall's top hit, or `memory has no note on this yet`. The `alt+m more` hint goes once you have used
 a depth key (it is remembered in `orqi.json`). Each learn is also a step in the trajectory,
-priced in `/cost`. memorq's `/memory` screen picks the model it writes with from the workspace's chat
+priced in `/cost`. In the trajectory a note the model read is a `◇ memory <title>` row, a recall `↳ recall "query" 3` and a save `+ save <title>`. memorq's `/memory` screen picks the model it writes with from the workspace's chat
 models, and `/doctor` says whether memorq is loaded and whether `python3`, which it runs on, is
 there. Without memorq, orqi shows none of this.

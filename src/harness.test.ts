@@ -677,7 +677,14 @@ function harnessOn(
 	/** How many panels have been closed (their `done` ran). */
 	let closedPanels = 0;
 	let branchChanged: (() => void) | undefined;
-	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
+	// Like pi's Theme, `fg` reads its own fields: handed around unbound it throws, which a render swallows into a blank sidebar.
+	const plainTheme = {
+		fg(this: { bold?: unknown } | undefined, _token: string, text: string) {
+			if (!this?.bold) throw new TypeError("undefined is not an object (evaluating 'this.tokenAnsi')");
+			return text;
+		},
+		bold: (text: string) => text,
+	};
 	const holdPanels = options.hold === true;
 	const ctx = {
 		mode: "tui",

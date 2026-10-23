@@ -1068,6 +1068,8 @@ export function orqHarness(deps: HarnessDeps) {
 			} as Component;
 			function inspectorFrame(width: number): FrameRow[] {
 				const inner = Math.max(10, width - 2);
+				// pi's theme.fg reads its own fields: passed on bare it throws, and a render swallows that into a blank sidebar.
+				const fg = (role: string, text: string) => theme.fg(role, text);
 				const found = signals(trajectory.steps, trajectory.turn);
 				// Under the trajectory: what needs attention, where the context goes, what memory knows,
 				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
@@ -1107,7 +1109,7 @@ export function orqHarness(deps: HarnessDeps) {
 					height,
 					minimapSelected,
 					frame,
-					theme.fg,
+					fg,
 					selected === undefined,
 					(path) => noteInfos.get(path).title,
 				);
@@ -1123,13 +1125,13 @@ export function orqHarness(deps: HarnessDeps) {
 							? "alt+s · /sidebar focus" // focus walks the trajectory
 							: "alt+s · /sidebar";
 				// Without the trajectory above it, the first section needs no blank line to set it apart.
-				const underneath = drawSections(drawn, inner, theme.fg, undefined, selected).slice(showTrajectory ? 0 : 1);
+				const underneath = drawSections(drawn, inner, fg, undefined, selected).slice(showTrajectory ? 0 : 1);
 				// FRAME_CHROME counts the lines here that are neither trajectory rows nor sections.
 				const chrome = [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					...(showTrajectory
 						? [
-								side(paintLine(trajectoryHeader(trajectory.steps.length, trajectory.turn, inner), theme.fg, () => "dim")),
+								side(paintLine(trajectoryHeader(trajectory.steps.length, trajectory.turn, inner), fg, () => "dim")),
 								...rows.map(side),
 								...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
 							]
