@@ -340,7 +340,10 @@ export type MemoryRole = "muted" | "text" | "dim" | "accent" | "warning";
 export function memoryLineRole(line: string): MemoryRole {
 	const text = line.trim();
 	if (text.startsWith("↳")) return foundNothing(text.slice(1)) ? "warning" : "text";
-	if (text.startsWith("→")) return foundNothing(text) ? "warning" : /^→ \d/.test(text) ? "text" : "muted";
+	if (text.startsWith("→")) {
+		if (foundNothing(text)) return "warning";
+		return /^→ \d/.test(text) ? "text" : "muted";
+	}
 	if (/^\+ (saved "|"|·)/.test(text)) return "text";
 	if (/^= (already saved "|"|·)/.test(text)) return "dim";
 	if (/^reviewing \d+ notes…/.test(text)) return "accent";
