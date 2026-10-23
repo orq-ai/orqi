@@ -537,11 +537,21 @@ export function orqHarness(deps: HarnessDeps) {
 		let estimates: ContextEstimates | undefined;
 		/** The last compaction pi did this session, from `session_compact`. */
 		let compaction: CompactionMark | undefined;
+		/** What memorq said it injected when the split was last measured, raw: the split holds it clamped to the prompt. */
+		let measuredInjected: number | undefined;
 		/** Whether pi compacts at all: a reserve to measure the compaction point from. */
 		const compactReserve = () => (pi.getSettings().compaction?.enabled === false ? undefined : reserveTokens);
 		const refreshEstimates = () => {
 			estimates = split
-				? contextEstimates({ split, samples: trajectory.samples, steps: trajectory.steps, priceOf, reserve: compactReserve(), compaction })
+				? contextEstimates({
+						split,
+						samples: trajectory.samples,
+						steps: trajectory.steps,
+						priceOf,
+						reserve: compactReserve(),
+						compactAt: prefs.compactAt,
+						compaction,
+					})
 				: undefined;
 		};
 		// Which sidebar sections show: orqi.json in the agent dir, read once per session (makeServices builds
@@ -698,7 +708,7 @@ export function orqHarness(deps: HarnessDeps) {
 			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
 			recordLearn(memorqState.learned);
 			// What memorq injected is a part of the context of its own: measure again when it moves.
-			if (ctxRef && split && (split.memory ?? 0) !== (injectedTokens(memorqState) ?? 0)) measure(ctxRef);
+			if (ctxRef && split && injectedTokens(memorqState) !== measuredInjected) measure(ctxRef);
 			render();
 		});
 		/**
@@ -758,6 +768,7 @@ export function orqHarness(deps: HarnessDeps) {
 			try {
 				const agent = isAgentModel(ctx.model?.id);
 				const usage = ctx.getContextUsage();
+				const injected = injectedTokens(memorqState);
 				split = contextSplit({
 					systemPrompt: agent ? "" : ctx.getSystemPrompt(),
 					tools: pi.getAllTools(),
@@ -768,8 +779,9 @@ export function orqHarness(deps: HarnessDeps) {
 					steps: trajectory.steps,
 					turns: trajectory.turn,
 					agent: agent ? ctx.model!.id.slice(6) : undefined,
-					memory: { tokens: injectedTokens(memorqState), notes: memorqState?.notes },
+					memory: { tokens: injected, notes: memorqState?.notes },
 				});
+				measuredInjected = injected;
 				refreshEstimates();
 			} catch {
 				// A stale handle: keep the last split.
@@ -1246,6 +1258,7 @@ export function orqHarness(deps: HarnessDeps) {
 			realRoots = roots.map(real);
 			pi.events.emit("memorq:state?", undefined);
 			pi.events.emit("memorq:host", host);
+			compaction = undefined; // a resumed branch renumbers its turns
 			trajectory.fromMessages(branchMessages(ctx));
 			// Learns already on this branch are not recorded again; one memorq published before now is.
 			for (const entry of ctx.sessionManager.getBranch())
@@ -1286,7 +1299,11 @@ export function orqHarness(deps: HarnessDeps) {
 			stopDecisions?.();
 			stopDeciderCalls?.();
 		});
-		pi.on("session_tree", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
+		// The mark is keyed on turn numbers, which a rebuilt branch renumbers: it goes before the rebuild reads it.
+		pi.on("session_tree", (_event, ctx) => {
+			compaction = undefined;
+			trajectory.fromMessages(branchMessages(ctx));
+		});
 		/**
 		 * What the context holds right after a compaction: what is fixed (prompt, tools, skills; the last split's
 		 * parts bar the messages) plus pi's own estimate of the messages it kept and the summary. pi has no usage

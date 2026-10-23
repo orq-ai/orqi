@@ -904,6 +904,11 @@ test("the context section is measured when state changes: a run, then a compacti
 		usage = { tokens: null, contextWindow: 1_100_000, percent: null };
 		await h.handlers.get("session_compact")!({ compactionEntry: { tokensBefore: 812_000 }, reason: "threshold" }, h.ctx);
 		expect(section()[3]).toMatch(/^ {2}✓ compacted 812k → \d+(k)? · just now$/);
+		// Rebuilding the branch (/tree, /resume) renumbers the turns the mark is keyed on: it goes with them.
+		await h.handlers.get("session_tree")!({}, h.ctx);
+		expect(section()[3]).toBe("  cache — · first turn writes it");
+		await h.handlers.get("session_compact")!({ compactionEntry: { tokensBefore: 812_000 }, reason: "threshold" }, h.ctx);
+		expect(section()[3]).toMatch(/✓ compacted/);
 		// Time passing is read at the render: ten minutes on, the line is gone, with no new measurement.
 		clock += 11 * 60_000;
 		expect(section()[3]).toBe("  cache — · first turn writes it");
@@ -921,7 +926,27 @@ test("the context section is measured when state changes: a run, then a compacti
 			paused: false,
 			enabled: "on",
 		});
-		expect(section()[2]).toBe("  ■msgs 28k ■prompt 1k ■memory 900");
+		expect(section()[2]).toBe("  ■ msgs 28k ■ prompt 1k■ memory 900");
+		// More than the prompt holds is clamped; the same raw number again is not a change, so it measures nothing.
+		let reads = 0;
+		h.ctx.getContextUsage = () => {
+			reads++;
+			return usage as never;
+		};
+		const greedy = {
+			version: "0.14.0",
+			notes: 22,
+			usedThisTurn: 3,
+			context: 90_000,
+			stores: { notes: "", rules: "", skills: "" },
+			paused: false,
+			enabled: "on",
+		};
+		h.bus.emit("memorq:state", greedy);
+		expect(reads).toBe(1);
+		h.bus.emit("memorq:state", greedy);
+		h.bus.emit("memorq:state", { ...greedy, usedThisTurn: 4 });
+		expect(reads).toBe(1);
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });

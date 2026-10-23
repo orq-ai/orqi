@@ -45,14 +45,14 @@ const prices: Record<string, { input: number; output: number; cacheRead: number 
 };
 const priceOf = (id: string) => prices[id];
 
-const request = (id: number, model: string, input: number, cacheRead: number): Step => ({
+const request = (id: number, model: string, input: number, cacheRead: number, ts = 0): Step => ({
 	id,
 	turn: id,
 	role: "assistant",
 	label: "assist",
 	detail: "",
 	status: "ok",
-	ts: 0,
+	ts,
 	model,
 	usage: { input, output: 10, cacheRead, cost: 0 },
 });
@@ -75,7 +75,7 @@ test("session start: a composition bar of what fills it, the three biggest, and 
 	expect(shown.text).toEqual([
 		expect.stringContaining(" ─ context · 30k · 3% "),
 		`  ${bar(34)}`,
-		"  ■tools 21k ■skills 4k ■prompt 4k", // the wireframe's 35 cells close up to fit 34
+		"  ■ tools 21k ■ skills 4k■ prompt 4k", // the wireframe's 35 cells: the last gap goes, never the space after a swatch
 		"  cache — · first turn writes it",
 	]);
 	// tools, prompt and skills, each in its role, each as wide as its share of what is used (21.4 : 4.2 : 4.4 of 34).
@@ -88,6 +88,15 @@ test("session start: a composition bar of what fills it, the three biggest, and 
 		"syntaxKeyword:■",
 		"muted:prompt 4k",
 	]);
+	// The space after a swatch stays whatever the digits; gaps between entries go from the right, one per entry, as needed.
+	const legendAt = (width: number, over: Partial<ContextSplit>) => {
+		const split = { ...fresh, ...over };
+		return lineText(contextBody(split, estimate(split), "compact", width, NOW)[1]!);
+	};
+	expect(legendAt(35, {})).toBe("■ tools 21k ■ skills 4k ■ prompt 4k");
+	expect(legendAt(34, { messages: 781_000, window: 10_000_000 })).toBe("■ msgs 781k ■ tools 21k■ skills 4k"); // 35 cells loose: the last gap goes
+	expect(legendAt(33, {})).toBe("■ tools 21k■ skills 4k■ prompt 4k");
+	expect(legendAt(30, {})).toBe("■ tools 21k ■ skills 4k"); // even without gaps three are 33: the third entry is left out
 	expect(shown.runs[3]).toEqual(["dim:cache — · first turn writes it"]);
 });
 
@@ -123,6 +132,15 @@ test("cache dropped: the warning takes the line, with its reason and what the mi
 	expect(draw(split, changed).text[3]).toBe("  ⚠ cache 10%: prompt changed $0.02");
 	const unpriced = estimate(split, { priceOf: () => undefined, steps: [request(1, "m/a", 200, 9_800), request(2, "m/a", 9_000, 1_000)] });
 	expect(draw(split, unpriced).text[3]).toBe("  ⚠ cache 10%: prompt changed");
+	// The same model after more than five minutes idle: the cache expired, nothing changed.
+	const idle = estimate(split, { steps: [request(1, "m/a", 200, 9_800, 1_000), request(2, "m/a", 9_000, 1_000, 1_000 + 6 * MIN)] });
+	expect(idle.drop).toMatchObject({ pct: 10, reason: "cache expired" });
+	expect(draw(split, idle).text[3]).toBe("  ⚠ cache 10%: cache expired · $0.02");
+	const quick = estimate(split, { steps: [request(1, "m/a", 200, 9_800, 1_000), request(2, "m/a", 9_000, 1_000, 1_000 + 4 * MIN)] });
+	expect(quick.drop?.reason).toBe("prompt changed");
+	// A model switch wins over the idle gap: the switch is the cause that can be named.
+	const both = estimate(split, { steps: [request(1, "m/a", 200, 9_800, 1_000), request(2, "m/b", 9_000, 1_000, 1_000 + 9 * MIN)] });
+	expect(both.drop?.reason).toBe("model switched");
 	// Below half is the line: 40% is a drop, 60% is not (the boundary, not just the cliff).
 	expect(estimate(split, { steps: [request(1, "m/a", 200, 9_800), request(2, "m/b", 6_000, 4_000)] }).drop?.pct).toBe(40);
 	// A miss that was never a hit is not news, and a drop that stays above half is not one.
@@ -273,6 +291,37 @@ test("expanded without what is not there: no memory row, no hidden line, no grow
 	expect(shown).toContain("  limit  auto-compact off");
 });
 
+test("the limit row says auto-compact off only when compaction is off; an unknown window still compacts", () => {
+	const limit = (split: ContextSplit, over: Partial<Parameters<typeof estimate>[1]> = {}) =>
+		lineText(contextBody(split, estimate(split, over), "expanded", BODY, NOW).find((l) => lineText(l).startsWith("limit"))!);
+	expect(limit(fresh, { reserve: undefined })).toBe("limit  auto-compact off");
+	// No window known (a model pi cannot size): the percent is /compact-at's, and there are no turns to count.
+	const unknown = { ...fresh, window: 0 };
+	expect(limit(unknown, { compactAt: 80 })).toBe("limit  compacts at 80%");
+	expect(limit(unknown)).toBe("limit  compacts · window unknown");
+	expect(limit(unknown, { reserve: undefined, compactAt: 80 })).toBe("limit  auto-compact off");
+	const est = estimate(unknown, { compactAt: 80, samples: sampled(1_000, 2_000, 3_000) });
+	expect(est).toMatchObject({ compacts: true, thresholdPct: 80 });
+	expect(est.threshold).toBeUndefined();
+	expect(est.turnsLeft).toBeUndefined();
+	expect(estimate(fresh, { reserve: undefined }).compacts).toBe(false);
+});
+
+test("without growth the lines say flat and name no turns: no ~ with nothing after it", () => {
+	const flat = { ...fresh, messages: 800_000 };
+	const est = estimate(flat, { samples: sampled(800_000, 800_000, 800_000), steps: [request(1, "m/a", 200, 9_800)] });
+	expect(est.turnsLeft).toBeUndefined();
+	// Close to the point and not growing: the warning keeps its percent and loses its count.
+	expect(draw(flat, est).text[3]).toBe("  ⚠ compacts at 92%");
+	const calm = { ...fresh, messages: 100_000 };
+	const quiet = estimate(calm, { samples: sampled(130_000, 130_000, 130_000), steps: [request(1, "m/a", 200, 9_800)] });
+	expect(draw(calm, quiet).text[3]).toBe("  cache 98% · flat");
+	const shown = draw(calm, quiet, "expanded").text;
+	expect(shown.some((line) => /^ {2}growth ▁▁▁ +flat$/.test(line))).toBe(true);
+	expect(shown).toContain("  limit  compacts at 92%");
+	for (const line of shown) expect(line).not.toContain("~");
+});
+
 test("estimates: growth is the mean change of the last 5 samples, turns left is what is left over it", () => {
 	const split = { ...fresh, messages: 100_000 }; // used 130_000
 	const est = estimate(split, { samples: sampled(10_000, 20_000, 40_000, 80_000, 100_000, 130_000) });
@@ -291,7 +340,7 @@ test("estimates: growth is the mean change of the last 5 samples, turns left is 
 		expect(flat.turnsLeft).toBeUndefined();
 	}
 	expect(draw(split, estimate(split, { samples: sampled(50_000, 50_000), steps: [request(1, "m/a", 200, 9_800)] })).text[3]).toBe(
-		"  cache 98% · flat · ~? to go",
+		"  cache 98% · flat",
 	);
 	// One sample is not a trend.
 	expect(estimate(split, { samples: sampled(50_000) }).measured).toBe(false);

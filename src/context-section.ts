@@ -23,6 +23,8 @@ export const GAUGE_FROM = 0.25;
 export const WARN_FROM = 0.8;
 /** A compaction is news for this long. */
 export const JUST_COMPACTED_MS = 10 * 60_000;
+/** Past this long between two requests the provider's prompt cache has expired, whatever else changed. */
+const CACHE_TTL_MS = 5 * 60_000;
 /** Growth is the mean change over this many samples; the sparkline shows this many. */
 const GROWTH_SAMPLES = 5;
 const SPARK_SAMPLES = 10;
@@ -42,13 +44,16 @@ export interface CompactionMark {
 /** The cache falling off a cliff: the last request's hit, why, and what it cost over a full hit. */
 export interface CacheDrop {
 	pct: number;
-	reason: "model switched" | "prompt changed";
+	reason: "model switched" | "cache expired" | "prompt changed";
 	cost?: number;
 }
 
 export interface ContextEstimates {
-	/** Where pi compacts, in tokens; undefined when compaction is off. */
+	/** Whether pi compacts at all: false only when compaction is off. */
+	compacts: boolean;
+	/** Where pi compacts, in tokens; undefined when compaction is off or the window is not known. */
 	threshold?: number;
+	/** Where, as a percent of the window; with no window, `/compact-at`'s own, when there is one. */
 	thresholdPct?: number;
 	/** Tokens per turn, the mean change over the last 5 samples; undefined with fewer than two samples or no growth. */
 	growth?: number;
@@ -84,12 +89,17 @@ export function contextEstimates(input: {
 	steps: Step[];
 	priceOf: (id: string) => Price | undefined;
 	reserve?: number;
+	/** `/compact-at`'s percent: what the limit says when the window is not known. */
+	compactAt?: number;
 	compaction?: CompactionMark;
 }): ContextEstimates {
 	const { split, steps, priceOf, compaction } = input;
 	const used = contextUsed(split);
+	const compacts = input.reserve !== undefined;
 	const point = input.reserve === undefined ? 0 : split.window - input.reserve;
 	const threshold = point > 0 ? point : undefined;
+	let thresholdPct = input.compactAt;
+	if (threshold) thresholdPct = Math.round((threshold / split.window) * 100);
 	const since = input.samples.filter((sample) => !compaction || sample.turn > compaction.turn);
 	const recent = since.slice(-GROWTH_SAMPLES);
 	const measured = recent.length >= 2;
@@ -100,9 +110,12 @@ export function contextEstimates(input: {
 	if (prev && last && hitOf(last) < 0.5 && hitOf(prev) > 0.8) {
 		const price = last.model ? priceOf(last.model) : undefined;
 		const extra = price ? (last.usage!.input * (price.input - price.cacheRead)) / 1_000_000 : 0;
+		let reason: CacheDrop["reason"] = "prompt changed";
+		if (last.model !== prev.model) reason = "model switched";
+		else if (last.ts - prev.ts > CACHE_TTL_MS) reason = "cache expired";
 		drop = {
 			pct: Math.round(hitOf(last) * 100),
-			reason: last.model !== prev.model ? "model switched" : "prompt changed",
+			reason,
 			...(extra > 0 ? { cost: extra } : {}),
 		};
 	}
@@ -113,7 +126,9 @@ export function contextEstimates(input: {
 		if (price) saved = (saved ?? 0) + (step.usage.cacheRead * (price.input - price.cacheRead)) / 1_000_000;
 	}
 	return {
-		...(threshold ? { threshold, thresholdPct: Math.round((threshold / split.window) * 100) } : {}),
+		compacts,
+		...(threshold ? { threshold } : {}),
+		...(compacts && thresholdPct !== undefined ? { thresholdPct } : {}),
 		...(growth ? { growth } : {}),
 		measured,
 		...(growth && threshold ? { turnsLeft: Math.max(0, Math.round((threshold - used) / growth)) } : {}),
@@ -125,11 +140,18 @@ export function contextEstimates(input: {
 	};
 }
 
+/** `900`, then thousands to `digits` decimals (`4k`, `4.4k`), then millions (`1.1M`). */
+function unit(n: number, digits: number): string {
+	if (n < 1000) return `${n}`;
+	if (n >= 1_000_000) return tokens(n);
+	return `${(n / 1000).toFixed(digits)}k`;
+}
+
 /** `30k`, `812k`, `900`, `1.1M`: whole thousands, for the header and the legend. */
-export const whole = (n: number) => (n < 1000 ? `${n}` : n < 1_000_000 ? `${Math.round(n / 1000)}k` : tokens(n));
+export const whole = (n: number) => unit(n, 0);
 
 /** `38.2k`, `900`: one decimal, for the rows and the rates, where 4.4k and 4k are not the same. */
-export const tenths = (n: number) => (n < 1000 ? `${n}` : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : tokens(n));
+export const tenths = (n: number) => unit(n, 1);
 
 /** `$0.21`: cents, or dollars() below one cent. */
 const usd = (n: number) => (n >= 0.01 ? `$${n.toFixed(2)}` : dollars(n));
@@ -183,27 +205,27 @@ function compositionBar(split: ContextSplit, width: number): Row {
 }
 
 /**
- * Line 2: the 3 biggest parts, `■ tools 21k ■ skills 4k ■ prompt 4k`. The body is two cells narrower than the
- * wireframe's, and that line is 35 wide: when all three do not fit, the mark closes up to its label
- * (`■tools 21k`) before a part is left out.
+ * Line 2: the 3 biggest parts, `■ tools 21k ■ skills 4k ■ prompt 4k`. The space after a swatch always stays.
+ * The body is two cells narrower than the wireframe's, and that line is 35 wide: when it does not fit, the
+ * gaps between entries go from the right, one per entry as needed, and only if it still does not fit is a
+ * part left out.
  */
 function legend(split: ContextSplit, width: number): Row {
-	const biggest = [...partsOf(split)].sort((a, b) => b.n - a.n).slice(0, 3);
-	const build = (gap: string) => {
-		const segs: Seg[] = [];
-		let used = 0;
-		for (const part of biggest) {
-			const label = `${gap}${part.name} ${whole(part.n)}`;
-			const cost = (segs.length ? 1 : 0) + 1 + label.length;
-			if (used + cost > width) break;
-			if (segs.length) segs.push(seg("muted", " "));
-			segs.push(seg(part.role, "■"), seg("muted", label));
-			used += cost;
-		}
-		return segs;
-	};
-	const loose = build(" ");
-	return { segs: loose.length === biggest.length * 3 - 1 ? loose : build("") };
+	const entries = [...partsOf(split)]
+		.sort((a, b) => b.n - a.n)
+		.slice(0, 3)
+		.map((part) => ({ part, label: ` ${part.name} ${whole(part.n)}` }));
+	const cells = (n: number) => entries.slice(0, n).reduce((sum, entry) => sum + 1 + entry.label.length, 0);
+	let count = entries.length;
+	while (count > 1 && cells(count) > width) count--;
+	// Gaps between the kept entries, fewest first from the right: `loose` of them stay.
+	const loose = Math.max(0, Math.min(count - 1, width - cells(count)));
+	const segs: Seg[] = [];
+	entries.slice(0, count).forEach(({ part, label }, i) => {
+		if (i > 0 && i <= loose) segs.push(seg("muted", " "));
+		segs.push(seg(part.role, "■"), seg("muted", label));
+	});
+	return { segs };
 }
 
 /**
@@ -235,9 +257,6 @@ function fillGauge(split: ContextSplit, est: ContextEstimates, width: number): R
 /** `just now`, `2m ago`: a compaction is shown for 10 minutes, so minutes are enough. */
 const ago = (ms: number) => (ms < 60_000 ? "just now" : `${Math.floor(ms / 60_000)}m ago`);
 
-/** `~9`, or a bare `~?` when growth gives no number. */
-const turns = (est: ContextEstimates) => `~${est.turnsLeft ?? "?"}`;
-
 /**
  * The first of these that fits `width`; the last when none does (the frame cuts it with a `…`). The body is
  * two cells narrower than the wireframe's frames, so some lines have a tighter form to fall back on.
@@ -249,7 +268,12 @@ function changeLine(split: ContextSplit, est: ContextEstimates, width: number, n
 	const used = contextUsed(split);
 	const line = (role: Role, ...forms: string[]): Row => ({ segs: [seg(role, fitTo(width, ...forms))] });
 	if (est.threshold && est.thresholdPct !== undefined && used >= WARN_FROM * est.threshold)
-		return line("warning", `⚠ compacts at ${est.thresholdPct}% · ${turns(est)} turns left`);
+		return line(
+			"warning",
+			...(est.turnsLeft === undefined
+				? [`⚠ compacts at ${est.thresholdPct}%`]
+				: [`⚠ compacts at ${est.thresholdPct}% · ~${est.turnsLeft} turns left`]),
+		);
 	if (est.drop) {
 		const head = `⚠ cache ${est.drop.pct}%: ${est.drop.reason}`;
 		const cost = est.drop.cost === undefined ? undefined : usd(est.drop.cost);
@@ -263,12 +287,16 @@ function changeLine(split: ContextSplit, est: ContextEstimates, width: number, n
 	if (est.cache === undefined) return line("dim", "cache — · first turn writes it");
 	const cache = `cache ${Math.round(est.cache * 100)}%`;
 	if (!est.measured) return line("dim", cache);
-	const rate = est.growth ? tenths(est.growth) : undefined;
+	// Not growing, or nothing to count towards: the rate is all there is to say.
+	if (!est.growth) return line("dim", `${cache} · flat`);
+	const rate = tenths(est.growth);
+	if (est.turnsLeft === undefined) return line("dim", `${cache} · +${rate} a turn`, `${cache} · +${rate}/turn`);
+	const togo = `~${est.turnsLeft}`;
 	return line(
 		"dim",
-		`${cache} · ${rate ? `+${rate} a turn` : "flat"} · ${turns(est)} to go`,
-		`${cache} · ${rate ? `+${rate}/turn` : "flat"} · ${turns(est)} left`,
-		`${cache} · ${rate ? `+${rate}/turn` : "flat"} · ${turns(est)}`,
+		`${cache} · +${rate} a turn · ${togo} to go`,
+		`${cache} · +${rate}/turn · ${togo} left`,
+		`${cache} · +${rate}/turn · ${togo}`,
 	);
 }
 
@@ -338,12 +366,15 @@ function costRows(est: ContextEstimates, width: number): Row[] {
 		const dot = fitTo(room, `${hit}% hit · ${saved}`, `${hit}% hit ${saved}`).includes(" · ") ? " · " : " ";
 		cache.splice(0, 1, seg(hitRole, `${hit}% hit`), ...(saved ? [seg("dim", `${dot}${saved}`)] : []));
 	}
-	const limit: Seg[] = [seg("dim", "auto-compact off")];
-	if (est.thresholdPct !== undefined) {
+	let limit: Seg[] = [seg("dim", "auto-compact off")];
+	if (est.compacts) limit = [seg("dim", "compacts · window unknown")];
+	if (est.compacts && est.thresholdPct !== undefined) {
 		const head = `compacts at ${est.thresholdPct}%`;
-		const tail = `${turns(est)} turns`;
-		const dot = visibleWidth(`${head} · ${tail}`) <= room ? " · " : " ";
-		limit.splice(0, 1, seg("text", head), seg("dim", `${dot}${tail}`));
+		limit = [seg("text", head)];
+		if (est.turnsLeft !== undefined) {
+			const tail = `~${est.turnsLeft} turns`;
+			limit.push(seg("dim", `${visibleWidth(`${head} · ${tail}`) <= room ? " · " : " "}${tail}`));
+		}
 	}
 	return [
 		{ segs: [label("growth"), seg("syntaxFunction", sparkline(est.spark).padEnd(BAR)), seg("dim", `  ${rate}`)] },
