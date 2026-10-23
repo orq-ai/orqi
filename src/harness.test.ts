@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import { startupTheme, VERSION } from "./branding.ts";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -10,17 +10,7 @@ import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, gitBadges, gitOperation, headerBar, hostLabel, sparkline, statusLine, tokens } from "./footer.ts";
-import {
-	exitSummary,
-	orqHarness,
-	repoOf,
-	reserveFor,
-	routeRow,
-	sectionLineRole,
-	sectionRows,
-	sectionsToDraw,
-	type InspectorSection,
-} from "./harness.ts";
+import { exitSummary, orqHarness, repoOf, reserveFor, routeRow, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import { minimapRow, minimapRows, trajectoryTitle, peekLines, sectionLines, type ContextSplit } from "./inspector-rows.ts";
@@ -727,6 +717,14 @@ function harnessOn(
 		const end = lines.findIndex((line, i) => i > at && !line.startsWith("  "));
 		return lines.slice(at + 1, end < 0 ? undefined : end).map((line) => line.trim());
 	};
+	/** The sidebar's memory header as drawn (`─ memory · 47 notes ─…`), or undefined when it is not. */
+	const memoryHeader = () =>
+		opened
+			.sidebar!.render(38)
+			.map((line) => bare(line).slice(1, -1).trimEnd())
+			.find((line) => line.startsWith(" ─ memory "));
+	/** Every row the sidebar draws, panel border off. */
+	const drawn = () => opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1).trimEnd());
 	const read = async (id: string, path: string, isError = false, parentToolCallId?: string) => {
 		await handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "read", args: { path }, parentToolCallId }, ctx);
 		await handlers.get("tool_execution_end")!({ toolCallId: id, toolName: "read", isError, durationMs: 1, parentToolCallId }, ctx);
@@ -747,6 +745,8 @@ function harnessOn(
 		start,
 		stop,
 		memory,
+		memoryHeader,
+		drawn,
 		read,
 		entries,
 		renderers,
@@ -1054,7 +1054,9 @@ test("the memory section waits for memorq: asked for at session start, drawn onc
 		h.bus.emit("memorq:state", memorqState());
 		await h.commands.get("sidebar")!("", h.ctx);
 		expect(panelRows(h.opened.panel!)[3]).toBe("[x] memory");
-		expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+		// Nothing read, recalled or saved yet: the section folds to its header.
+		expect(h.memoryHeader()).toBe(` ─ memory · 47 notes ${"─".repeat(15)}`);
+		expect(h.memory()).toEqual([]);
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
@@ -1103,6 +1105,9 @@ test("memorq with its commands but silent points at /doctor; ORQ_NOTES=off and a
 	}
 });
 
+/** How many notes the sidebar says were read: the `3` of `read ██░░░░░░░░░░   3 of 47`. */
+const readCount = (h: { memory(): string[] }) => Number(h.memory()[0]?.match(/(\d+) of 47$/)?.[1] ?? 0);
+
 test("a read of a note counts, wherever memorq keeps it; other reads and failed ones do not", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
 	const home = process.env.ORQ_NOTES_HOME;
@@ -1112,23 +1117,69 @@ test("a read of a note counts, wherever memorq keeps it; other reads and failed 
 		await h.start();
 		h.bus.emit("memorq:state", memorqState({ stores: { ...memorqState().stores, rules: "/work/orqi/.memorq/rules" } }));
 		await h.read("r1", "/home/me/.memorq/orq-ai__orqi/notes/a.md");
-		expect(h.memory()[1]).toBe("using 3 this turn · read 1");
+		expect(readCount(h)).toBe(1);
 		// The repo folder, relative to the working directory, when rules are written there.
 		await h.read("r2", ".memorq/rules/r.md");
-		expect(h.memory()[1]).toBe("using 3 this turn · read 2");
+		expect(readCount(h)).toBe(2);
 		// The machine root still holds the other kinds' notes: ORQ_NOTES_HOME/<key>/<kind>/.
 		await h.read("r3", join(dir, "notes-home", "orq-ai__orqi", "skills", "s", "SKILL.md"));
-		expect(h.memory()[1]).toBe("using 3 this turn · read 3");
+		expect(readCount(h)).toBe(3);
 		await h.read("r4", "src/main.ts");
 		await h.read("r5", "/home/me/.memorq/orq-ai__orqi/notes/missing.md", true);
-		expect(h.memory()[1]).toBe("using 3 this turn · read 3");
+		expect(readCount(h)).toBe(3);
 		// A subagent opening a note is a read too.
 		await h.read("r6", "/home/me/.memorq/orq-ai__orqi/notes/b.md", false, "subagent-1");
-		expect(h.memory()[1]).toBe("using 3 this turn · read 4");
+		expect(readCount(h)).toBe(4);
+		// The same note again is the same read: notes read, not reads.
+		await h.read("r7", "/home/me/.memorq/orq-ai__orqi/notes/a.md");
+		expect(readCount(h)).toBe(4);
+		// Newest first, by title: no file to open here, so the file name's words.
+		expect(h.memory()[1]).toMatch(/^◇ A +now$/);
 	} finally {
 		await h.stop();
 		if (home === undefined) delete process.env.ORQ_NOTES_HOME;
 		else process.env.ORQ_NOTES_HOME = home;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a note read shows its title from the file, read once when the read is counted and again only when the file changed", async () => {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "orqi-memory-")));
+	const notes = join(dir, "store", "notes");
+	mkdirSync(notes, { recursive: true });
+	const file = join(notes, "make-docs-serve-aabbccdd.md");
+	writeFileSync(file, "---\nkind: gotcha\n---\n# Make docs serve may lack MkDocs\n\nTrigger: running the docs site locally\n");
+	utimesSync(file, 1000, 1000);
+	const stores = { notes, rules: join(dir, "store", "rules"), skills: join(dir, "store", "skills") };
+	const h = harnessOn(dir, { cwd: dir });
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ stores }));
+		await h.read("r1", file);
+		expect(h.memory()[1]).toMatch(/^◇ Make docs serve may lack Mk… now$/);
+		// The file goes: the title was read once and is kept.
+		rmSync(file);
+		h.bus.emit("memorq:state", memorqState({ stores }));
+		expect(h.memory()[1]).toMatch(/^◇ Make docs serve may lack Mk… now$/);
+		// A note rewritten with a new title, read again: the new title.
+		writeFileSync(file, "# Docs need the docs group\n");
+		utimesSync(file, 2000, 2000);
+		await h.read("r2", file);
+		expect(h.memory()[1]).toMatch(/^◇ Docs need the docs group +now$/);
+		expect(readCount(h)).toBe(1);
+		// Expanded, the note's trigger is its detail line.
+		writeFileSync(file, "# Docs need the docs group\n\nTrigger: serving the docs\n");
+		utimesSync(file, 3000, 3000);
+		await h.read("r3", file);
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(
+			h
+				.drawn()
+				.filter((line) => /serving the docs|Docs need the docs group/.test(line))
+				.map((line) => line.trim()),
+		).toEqual([expect.stringMatching(/^◇ Docs need the docs group +now$/), "when: serving the docs"]);
+	} finally {
+		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -1147,7 +1198,7 @@ test("a malformed memorq:state is ignored and the last good one stays drawn", as
 			{ ...memorqState(), notes: "many" },
 		]) {
 			h.bus.emit("memorq:state", bad);
-			expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+			expect(h.memoryHeader()).toContain("memory · 47 notes");
 		}
 	} finally {
 		await h.stop();
@@ -1167,13 +1218,16 @@ test("a note read through a symlink counts, whichever side of the link the store
 		await viaReal.start();
 		viaReal.bus.emit("memorq:state", memorqState({ stores: stores(real) }));
 		await viaReal.read("r1", join(dir, "linked-store", "notes", "a.md"));
-		expect(viaReal.memory()[1]).toBe("using 3 this turn · read 1");
+		expect(readCount(viaReal)).toBe(1);
+		// The same note through its other spelling is the same read.
+		await viaReal.read("r2", join(real, "notes", "a.md"));
+		expect(readCount(viaReal)).toBe(1);
 		await viaReal.stop();
 		const viaLink = harnessOn(dir, { cwd: dir });
 		await viaLink.start();
 		viaLink.bus.emit("memorq:state", memorqState({ stores: stores(join(dir, "linked-store")) }));
 		await viaLink.read("r1", join(real, "notes", "a.md"));
-		expect(viaLink.memory()[1]).toBe("using 3 this turn · read 1");
+		expect(readCount(viaLink)).toBe(1);
 		await viaLink.stop();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
@@ -1631,7 +1685,7 @@ test("a loaded memorq gets a few seconds to answer: loading, then not answering"
 		expect(panelRows(h.opened.panel!)[3]).toBe("[ ] memory  · not answering · /doctor");
 		// An answer, however late, is drawn.
 		h.bus.emit("memorq:state", memorqState());
-		expect(h.memory()[0]).toBe("47 notes for this repo");
+		expect(h.memoryHeader()).toContain("memory · 47 notes");
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
@@ -1644,9 +1698,94 @@ test("a state whose learn is malformed keeps the state and drops the learn", asy
 	try {
 		await h.start();
 		h.bus.emit("memorq:state", memorqState({ learned: { count: null, trigger: "ship", at: 1 } }));
-		expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+		expect(h.memoryHeader()).toContain("memory · 47 notes");
 		expect(h.entries).toEqual([]);
 	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("memorq's recalls and saves join the reads as events, newest first; misses are counted beyond the five it sends", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		// As memorq's Python sends them, parsed by its extension into `at`: epoch milliseconds, newest first.
+		const entry = (i: number) => ({ kind: "recall" as const, text: `q${i}`, at: Date.now() - (100 - i) * 1000, hits: 0 });
+		for (let i = 1; i <= 8; i++) {
+			const recent = [entry(i), ...(i > 1 ? [entry(i - 1)] : [])];
+			h.bus.emit("memorq:state", memorqState({ activity: { recalls: i, remembers: 0, recent } }));
+		}
+		expect(h.memory()).toEqual([
+			expect.stringMatching(/^read ░{12} +0 of 47$/),
+			"recall 8 · 8 missed",
+			expect.stringMatching(/^↳ "q8" → nothing +1m$/),
+			"alt+m more",
+		]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the hint names alt+m until a depth key has been used, in any window, and expanded the section lists its events", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const state = memorqState({
+		activity: { recalls: 1, remembers: 0, recent: [{ kind: "recall", text: "k8s rollout", at: Date.now(), hits: 0 }] },
+	});
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", state);
+		expect(h.memory().at(-1)).toBe("alt+m more");
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(readPrefs(dir).depthKeyUsed).toBe(true);
+		expect(h.drawn().join("\n")).toContain('↳ "k8s rollout" found nothing');
+		expect(h.drawn().join("\n")).toContain("memory has no note on this yet");
+		expect(h.drawn().join("\n")).toContain("alt+m less");
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(h.memory().join("\n")).not.toContain("alt+m more");
+		await h.stop();
+		// The next window has learned the key too.
+		const next = harnessOn(dir);
+		await next.start();
+		next.bus.emit("memorq:state", state);
+		expect(next.memory().join("\n")).not.toContain("alt+m more");
+		await next.stop();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the expanded memory section lists as many events as the panel has room for, and never loses its footer", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const rows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+	Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+	writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, sidebarDepth: { memory: "expanded" } });
+	const recent = Array.from({ length: 5 }, (_, i) => ({
+		kind: "recall" as const,
+		text: `query number ${i}`,
+		at: Date.now() - i * 1000,
+		hits: 0,
+	}));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ activity: { recalls: 5, remembers: 0, recent } }));
+		const lines = h.drawn();
+		// The slot is the screen less 4, and the frame fits it: the footer is not the clipped bottom.
+		expect(lines.length).toBeLessThanOrEqual(26);
+		expect(lines.join("\n")).toContain("alt+m less");
+		const shown = lines.filter((line) => line.includes("↳ ")).length;
+		expect(shown).toBeGreaterThan(0);
+		expect(shown).toBeLessThan(5);
+		// More room, more events.
+		Object.defineProperty(process.stdout, "rows", { value: 60, configurable: true });
+		expect(h.drawn().filter((line) => line.includes("↳ "))).toHaveLength(5);
+	} finally {
+		if (rows) Object.defineProperty(process.stdout, "rows", rows);
+		else delete (process.stdout as { rows?: number }).rows;
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -1659,16 +1798,16 @@ test("/reload and /new: the next instance asks again and draws the fresh state",
 	try {
 		await first.start();
 		bus.emit("memorq:state", memorqState({ notes: 12 }));
-		expect(first.memory()[0]).toBe("12 notes for this repo");
+		expect(first.memoryHeader()).toContain("memory · 12 notes");
 		await first.stop();
 		// pi builds the extension again for the next session; memorq answers the new request.
 		bus.on("memorq:state?", () => bus.emit("memorq:state", memorqState({ notes: 13 })));
 		const next = harnessOn(dir, { bus });
 		await next.start();
 		expect(bus.sent.filter((channel) => channel === "memorq:state?").length).toBe(2);
-		expect(next.memory()[0]).toBe("13 notes for this repo");
+		expect(next.memoryHeader()).toContain("memory · 13 notes");
 		// The old instance is gone from the bus: it keeps what it last drew.
-		expect(first.memory()[0]).toBe("12 notes for this repo");
+		expect(first.memoryHeader()).toContain("memory · 12 notes");
 		await next.stop();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
@@ -3031,14 +3170,4 @@ test("a resumed session's routing section counts the replayed decisions: the mar
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
-});
-
-test("a section line's colour: the memory section reads its own lines, the others warn on a warning mark", () => {
-	expect(sectionLineRole("memory", '  ↳ recalled "q" → nothing · now')).toBe("warning");
-	expect(sectionLineRole("memory", '  + saved "q" · 3m')).toBe("text");
-	expect(sectionLineRole("memory", "  47 notes for this repo")).toBe("muted");
-	expect(sectionLineRole("signals", "  ⚠ 3 errors")).toBe("warning");
-	expect(sectionLineRole("signals", "  3 errors")).toBe("muted");
-	// Only the memory section reads a recall line by its words.
-	expect(sectionLineRole("context", '  ↳ recalled "q" → nothing · now')).toBe("muted");
 });

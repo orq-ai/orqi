@@ -51,7 +51,8 @@ orqi
 | `src/handoff.ts` | `/handoff <goal>`: pi's handoff example, adapted. Drafts a fresh session's first message from this branch on a plain chat model, points at the plan, keeps plan mode |
 | `src/prefs.ts` | `<agentDir>/orqi.json`: which sidebar sections show and which are expanded, the saved decider, `orq/auto`'s saved models and `/compact-at`'s percent, read forgivingly and written whole |
 | `src/context-section.ts` | The context section: its compact and expanded lines, the header summary and `contextEstimates` (growth, turns left, the cache's last move, a compaction), all worked out when state changes |
-| `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
+| `src/memory-section.ts` | The memory section: memorq's `memorq:state` and the notes the model read as one list of events, compact and expanded, its types, which `read` calls opened a note |
+| `src/note-info.ts` | The title and trigger of a note file, read once per path (and again when its modified time moves), off the render path |
 | `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
 | `src/model-picker.ts` | pi's `/model` selector over one kind of workspace model: chat models for memorq and `/route models`, classifiers for `/decider` |
 | `src/decider.ts` | The decider: the one decision model every Decisions call asks (`/decider`, `orqi.json`, `ORQI_ROUTE_CLASSIFIER`), the API adapter and the `orq-decisions` provider |
@@ -111,7 +112,7 @@ arguments in one turn, errors, irreversible calls), the context split (system pr
 skills index, messages, as characters over four, measured after each run and never in a render),
 routing (while `orq/auto` routes: picks per slot, model switches and the cache they lost, the
 decider's calls, and an estimated saving against the default model, `src/routing-section.ts`),
-memory (what memorq last published, below; once the agent recalls or saves a note, its totals and the two latest calls take the place of the "used this turn" line) and process (orqi's resident memory, sampled every 5 s
+memory (what memorq last published, below, and the notes the model read, as events: a bar of notes read, the recall and save counts and the newest event, or every event with its title in full once expanded) and process (orqi's resident memory, sampled every 5 s
 off the render path: now, the last minute, the peak). Each section is an `InspectorSection` in `src/harness.ts`; bare `/sidebar` lists them with a
 checkbox each, and the choice lives in `<agentDir>/orqi.json` (`src/prefs.ts`). Process starts off;
 the rest start on. A section that cannot show (an installed memorq that is silent or too old, routing while another

@@ -6,7 +6,7 @@
  * trusted. It holds which sidebar sections show, the decider saved with
  * `/decider` (ctrl+s or `--save`), the models `/route models` saved for
  * `orq/auto`'s slots, where auto-compaction starts and which sections are
- * expanded (`alt+c`, `alt+m`).
+ * expanded (`alt+c`, `alt+m`) and whether those keys were ever used.
  *
  * Read forgivingly (a missing, unreadable or odd file is the defaults; an id
  * orqi does not know is ignored) and written whole, so the next write drops
@@ -54,6 +54,8 @@ export interface Prefs {
 	routeModels?: Partial<Record<Rung, string>>;
 	/** The sections opened to expanded; a section left out is compact. */
 	sidebarDepth?: Partial<Record<SectionId, Depth>>;
+	/** A depth key (`alt+c`, `alt+m`) has been pressed once: the compact view's hint that names it can go. */
+	depthKeyUsed?: true;
 }
 
 /** `orq/auto`'s rungs as orqi.json keys them (the slots fast, default and frontier). */
@@ -83,7 +85,14 @@ const FILE = "orqi.json";
 
 export function readPrefs(agentDir: string): Prefs {
 	const sections = { ...DEFAULT_SECTIONS };
-	let file: { sections?: unknown; decider?: unknown; compactAt?: unknown; routeModels?: unknown; sidebarDepth?: unknown } | null = null;
+	let file: {
+		sections?: unknown;
+		decider?: unknown;
+		compactAt?: unknown;
+		routeModels?: unknown;
+		sidebarDepth?: unknown;
+		depthKeyUsed?: unknown;
+	} | null = null;
 	try {
 		file = JSON.parse(readFileSync(join(agentDir, FILE), "utf8"));
 	} catch {
@@ -106,6 +115,7 @@ export function readPrefs(agentDir: string): Prefs {
 		...(isCompactAt(compactAt) ? { compactAt } : {}),
 		...(routeModels ? { routeModels } : {}),
 		...(sidebarDepth ? { sidebarDepth } : {}),
+		...(file?.depthKeyUsed === true ? { depthKeyUsed: true as const } : {}),
 	};
 }
 
@@ -121,7 +131,7 @@ export function writePrefs(agentDir: string, prefs: Prefs): void {
 		const sidebarDepth = depthsOf(prefs.sidebarDepth);
 		writeFileSync(
 			tmp,
-			`${JSON.stringify({ sections, decider: prefs.decider || undefined, compactAt, routeModels, sidebarDepth }, null, 2)}\n`,
+			`${JSON.stringify({ sections, decider: prefs.decider || undefined, compactAt, routeModels, sidebarDepth, depthKeyUsed: prefs.depthKeyUsed === true ? true : undefined }, null, 2)}\n`,
 			{ mode: 0o600 },
 		);
 		renameSync(tmp, join(agentDir, FILE));

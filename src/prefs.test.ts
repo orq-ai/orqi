@@ -146,3 +146,21 @@ test("sidebarDepth keeps the sections opened to expanded; compact, junk and unkn
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("depthKeyUsed remembers that a depth key was pressed, so the hint that names it can go; anything but true is not used", () => {
+	const dir = scratch();
+	try {
+		expect(readPrefs(dir).depthKeyUsed).toBeUndefined();
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, depthKeyUsed: true, compactAt: 70 });
+		expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS, compactAt: 70, depthKeyUsed: true });
+		for (const depthKeyUsed of [false, "true", 1, null, [true], {}]) {
+			writeFileSync(join(dir, "orqi.json"), JSON.stringify({ depthKeyUsed }));
+			expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS });
+		}
+		// Not used: no key in the file.
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, depthKeyUsed: undefined });
+		expect(JSON.parse(readFileSync(join(dir, "orqi.json"), "utf8"))).toEqual({ sections: DEFAULT_SECTIONS });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

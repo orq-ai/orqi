@@ -46,12 +46,19 @@ import {
 	learnHead,
 	learnPhrase,
 	memoryBody,
-	memoryLineRole,
+	memorySummary,
+	memoryView,
+	mergeRecent,
+	noteRead,
 	noteRoots,
 	readPath,
 	type MemorqHost,
+	type MemorqRecent,
 	type MemorqState,
+	type MemoryView,
+	type NoteRead,
 } from "./memory-section.ts";
+import { NoteInfos } from "./note-info.ts";
 import { type RoutingStats, routingBody, routingStats, routingSummary } from "./routing-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
@@ -214,6 +221,8 @@ export interface SectionFrame {
 	signals: ReturnType<typeof signals>;
 	/** How much this section says: compact by default, expanded once `alt+c`/`alt+m` (or orqi.json) opens it. */
 	depth: Depth;
+	/** The body lines this section may use: a section that lists things (memory, expanded) stops when the panel is full. */
+	rows: number;
 }
 
 /**
@@ -239,12 +248,6 @@ export interface InspectorSection {
 /** The reserve that makes pi compact at `pct` of `window`: pi compacts once the context passes `window - reserve`. */
 export function reserveFor(pct: number, window: number): number {
 	return Math.ceil((window * (100 - pct)) / 100);
-}
-
-/** The theme role a sidebar section's body line is painted in: the memory section reads its own lines, the others warn on a `⚠` and are muted otherwise. */
-export function sectionLineRole(id: SectionId, line: string): "muted" | "text" | "dim" | "accent" | "warning" {
-	if (id === "memory") return memoryLineRole(line);
-	return line.trimStart().startsWith("⚠") ? "warning" : "muted";
 }
 
 /** The sections the sidebar draws, in registry order: chosen in orqi.json and available. */
@@ -279,6 +282,10 @@ const HEADER_ROWS = 2;
 const ROUTING_OFF = "/model orq/auto";
 /** The sidebar's own lines: top border, trajectory title, hint, bottom border. */
 const FRAME_CHROME = 4;
+/** The trajectory rows a frame keeps for it whatever the sections ask. */
+const MIN_TRAJECTORY = 3;
+/** The least body rows memory's expanded list is given: room for one event and its footer. */
+const MIN_MEMORY_ROWS = 6;
 const UNPATCHED = Symbol.for("orqi.layout.render");
 
 /**
@@ -604,6 +611,7 @@ export function orqHarness(deps: HarnessDeps) {
 				writePrefs(deps.agentDir, fresh);
 				Object.assign(prefs.sections, fresh.sections);
 				prefs.sidebarDepth = fresh.sidebarDepth;
+				prefs.depthKeyUsed = fresh.depthKeyUsed;
 			} catch (error) {
 				// memorq calls this through panel.set, possibly after this session closed: a stale ctx throws on use.
 				try {
@@ -619,9 +627,8 @@ export function orqHarness(deps: HarnessDeps) {
 				into.sections[id] = value;
 			});
 		/**
-		 * Open one section to expanded, or back to compact, save it and redraw.
-		 * ponytail: context and memory draw the same at both depths until their expanded views land, so the key
-		 * changes nothing visible yet; no notice says so.
+		 * Open one section to expanded, or back to compact, save it and redraw. A depth key pressed once is
+		 * remembered, so the hint that names it (memory's `alt+m more`) goes for good.
 		 */
 		const toggleDepth = (ctx: ExtensionContext | undefined, id: SectionId) => {
 			const depth: Depth = prefs.sidebarDepth?.[id] === "expanded" ? "compact" : "expanded";
@@ -629,6 +636,7 @@ export function orqHarness(deps: HarnessDeps) {
 				const depths = { ...into.sidebarDepth, [id]: depth };
 				if (depth === "compact") delete depths[id];
 				into.sidebarDepth = Object.keys(depths).length ? depths : undefined;
+				into.depthKeyUsed = true;
 			});
 			render();
 		};
@@ -646,7 +654,17 @@ export function orqHarness(deps: HarnessDeps) {
 		let notesOff = false;
 		let roots = noteRoots();
 		let realRoots = roots;
-		let noteReads = 0;
+		/** The notes opened this session, newest first, a path once with its newest time. */
+		let noteReads: NoteRead[] = [];
+		/** Titles of the notes read, from their files, read when a read is counted and never in a render. */
+		const noteInfos = new NoteInfos();
+		/** Every recall and save memorq has reported this session: it sends the newest five each time. */
+		let seenRecent: MemorqRecent[] = [];
+		/** What the memory section draws, worked out when a state arrives or a note is read, never in a render. */
+		let memory: MemoryView | undefined;
+		const refreshMemory = () => {
+			memory = memoryView(memorqState, noteReads, (path) => noteInfos.get(path), seenRecent);
+		};
 		/** `read` paths by tool call: tool_execution_end carries no args. */
 		const readPaths = new Map<string, string>();
 		/** A path with its symlinks resolved, or the path itself when it cannot be (missing, or empty). */
@@ -707,6 +725,8 @@ export function orqHarness(deps: HarnessDeps) {
 			memorqState = isLearned(data.learned) ? data : { ...data, learned: undefined };
 			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
 			recordLearn(memorqState.learned);
+			seenRecent = mergeRecent(seenRecent, memorqState);
+			refreshMemory();
 			// What memorq injected is a part of the context of its own: measure again when it moves.
 			if (ctxRef && split && injectedTokens(memorqState) !== measuredInjected) measure(ctxRef);
 			render();
@@ -759,7 +779,10 @@ export function orqHarness(deps: HarnessDeps) {
 				isNoteRead(path, memorqState.stores, roots, cwd) ||
 				isNoteRead(real(readPath(path, cwd)), realStores ?? memorqState.stores, realRoots, cwd);
 			if (!hit) return;
-			noteReads++;
+			const file = real(readPath(path, cwd));
+			noteInfos.load(file);
+			noteReads = noteRead(noteReads, file, now());
+			refreshMemory();
 			render();
 		};
 		let startedAt = Date.now();
@@ -972,8 +995,11 @@ export function orqHarness(deps: HarnessDeps) {
 			{
 				id: "memory",
 				title: "memory",
-				// ponytail: expanded is compact until the memory section's event list lands.
-				lines: (w) => (waitingForMemorq() ? ["loading…"] : memoryBody(memorqState, noteReads, w)),
+				summary: (frame) => (waitingForMemorq() ? undefined : memorySummary(memory, frame.depth)),
+				lines: (w, frame) =>
+					waitingForMemorq()
+						? ["loading…"]
+						: memoryBody(memory, w, frame.depth, { now: now(), hint: !prefs.depthKeyUsed, rows: frame.rows }),
 				unavailable: memoryUnavailable,
 				note: () => (waitingForMemorq() ? "loading…" : undefined),
 				hidden: memorqAbsent,
@@ -1038,19 +1064,28 @@ export function orqHarness(deps: HarnessDeps) {
 				// Under the trajectory: what needs attention, where the context goes, what memory knows,
 				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
 				const showTrajectory = prefs.sections.trajectory;
-				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
-					if (section.id === "trajectory") return [];
-					const view: SectionFrame = { signals: found, depth: prefs.sidebarDepth?.[section.id] ?? "compact" };
-					const body = section.lines(inner - BODY_INDENT, view);
-					// Routing's content is not redesigned, so it keeps all its lines: the compact cap is for the others.
-					const cap = section.id === "routing" ? "expanded" : view.depth;
-					return body ? [{ id: section.id, lines: sectionBlock(section.title, section.summary?.(view), body, inner, cap) }] : [];
-				});
-				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				// The slot is the screen less what composeLayout keeps above and below it, or the overlay's
 				// margins (1 + 3) in regular mode. A frame taller than its slot loses its bottom: the last section, the hint.
 				const slot = (process.stdout.rows ?? 30) - (sideRoot ? sideRoot.reserved() : 4);
-				const height = showTrajectory ? Math.max(3, slot - FRAME_CHROME - below) : 0;
+				const build = (section: InspectorSection, rows: number) => {
+					const view: SectionFrame = { signals: found, depth: prefs.sidebarDepth?.[section.id] ?? "compact", rows };
+					const body = section.lines(inner - BODY_INDENT, view);
+					// Routing's content is not redesigned, so it keeps all its lines: the compact cap is for the others.
+					const cap = section.id === "routing" ? "expanded" : view.depth;
+					return body ? { id: section.id, lines: sectionBlock(section.title, section.summary?.(view), body, inner, cap) } : undefined;
+				};
+				const active = sectionsToDraw(sections, prefs).filter((section) => section.id !== "trajectory");
+				// Memory's expanded list takes the room the others leave, the trajectory keeping its minimum: it stops
+				// at what fits. The others come first because their size does not depend on it.
+				const others = active.map((section) => (section.id === "memory" ? undefined : build(section, Number.POSITIVE_INFINITY)));
+				const taken = others.reduce((n, block) => n + (block ? 1 + block.lines.length : 0), 0);
+				const spare = slot - FRAME_CHROME - (showTrajectory ? MIN_TRAJECTORY : 0) - taken - 2; // the blank row and the header
+				const drawn = active.flatMap((section, i) => {
+					const block = others[i] ?? build(section, Math.max(MIN_MEMORY_ROWS, spare));
+					return block ? [block] : [];
+				});
+				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
+				const height = showTrajectory ? Math.max(MIN_TRAJECTORY, slot - FRAME_CHROME - below) : 0;
 				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
@@ -1064,7 +1099,7 @@ export function orqHarness(deps: HarnessDeps) {
 							? "alt+s · /sidebar focus" // focus walks the trajectory
 							: "alt+s · /sidebar";
 				// Without the trajectory above it, the first section needs no blank line to set it apart.
-				const underneath = drawSections(drawn, inner, theme.fg, sectionLineRole).slice(showTrajectory ? 0 : 1);
+				const underneath = drawSections(drawn, inner, theme.fg).slice(showTrajectory ? 0 : 1);
 				// FRAME_CHROME counts the lines here that are neither trajectory rows nor sections.
 				const chrome = [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),

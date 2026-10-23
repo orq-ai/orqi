@@ -6,6 +6,7 @@ import {
 	BODY_INDENT,
 	COMPACT_LINES,
 	drawSections,
+	plainRole,
 	fitSegs,
 	type Line,
 	lineText,
@@ -218,6 +219,17 @@ test("every drawn row keeps the item it shows, through the cut and the cap, so f
 	expect(drawSections([{ id: "signals", lines: sectionBlock("signals", undefined, ["⚠ x"], 10) }], 10, tag, () => "warning")[2]).toEqual({
 		text: "<warning>  ⚠ x     </warning>",
 	});
+});
+
+test("a plain string line is muted, or warning behind a warning mark; segments carry their own roles", () => {
+	expect(plainRole("  ⚠ 3 errors")).toBe("warning");
+	expect(plainRole("⚠ tool loop")).toBe("warning");
+	expect(plainRole("  3 errors")).toBe("muted");
+	expect(plainRole("")).toBe("muted");
+	// With no role function given, drawSections paints strings by it.
+	const fg = (role: string, text: string) => `<${role}>${text}</${role}>`;
+	const rows = drawSections([{ id: "signals", lines: sectionBlock("signals", undefined, ["⚠ x", "y"], 6) }], 6, fg);
+	expect(rows.slice(2).map((row) => row.text)).toEqual(["<warning>  ⚠ x </warning>", "<muted>  y   </muted>"]);
 });
 
 test("signals fold to `ok` while nothing fires, and say what fires otherwise", () => {

@@ -66,7 +66,7 @@ The orq plugin adds its own commands too: `/quickstart`, `/traces`, `/analytics`
 | `!` | Runs a shell command |
 | `ctrl+o` | Expands a tool result to pretty-printed JSON |
 | `alt+s` | Shows or hides the sidebar |
-| `alt+c`, `alt+m` | Opens the sidebar's context or memory section to its expanded view, and back. Context expanded: a row per part with the lever that shrinks it, growth, cache and the compaction point |
+| `alt+c`, `alt+m` | Opens the sidebar's context or memory section to its expanded view, and back. Context expanded: a row per part with the lever that shrinks it, growth, cache and the compaction point. Memory expanded: the events newest first, each with its whole title and a detail line |
 | `alt+p` | Toggles plan mode |
 | mouse wheel | Scrolls the sidebar's trajectory |
 
@@ -150,11 +150,14 @@ thread link.
 
 ## Memory, with memorq
 
-When the memorq pi package is installed, the sidebar gains a memory section: how many notes memorq
-keeps for the repository, how many the prompt uses and how many the model opened, what was learned
-and after which trigger, and when the next review runs. Once the agent has recalled or saved a
-note this session, the first line counts notes, opened, recalled and saved, and the next two show the
-latest of those calls with their age. Each learn is also a step in the trajectory,
+When the memorq pi package is installed, the sidebar gains a memory section whose header says how many
+notes memorq keeps for the repository. Compact, it shows how many of them the model read (a bar and
+`3 of 22`), the recalls, misses and saves of the session, and the newest event with its age: a note
+read (`◇`), a recall (`↳`, with how many notes it found) or a save (`+`, or `=` when it was already
+saved). A review running, learning paused or a failed review takes the event's line. `alt+m` lists the
+events newest first, as many as fit: each with its whole title, and under it the note's trigger, a
+recall's top hit, or `memory has no note on this yet`. The `alt+m more` hint goes once you have used
+a depth key (it is remembered in `orqi.json`). Each learn is also a step in the trajectory,
 priced in `/cost`. memorq's `/memory` screen picks the model it writes with from the workspace's chat
 models, and `/doctor` says whether memorq is loaded and whether `python3`, which it runs on, is
 there. Without memorq, orqi shows none of this.

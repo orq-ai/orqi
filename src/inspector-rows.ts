@@ -183,7 +183,7 @@ const graphemes = new Intl.Segmenter();
  * Plain text cut to at most `cells`, by whole graphemes. pi-tui's `truncateToWidth` adds a reset code
  * where it cuts, which a segment, painted afterwards, must not carry.
  */
-function cutPlain(text: string, cells: number): string {
+export function cutPlain(text: string, cells: number): string {
 	let out = "";
 	let used = 0;
 	for (const { segment } of graphemes.segment(text)) {
@@ -257,6 +257,9 @@ export function fitSegs(segs: Seg[], width: number): Seg[] {
 	return out;
 }
 
+/** The role a plain string body line is painted in: `warning` behind a `⚠`, `muted` otherwise. Rows carry their own. */
+export const plainRole = (line: string): "warning" | "muted" => (line.trimStart().startsWith("⚠") ? "warning" : "muted");
+
 /**
  * Paint a line already cut to width. A string keeps one role over the whole line (`roleOf` reads it), exactly
  * as the frame painted strings before segments; a row's segments are painted each in its own role, and blank
@@ -325,13 +328,13 @@ export function drawSections(
 	sections: { id: SectionId; lines: [Row, ...Line[]] }[],
 	width: number,
 	fg: (role: string, text: string) => string,
-	roleOf: (id: SectionId, text: string) => string,
+	roleOf: (text: string) => string = plainRole,
 ): FrameRow[] {
 	return sections.flatMap(({ id, lines: [header, ...body] }) => [
 		{ text: " ".repeat(width) },
 		{ text: paintLine(header, fg, () => "dim") },
 		...body.map((line): FrameRow => {
-			const text = paintLine(line, fg, (plain) => roleOf(id, plain));
+			const text = paintLine(line, fg, roleOf);
 			return typeof line !== "string" && line.item ? { text, item: { section: id, key: line.item } } : { text };
 		}),
 	]);

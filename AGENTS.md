@@ -523,6 +523,16 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `isNoteRead` also knows memorq's machine roots (`ORQ_NOTES_HOME`, else `~/.memorq`, plus the
   legacy `~/.orq/knowledge`). Store folders are resolved through symlinks when a state arrives, the
   read file after the read finishes, never in a render. A subagent's read counts too.
+- **Memory's reads are events, titled once from the note file.** `noteReads` is a list of `{ path, at }`
+  (a path once, with its newest time, capped), and the sidebar shows a note by the title in its file
+  (`src/note-info.ts`: the first `# ` heading, `Trigger:` or `Use when:` for the detail line, else the file
+  name's words). The file is read when the read is counted and again only when its modified time moved,
+  never in a render. memorq sends only its newest five recalls and saves, so orqi keeps every one it has
+  seen this session (`mergeRecent`): that is what counts the recalls that found nothing. The section's view
+  (`memoryView`) is rebuilt when a state arrives or a note is read, and a render only lays it out. Expanded,
+  the frame hands memory the rows the other sections leave (`SectionFrame.rows`), so it lists as many events as
+  fit and never loses its footer. The hint `alt+m more` shows until a depth key was pressed once
+  (`depthKeyUsed` in `orqi.json`).
 - **A learn is recorded once.** memorq republishes the same `learned` on every change and answers
   every `memorq:state?`, and a resume replays the `orqi-memory` entries, so each learn is keyed by
   `at|trigger|count`, seeded from the branch at session start; a learn published before that waits
