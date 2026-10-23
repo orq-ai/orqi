@@ -179,6 +179,12 @@ function age(ms: number): string {
 	return `${Math.floor(ms / 86_400_000)}d`;
 }
 
+/**
+ * `text` in at most `width` cells, `…` for what was cut. truncateToWidth wraps its ellipsis in resets, and a
+ * reset inside a line would end the role's colour before the rest of it, so the activity view cuts with this.
+ */
+const cut = (text: string, width: number) => truncateToWidth(text, width, "…").replace(/\x1b\[[0-9;]*m/g, "");
+
 /** The cells the quoted text keeps before its verb gives way to a short one (or the whole text, when it is shorter). */
 const MIN_TEXT = 12;
 
@@ -194,39 +200,64 @@ function recentLine(entry: MemorqRecent, width: number, now: number): string {
 	const tail = `${result} · ${age(Math.max(0, now - entry.at))}`;
 	const room = (head: string) => width - visibleWidth(head) - visibleWidth(tail) - 2;
 	const head = room(`${verb} `) >= Math.min(visibleWidth(text), MIN_TEXT) ? `${verb} ` : `${mark} `;
-	return `${head}"${truncateToWidth(text, Math.max(1, room(head)), "…")}"${tail}`;
+	return `${head}"${cut(text, Math.max(1, room(head)))}"${tail}`;
 }
+
+/** Whether an entry can be drawn: well formed, and with some text left once memorq's escapes are taken out. */
+const drawable = (data: unknown): data is MemorqRecent => isRecent(data) && printable(data.text).trim() !== "";
 
 /**
  * The activity view's first line: `21 notes · 3 opened · 2 recalled · 1 saved`, a zero part left out
- * except the notes. When it does not fit, the word `notes` goes first; anything still over is cut by the caller.
+ * except the notes. When it does not fit it gives up, in turn: the word `notes`, the note count, the
+ * `-ed` of `recalled`; when none fits, the second (`21 · 3 opened · …`) is cut by the caller, as the wireframe draws it.
  */
 function totalsLine(state: MemorqState, activity: MemorqActivity, reads: number, width: number): string {
-	const parts = [
-		reads > 0 ? `${reads} opened` : "",
-		activity.recalls > 0 ? `${activity.recalls} recalled` : "",
-		activity.remembers > 0 ? `${activity.remembers} saved` : "",
-	].filter(Boolean);
-	const full = [plural(state.notes, "note"), ...parts].join(" · ");
-	return visibleWidth(full) <= width ? full : [String(state.notes), ...parts].join(" · ");
+	const counts = (recalled: string) =>
+		[
+			reads > 0 ? `${reads} opened` : "",
+			activity.recalls > 0 ? `${activity.recalls} ${recalled}` : "",
+			activity.remembers > 0 ? `${activity.remembers} saved` : "",
+		].filter(Boolean);
+	const parts = counts("recalled");
+	const join = (...bits: string[]) => bits.join(" · ");
+	const fallbacks = [
+		join(plural(state.notes, "note"), ...parts),
+		join(String(state.notes), ...parts),
+		...(parts.length ? [join(...parts), join(...counts("recall"))] : []),
+	];
+	return fallbacks.find((line) => visibleWidth(line) <= width) ?? fallbacks[1]!;
 }
 
-/** The status line: why nothing is learned, the review running, failed or due. At most one, in this order. */
-function statusLine(state: MemorqState): string | undefined {
-	if (state.paused) return "learning paused · /memory";
-	if (state.enabled === "readonly") return "read-only · learns nothing";
-	if (state.review?.running === true) return `reviewing ${state.review.notes} notes…`;
-	if (typeof state.review?.failed === "string") return "last review failed";
+/** A closing line and how urgent it is: lower stays when there is room for one. */
+interface Closer {
+	urgency: number;
+	line: string;
+}
+
+/**
+ * The status line, at most one, in this order: why nothing is learned, the review running, failed or due.
+ * A review running or learning stopped outranks the last learn when there is room for only one of them, a failed
+ * review does not outrank it by much, and the next review's date is the least pressing.
+ */
+function statusLine(state: MemorqState): Closer | undefined {
+	if (state.paused) return { urgency: 1, line: "learning paused · /memory" };
+	if (state.enabled === "readonly") return { urgency: 1, line: "read-only · learns nothing" };
+	if (state.review?.running === true) return { urgency: 0, line: `reviewing ${state.review.notes} notes…` };
+	if (typeof state.review?.failed === "string") return { urgency: 2, line: "last review failed" };
 	if (typeof state.review?.dueInSessions === "number")
-		return state.review.dueInSessions > 0
-			? `next memory review in ${plural(state.review.dueInSessions, "session")}`
-			: "next memory review at next start";
+		return {
+			urgency: 4,
+			line:
+				state.review.dueInSessions > 0
+					? `next memory review in ${plural(state.review.dueInSessions, "session")}`
+					: "next memory review at next start",
+		};
 	return undefined;
 }
 
 /** Whether there is anything to draw in the activity view: a call counted, or an entry kept. */
 const hasActivity = (activity: unknown): activity is MemorqActivity =>
-	isActivity(activity) && (activity.recalls > 0 || activity.remembers > 0 || activity.recent.some(isRecent));
+	isActivity(activity) && (activity.recalls > 0 || activity.remembers > 0 || activity.recent.some(drawable));
 
 /**
  * The memory section, each line only when it has something to say. Before memorq reports any activity:
@@ -248,19 +279,47 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 	if (!state.notes) return sectionLines("memory", [`no notes yet · ${why ?? "learns as you work"}`], width);
 	// The body is indented two cells by sectionLines.
 	const inner = width - 2;
-	// The last learn and the status are today's closing lines; the activity view has room for one of them.
-	const closing = [isLearned(state.learned) ? learnedLine(state.learned, inner, now) : undefined, statusLine(state)].filter(
-		(line): line is string => line !== undefined,
-	);
+	// The last learn and the status are today's closing lines, in today's order; `urgency` (lowest first) says
+	// which one stays when the activity view has room for only one.
+	const closing = [
+		isLearned(state.learned) ? { urgency: 3, line: learnedLine(state.learned, inner, now) } : undefined,
+		statusLine(state),
+	].filter((closer): closer is Closer => closer !== undefined);
 	if (hasActivity(state.activity)) {
-		const recent = state.activity.recent.filter(isRecent).slice(0, 2);
+		const recent = state.activity.recent.filter(drawable).slice(0, 2);
 		const body = [totalsLine(state, state.activity, reads, inner), ...recent.map((entry) => recentLine(entry, inner, now))];
-		return sectionLines("memory", [...body, ...closing.slice(0, 4 - body.length)], width);
+		const room = 4 - body.length;
+		const kept = closing.length <= room ? closing : [...closing].sort((a, b) => a.urgency - b.urgency).slice(0, room);
+		const lines = [...body, ...closing.filter((closer) => kept.includes(closer)).map((closer) => closer.line)];
+		return sectionLines(
+			"memory",
+			lines.map((line) => cut(line, inner)),
+			width,
+		);
 	}
 	const body = [`${plural(state.notes, "note")} for this repo`];
 	if (state.usedThisTurn > 0) body.push(`using ${state.usedThisTurn} this turn${reads > 0 ? ` · read ${reads}` : ""}`);
 	else if (reads > 0) body.push(`read ${reads} this session`);
-	return sectionLines("memory", [...body, ...closing], width);
+	return sectionLines("memory", [...body, ...closing.map((closer) => closer.line)], width);
+}
+
+/** The theme role a memory line is drawn in; the marks and words carry the meaning, colour only helps. */
+export type MemoryRole = "muted" | "text" | "dim" | "accent" | "warning";
+
+/**
+ * The role for one line of the memory section (indented or not): the totals, the last learn and the next
+ * review are `muted`; a recall that found something and a save are `text`, a recall that found nothing is
+ * `warning` (a gap in memory); a save that was already saved is `dim`; a review running is `accent`; paused,
+ * read-only and a failed review are `warning`. The narrow forms (`↳ "…"`, `+ "…"`) read the same.
+ */
+export function memoryLineRole(line: string): MemoryRole {
+	const text = line.trim();
+	if (/^↳ /.test(text)) return / → nothing · [^ ]+$/.test(text) ? "warning" : "text";
+	if (/^\+ (saved )?"/.test(text)) return "text";
+	if (/^= (already saved )?"/.test(text)) return "dim";
+	if (/^reviewing \d+ notes…/.test(text)) return "accent";
+	if (/^(learning paused|read-only|last review failed)/.test(text)) return "warning";
+	return "muted";
 }
 
 /** `inner` lies inside `dir` (not the folder itself). */

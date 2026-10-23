@@ -38,6 +38,7 @@ import {
 	isNoteRead,
 	learnHead,
 	learnPhrase,
+	memoryLineRole,
 	memoryLines,
 	noteRoots,
 	readPath,
@@ -952,7 +953,11 @@ export function orqHarness(deps: HarnessDeps) {
 				const paintSection = ({ id, lines }: { id: SectionId; lines: string[] }) => [
 					blank,
 					side(theme.fg("dim", lines[0]!)),
-					...lines.slice(1).map((line, i) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : "muted", line))),
+					...lines
+						.slice(1)
+						.map((line) =>
+							side(theme.fg(id === "memory" ? memoryLineRole(line) : line.trimStart().startsWith("⚠") ? "warning" : "muted", line)),
+						),
 				];
 				const title = " sidebar ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);

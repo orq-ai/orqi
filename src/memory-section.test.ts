@@ -12,6 +12,7 @@ import {
 	isNoteRead,
 	learnHead,
 	learnPhrase,
+	memoryLineRole,
 	memoryLines,
 	printable,
 	type MemorqActivity,
@@ -119,7 +120,7 @@ test("a checkpoint learn names its threshold when memorq sends it; a failed revi
 
 test("memorq's own types are states orqi accepts, and orqi's host is memorq's", () => {
 	// A hand copy of memorq's exported types. Re-copy them from orq-ai/memorq
-	// integrations/pi/state.ts (copied from main at 756f87d) whenever memorq changes its payload.
+	// integrations/pi/state.ts (copied from memorq 00fb378, v0.13.x, where `activity` is) whenever memorq changes its payload.
 	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
 	interface ProducerState {
 		version: string;
@@ -130,6 +131,11 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 		stores: { notes: string; rules: string; skills: string };
 		paused: boolean;
 		enabled: "on" | "readonly" | "off";
+		activity?: {
+			recalls: number;
+			remembers: number;
+			recent: { kind: "recall" | "remember"; text: string; at: number; hits?: number; saved?: boolean }[];
+		};
 	}
 	interface ProducerHost {
 		panel: { shown(): boolean; set(shown: boolean): void };
@@ -138,6 +144,18 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 	const produced: ProducerState[] = [
 		{ ...state(), learned: { count: 1, trigger: "manual", at: NOW, pct: 80 }, review: { dueInSessions: 0, failed: "boom" } },
 		{ ...state(), learned: { count: 3, trigger: "sweep", at: NOW, costUsd: 0.2 }, review: { running: true, notes: 47 } },
+		{
+			...state(),
+			review: { dueInSessions: 2 },
+			activity: {
+				recalls: 2,
+				remembers: 1,
+				recent: [
+					{ kind: "recall", text: "golden test clock", at: NOW, hits: 0 },
+					{ kind: "remember", text: "Golden test depends on the clock", at: NOW - MIN, saved: false },
+				],
+			},
+		},
 	];
 	for (const p of produced) {
 		const accepted: MemorqState = p; // a compile error here means the shapes drifted
@@ -536,4 +554,94 @@ test("a malformed entry is skipped, the rest still draw", () => {
 		'  ↳ recalled "first good" → 3 · now',
 		'  + saved "second good" · 5m',
 	]);
+});
+
+test("one slot left: a review running, then paused or read-only, then a failed review, then the learn, then the next review", () => {
+	const learned = { count: 2, trigger: "session_end" as const, at: NOW - 60 * MIN };
+	const line4 = (over: Partial<MemorqState>) => body(memoryLines(proposed({ learned, ...over }), 3, 60, NOW));
+	expect(line4({ review: { running: true, notes: 21 } })).toHaveLength(4);
+	expect(line4({ review: { running: true, notes: 21 } })[3]).toBe("  reviewing 21 notes…");
+	expect(line4({ paused: true })[3]).toBe("  learning paused · /memory");
+	expect(line4({ enabled: "readonly" })[3]).toBe("  read-only · learns nothing");
+	expect(line4({ review: { dueInSessions: 1, failed: "boom" } })[3]).toBe("  last review failed");
+	// Nothing urgent: the learn; and the learn over a review that is merely due.
+	expect(line4({})[3]).toBe("  learned 2 at session end · 1h");
+	expect(line4({ review: { dueInSessions: 2 } })[3]).toBe("  learned 2 at session end · 1h");
+	// No learn: the status line, whichever it is.
+	expect(body(memoryLines(proposed({ learned: undefined, review: { dueInSessions: 2 } }), 3, 60, NOW))[3]).toBe(
+		"  next memory review in 2 sessions",
+	);
+	// With room (one entry), both closing lines show, in today's order: the learn, then the status.
+	const one = proposed({ learned, paused: true, activity: activity({ recent: [{ kind: "recall", text: "q", at: NOW, hits: 1 }] }) });
+	expect(body(memoryLines(one, 3, 60, NOW)).slice(2)).toEqual(["  learned 2 at session end · 1h", "  learning paused · /memory"]);
+});
+
+test("line 1 gives up its words before its numbers: the word notes, the note count, then the -ed of recalled", () => {
+	const line1 = (notes: number, a: Partial<MemorqActivity>, reads: number, width = 38) =>
+		bare(memoryLines(state({ notes, activity: activity(a) }), reads, width, NOW)[1]!).trimEnd();
+	// The real panel is 38 wide, its body 36.
+	expect(line1(21, { recalls: 2, remembers: 1 }, 3)).toBe("  21 · 3 opened · 2 recalled · 1 saved");
+	expect(line1(21, { recalls: 12, remembers: 10 }, 14)).toBe("  14 opened · 12 recalled · 10 saved");
+	expect(line1(123, { recalls: 12, remembers: 10 }, 14)).toBe("  14 opened · 12 recalled · 10 saved");
+	expect(line1(123, { recalls: 100, remembers: 100 }, 100)).toBe("  100 opened · 100 recall · 100 saved");
+	// Wide enough, nothing is given up.
+	expect(line1(123, { recalls: 12, remembers: 10 }, 14, 60)).toBe("  123 notes · 14 opened · 12 recalled · 10 saved");
+	for (const row of memoryLines(state({ notes: 123, activity: activity({ recalls: 12, remembers: 10 }) }), 14, 38, NOW))
+		expect(visibleWidth(row)).toBe(38);
+});
+
+test("an entry with no text left once its escapes are taken out is skipped", () => {
+	const a = activity({
+		recent: [
+			{ kind: "recall", text: "\x1b]52;c;ZXZpbA==\x07", at: NOW, hits: 1 },
+			{ kind: "remember", text: "  \t ", at: NOW, saved: true },
+			{ kind: "recall", text: "real one", at: NOW - MIN, hits: 1 },
+		],
+	});
+	expect(body(memoryLines(state({ activity: a }), 0, 60, NOW)).slice(1)).toEqual(['  ↳ recalled "real one" → 1 · 1m']);
+	// Only empty entries and no counts: no activity at all.
+	const none = activity({ recalls: 0, remembers: 0, recent: [{ kind: "recall", text: "\x1b[2J", at: NOW, hits: 0 }] });
+	expect(memoryLines(state({ activity: none }), 0, 36, NOW)).toEqual(memoryLines(state(), 0, 36, NOW));
+});
+
+test("each memory line has a theme role, narrow forms included; the words and marks carry the meaning", () => {
+	const role = (width: number, over: Partial<MemorqState>) =>
+		memoryLines(over.activity ? state(over) : proposed(over), 3, width, NOW)
+			.slice(1)
+			.map((row) => [bare(row).trim(), memoryLineRole(row)]);
+	const a = activity({
+		recalls: 3,
+		remembers: 2,
+		recent: [
+			{ kind: "recall", text: "k8s rollout", at: NOW, hits: 0 },
+			{ kind: "remember", text: "Use uv for tests", at: NOW, saved: false },
+		],
+	});
+	for (const width of [60, 38, 26]) {
+		const rows = role(width, { notes: 21, activity: a, review: { running: true, notes: 21 } });
+		expect(rows.map(([, r]) => r)).toEqual(["muted", "warning", "dim", "accent"]);
+		const found = role(width, { learned: { count: 2, trigger: "ship", at: NOW } });
+		expect(found.map(([, r]) => r)).toEqual(["muted", "text", "text", "muted"]);
+	}
+	// The narrow forms really are mark-only, and still read the same.
+	const narrow = role(26, { notes: 21, activity: a, review: { running: true, notes: 21 } }).map(([row]) => row);
+	expect(narrow[1]).toStartWith('↳ "');
+	expect(narrow[2]).toStartWith('= "');
+	expect(narrow[1]).toEndWith("→ nothing · now");
+	expect(role(26, { learned: { count: 2, trigger: "ship", at: NOW } })[2]![0]).toStartWith('+ "');
+	// Status lines.
+	expect(memoryLineRole("  learning paused · /memory")).toBe("warning");
+	expect(memoryLineRole("  read-only · learns nothing")).toBe("warning");
+	expect(memoryLineRole("  last review failed")).toBe("warning");
+	expect(memoryLineRole("  reviewing 22 notes…")).toBe("accent");
+	expect(memoryLineRole("  next memory review in 2 sessions")).toBe("muted");
+	expect(memoryLineRole("  learned 2 after git push · 3m")).toBe("muted");
+	expect(memoryLineRole("  nothing new at checkpoint · 3m")).toBe("muted");
+	expect(memoryLineRole("  47 notes for this repo")).toBe("muted");
+	expect(memoryLineRole("  loading…")).toBe("muted");
+	// Words inside the quoted text cannot recolour a line.
+	expect(memoryLineRole('  ↳ recalled "a → nothing · now" → 2 · now')).toBe("text");
+	expect(memoryLineRole('  + saved "reviewing 3 notes…" · 1m')).toBe("text");
+	// Roles never put escapes in the line itself.
+	for (const width of [60, 38, 26]) for (const row of memoryLines(proposed(), 3, width, NOW)) expect(row).not.toContain("\x1b");
 });
