@@ -33,6 +33,7 @@ What orqi adds on top of the agent.
 | `/overview [section]` | Agents, prompts, datasets, experiments, projects and evaluators |
 | `/garden` | Opens the model garden in Studio. In the model picker, `ctrl+g` does the same |
 | `/skills` | The loaded skills. Type to filter, enter for details, `i` for the instructions, `u` to use one |
+| `/subagents` | The subagent types the model can delegate to: built-in, yours and the project's, with files that did not load. Enter for a type's tools, rung and prompt |
 | `/tools` | The orq tools. Enter shows a tool's definition, `j` its raw schema |
 | `/learn` | Guided prompts, one per platform area. Pick one and it is sent as if you typed it |
 | `/whatsnew` | The latest orq.ai release, in the terminal. `/whatsnew open` for the browser |
@@ -140,7 +141,11 @@ thread link.
 - **The orq plugin** from [orq-ai/assistant-plugins](https://github.com/orq-ai/assistant-plugins):
   its skills and commands, plus orqi's own skills. orqi checks once a day and switches to a newer
   plugin without waiting for a release, never to an older one.
-- **Three subagents**: `investigator`, `analyst` and `docs`, each with a narrow set of orq tools.
+- **Subagents**: `investigator`, `analyst` and `docs`, each with a narrow set of orq tools, plus any
+  you write ([subagent types](configuration.md#subagent-types)). A running subagent shows its call in
+  flight in the sidebar (`investigator get_span +2`), and its loops and errors count in the signals
+  section. Ask for one in the background and the turn goes on; its result arrives as a message,
+  which the model then reads.
 - **The header and footer.** The header shows the workspace, project, active agent and routing. The
   footer shows the model that answered, tokens with the cache hit rate, cost, a context bar and the
   git branch with what needs acting on.

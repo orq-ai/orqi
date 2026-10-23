@@ -374,6 +374,31 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **Subagents reach the orq tools through the parent's `executeTool`.** pi connects the server in
   the parent session; a subagent's child session gets proxies (same names, same schemas) that run
   each call through `ctx.executeTool`, so no second MCP handshake and the parent's hooks apply.
+- **A subagent's calls reach the trajectory, under its step.** pi tags every nested
+  `tool_execution_*` and `tool_call` event with `parentToolCallId`; the harness used to drop them, so
+  the sidebar showed a subagent as one opaque row. `childStart` attaches a nested call to the
+  top-level `subagent` step it belongs to and ignores any other parent (a codemode script, a future
+  tool that nests calls): with no subagent row to sit under, it has nowhere honest to draw. The child
+  session's own steps, which arrive with the result, replace the live ones. `signals()` counts a
+  subagent's calls under the parent's turn, because replayed children carry the child session's turns.
+- **A background subagent's result is a persisted `orqi-subagent` custom message, sent as steering
+  with `triggerTurn`.** The tool returns at once; the child session keeps running, and on settle
+  `pi.sendMessage` delivers its answer before the next model call if a run is streaming, or starts a
+  run if idle (pi never injects mid-stream). It is a `custom_message` entry, so it is in the model's
+  context, `/resume` replays it into the trajectory, and its renderer draws one line. The `pi` handle
+  comes from a one-line extension factory, rebuilt per session, and `session_shutdown` disposes the
+  children still running, so a result never lands in the next session. The turn's `signal` is not
+  handed to a background child or its calls: Esc ends the turn, not the investigation. One-shot runs
+  it in the foreground and says so in the result, because the process would exit before the result
+  arrived. There is no concurrency cap: each child shows its own cost in the sidebar; add one when
+  someone fans out past what the server tolerates. A background run's cost reaches the trajectory
+  (sidebar, `/cost`) but not pi's `/session` totals, which count tool-result usage only.
+- **`.orqi/agents` is read only when `projectTrusted` says so, though pi's trust list does not know
+  the folder.** A project with only `.orqi/agents/` is not "trust-requiring" to pi, so it alone never
+  asks; but a cloned repo's prompt and tool list are not run unasked either. A file whose name is a
+  built-in's is refused, not merged: `docs` means the same thing in every project. A type naming a
+  tool the workspace lacks is refused at call time with the file to fix, never run with fewer tools;
+  the built-ins are exempt, their sets being reviewed against the server's list.
 - **`/plugin update` swaps a private method on its package manager.** pi's `DefaultPackageManager`
   runs git and npm through `spawnCommand` with `stdio: "inherit"`, which in a running session paints
   their raw output over the TUI and leaves it looking frozen. `captureCommandOutput`
