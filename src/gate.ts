@@ -59,8 +59,11 @@ export function maskSecrets(value: unknown): unknown {
 	);
 }
 
-/** Tools that read and nothing else: what plan mode lets through besides benign orq calls. */
-const PLAN_READS = new Set(["read", "ask_user", "exit_plan", "web_search", "web_fetch"]);
+/**
+ * Tools that read and nothing else: what plan mode lets through besides benign orq calls. memorq's
+ * `memory_recall` searches the notes and writes nothing; its `memory_write` stays blocked while planning.
+ */
+const PLAN_READS = new Set(["read", "ask_user", "exit_plan", "web_search", "web_fetch", "memory_recall"]);
 
 /**
  * Why plan mode blocks a call, or undefined when it may run. An allowlist, so a

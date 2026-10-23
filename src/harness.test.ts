@@ -3011,6 +3011,7 @@ test("plan mode lets reads through, asks for every Bash command and blocks the r
 	expect(planBlock("read", {})).toBeUndefined();
 	expect(planBlock("ask_user", {})).toBeUndefined();
 	expect(planBlock("exit_plan", {})).toBeUndefined();
+	expect(planBlock("memory_recall", { query: "refunds" })).toBeUndefined(); // memorq's search writes nothing
 	expect(planBlock("mcp__orq__list_traces", {})).toBeUndefined();
 	expect(planBlock("subagent", { agent: "investigator" })).toBeUndefined();
 	expect(planBlock("subagent", { agent: "agent/support-bot" })).toContain("managed agent");
@@ -3020,6 +3021,7 @@ test("plan mode lets reads through, asks for every Bash command and blocks the r
 		"mcp__orq__create_dataset",
 		"mcp__orq__update_agent",
 		"mcp__orq__delete_dataset",
+		"memory_write",
 		"some_plugin_tool",
 	])
 		expect(planBlock(tool, {})).toContain("Plan mode is read-only");
