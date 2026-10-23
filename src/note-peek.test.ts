@@ -88,6 +88,9 @@ test("the path is shown from the home folder, and a note with no frontmatter sti
 		const home = join(homedir(), ".memorq", "k", "notes", "n.md");
 		const shown = peekOf(readEvent(home), stores, plain, NOW, []).rows.at(-1);
 		expect(shown).toBe(join("~", ".memorq", "k", "notes", "n.md"));
+		// A file name is drawn printable: an escape code in it never reaches the terminal.
+		const odd = peekOf(readEvent(join(stores.notes, "a\u001b[2Jb.md")), stores, plain, NOW, []).rows.at(-1);
+		expect(odd).not.toContain("\u001b");
 	});
 });
 

@@ -61,9 +61,10 @@ function oldness(ms: number): string {
 	return `${Math.floor(days / 30)}mo old`;
 }
 
+/** The path as drawn: from the home folder, and printable, since a file name can carry escape codes. The raw path opens the file. */
 const shown = (path: string) => {
 	const home = homedir();
-	return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+	return printable(path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path);
 };
 
 /** A paragraph starts with `label:` (`Trigger:`, `Why:`), case-insensitively. */
