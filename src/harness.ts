@@ -85,7 +85,7 @@ import {
 } from "./trajectory.ts";
 import { toolGate } from "./gate.ts";
 import { registerHandoff } from "./handoff.ts";
-import { createExitPlanTool, PLAN_ENTRY, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
+import { createExitPlanTool, type ExitPlanDetails, PLAN_ENTRY, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import type { AgentTypeProblem } from "./agent-types.ts";
 import { summaryLine, type AgentType, type SubagentHost } from "./subagent.ts";
@@ -2136,12 +2136,28 @@ export function orqHarness(deps: HarnessDeps) {
 				const arg = args.trim();
 				if (arg === "run") {
 					const path = planPath(deps.agentDir, ctx.sessionManager.getSessionId());
-					if (!existsSync(path)) {
-						ctx.ui.notify("No plan in this session yet: /plan, then ask for one.", "warning");
+					// The plan as the user approved it in exit_plan's dialog. The file is only a copy:
+					// anything that wrote to it since (a bash call, a plugin) must not change what runs.
+					const approved = (
+						ctx.sessionManager.getBranch() as { type: string; message?: { role?: string; toolName?: string; details?: unknown } }[]
+					)
+						.map((entry) =>
+							entry.type === "message" && entry.message?.role === "toolResult" && entry.message.toolName === "exit_plan"
+								? (entry.message.details as ExitPlanDetails | undefined)
+								: undefined,
+						)
+						.filter((details) => details?.choice === "fresh" || details?.choice === "here")
+						.at(-1)?.plan;
+					if (!approved) {
+						ctx.ui.notify("No approved plan in this session yet: /plan, then approve one.", "warning");
 						return;
 					}
 					try {
-						const plan = readFileSync(path, "utf8").trim();
+						if (existsSync(path) && readFileSync(path, "utf8").trim() !== approved.trim()) {
+							ctx.ui.notify(`${path} changed after you approved it. /plan on to review it and approve again.`, "warning");
+							return;
+						}
+						const plan = approved.trim();
 						await ctx.waitForIdle();
 						// The fresh session is not in plan mode, whatever the launch said: running the plan is the point.
 						await ctx.newSession({
