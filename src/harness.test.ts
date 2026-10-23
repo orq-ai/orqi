@@ -243,6 +243,26 @@ test("a background subagent stays running until its orqi-subagent message lands"
 	expect(t.steps.at(-1)).toMatchObject({ status: "ok", durationMs: 900, usage: { cost: 0.01 } });
 });
 
+test("a background child's calls after the parent's turn reuse ids: each is its own row, and signals see them now", () => {
+	const t = new Trajectory();
+	t.message({ role: "user", content: "go", timestamp: 1 } as any);
+	t.toolStart("s1", "subagent", { agent: "investigator", task: "t", background: true });
+	t.childStart("s1", "s1/1", "mcp__orq__get_span", { span_id: "x" });
+	t.childEnd("s1/1", false, 3);
+	// pi clears its nested-call scopes when the parent's run ends, so the next call is s1/1 again.
+	t.message({ role: "user", content: "and now?", timestamp: 2 } as any);
+	for (let i = 0; i < 3; i++) {
+		t.childStart("s1", "s1/1", "mcp__orq__get_span", { span_id: "x" });
+		t.gate("s1/1", "benign");
+		t.childEnd("s1/1", i === 2, 3);
+	}
+	const sub = t.steps.find((step) => step.role === "subagent")!;
+	expect(sub.children!.map((child) => child.status)).toEqual(["ok", "ok", "ok", "error"]);
+	expect(sub.children!.map((child) => child.door)).toEqual([undefined, "benign", "benign", "benign"]);
+	// The three in this turn loop, though the subagent was started a turn ago.
+	expect(signals(t.steps, t.turn)).toMatchObject({ loop: { tool: "get_span", count: 3 }, errors: 1 });
+});
+
 test("an orqi-subagent message for a call not on the branch is ignored", () => {
 	const t = new Trajectory();
 	expect(() =>
@@ -2167,7 +2187,8 @@ test("signals count a loop and errors inside a subagent", () => {
 			role: "subagent",
 			label: "investigator",
 			detail: "",
-			status: "running",
+			// Finished: its children are the child session's, numbered by that session's own turns.
+			status: "ok",
 			ts: 0,
 			children: [child(2), child(3), child(4, "error")],
 		},

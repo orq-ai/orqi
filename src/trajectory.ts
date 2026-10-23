@@ -372,13 +372,16 @@ export class Trajectory {
 		this.changed();
 	}
 
-	/** A call or a subagent's call: top-level steps first, then one level of children. */
+	/**
+	 * A call or a subagent's call: top-level steps first, then one level of children, the latest
+	 * first. pi restarts nested ids (`s1/1`) once the parent's run ends, so a background child reuses them.
+	 */
 	private findStep(toolCallId: string): Step | undefined {
 		const top = this.steps.find((candidate) => candidate.toolCallId === toolCallId);
 		if (top) return top;
-		for (const step of this.steps) {
-			const child = step.children?.find((candidate) => candidate.toolCallId === toolCallId);
-			if (child) return child;
+		for (let i = this.steps.length - 1; i >= 0; i--) {
+			const children = this.steps[i]!.children ?? [];
+			for (let j = children.length - 1; j >= 0; j--) if (children[j]!.toolCallId === toolCallId) return children[j];
 		}
 		return undefined;
 	}
@@ -391,7 +394,8 @@ export class Trajectory {
 		const parent = this.steps.find((candidate) => candidate.toolCallId === parentToolCallId && candidate.role === "subagent");
 		if (!parent) return;
 		parent.children ??= [];
-		if (parent.children.some((child) => child.toolCallId === toolCallId)) return;
+		// The same call reported twice is one row; a finished id seen again is a new call (see findStep).
+		if (parent.children.some((child) => child.toolCallId === toolCallId && child.status === "running")) return;
 		parent.children.push({
 			role: "tool",
 			label: shortTool(toolName),
@@ -402,7 +406,8 @@ export class Trajectory {
 			toolCallId,
 			args,
 			id: this.nextId++,
-			turn: parent.turn,
+			// The turn it ran in: a background subagent's calls go on past the turn that started it.
+			turn: this.turn,
 		});
 		this.changed();
 	}
@@ -487,12 +492,15 @@ export interface Signals {
 
 /** What the signals section warns about, from the steps alone. */
 export function signals(steps: Step[], turn = steps.at(-1)?.turn ?? 0): Signals {
-	// A subagent's calls count as its turn's: replayed children carry the child session's own turns.
+	// A subagent's calls count too: their own turn while it runs, the subagent's once its result replaced them.
 	const tools = steps.flatMap((step) =>
 		step.role === "tool"
 			? [step]
 			: step.role === "subagent"
-				? (step.children ?? []).filter((child) => child.role === "tool").map((child) => ({ ...child, turn: step.turn }))
+				? (step.children ?? [])
+						.filter((child) => child.role === "tool")
+						// Live calls carry the turn they ran in; replayed ones carry the child session's, so they take the parent's.
+						.map((child) => (step.status === "running" ? child : { ...child, turn: step.turn }))
 				: [],
 	);
 	const counts = new Map<string, { tool: string; count: number }>();
