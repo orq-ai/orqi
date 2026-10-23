@@ -10,7 +10,7 @@
 import { parse as parseYaml } from "yaml";
 import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { runOrq } from "./auth.ts";
@@ -745,8 +745,9 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 		handler: async (_args, ctx) => {
 			const { types, problems } = deps.agentTypes?.() ?? { types: AGENT_TYPES, problems: [] };
 			const entries = Object.entries(types);
-			const origin = (source: string) =>
-				source === "built-in" ? "built-in" : source.startsWith(join(deps.agentDir, "agents")) ? "user" : "project";
+			// With the separator: `agents-backup/` beside it is not the user's folder.
+			const userAgents = `${join(deps.agentDir, "agents")}${sep}`;
+			const origin = (source: string) => (source === "built-in" ? "built-in" : source.startsWith(userAgents) ? "user" : "project");
 			const home = (path: string) => path.replace(homedir(), "~");
 			const width = Math.max(...entries.map(([name]) => name.length));
 			await panel(ctx, {

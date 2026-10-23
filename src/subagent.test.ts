@@ -180,3 +180,17 @@ test("a background run whose result cannot be read reports a failure instead of 
 	expect(sent[0]!.message.details).toMatchObject({ toolCallId: "s1", isError: true });
 	expect(child.disposed).toBe(1);
 });
+
+test("a background child whose prompt throws before returning a promise still settles as a failure", async () => {
+	const child = fakeChild(() => answer);
+	child.session.prompt = () => {
+		throw new Error("refused at start");
+	};
+	const { sent, host, start } = backgroundTool(child);
+	const result = await start();
+	expect(result.content[0].text).toBe(startedText("docs", "s1"));
+	await flush();
+	expect(sent[0]?.message.content).toBe('subagent "docs" failed (#s1): Error: refused at start');
+	expect(host.running.size).toBe(0);
+	expect(child.disposed).toBe(1);
+});

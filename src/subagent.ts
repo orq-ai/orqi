@@ -323,10 +323,13 @@ export function createSubagentTool(deps: SubagentDeps) {
 						// A handle that died with its session: the result has nowhere to go.
 					}
 				};
-				session.prompt(task).then(
-					() => settle(),
-					(failure) => settle(failure ?? "unknown error"),
-				);
+				// Through a resolved promise, so even a prompt that throws before returning one settles.
+				Promise.resolve()
+					.then(() => session.prompt(task))
+					.then(
+						() => settle(),
+						(failure) => settle(failure ?? "unknown error"),
+					);
 				return {
 					content: [{ type: "text" as const, text: startedText(agent, toolCallId) }],
 					details: { agent, model: model.id, background: true } satisfies SubagentDetails,

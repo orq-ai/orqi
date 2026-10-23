@@ -2681,6 +2681,8 @@ test("/subagents lists built-in, user and project types, then the files that did
 			types: {
 				...AGENT_TYPES,
 				mine: custom("my own", join(dir, "agents", "mine.md")),
+				// A sibling folder whose name starts the same is not the user's agents dir.
+				near: custom("a neighbour", join(dir, "agents-backup", "near.md")),
 				auditor: custom("audits evaluators", "/work/orqi/.orqi/agents/auditor.md"),
 			},
 			problems: [{ file: "/work/orqi/.orqi/agents/Bad.md", reason: "the file name must be lowercase letters, digits and dashes" }],
@@ -2693,10 +2695,11 @@ test("/subagents lists built-in, user and project types, then the files that did
 		const rows = panelRows(panel);
 		expect(rows[0]).toMatch(/^investigator +built-in +finds the root cause/);
 		expect(rows).toContainEqual(expect.stringMatching(/^mine +user +my own$/));
+		expect(rows).toContainEqual(expect.stringMatching(/^near +project +a neighbour$/));
 		expect(rows).toContainEqual(expect.stringMatching(/^auditor +project +audits evaluators$/));
 		expect(rows.at(-1)).toStartWith("✗ /work/orqi/.orqi/agents/Bad.md: the file name must");
 		// Enter on the project type: its contract and its prompt.
-		for (let i = 0; i < 4; i++) panel.handleInput("\x1b[B");
+		for (let i = 0; i < 5; i++) panel.handleInput("\x1b[B");
 		panel.handleInput("\r");
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		const detail = panelRows(h.opened.panel!);
