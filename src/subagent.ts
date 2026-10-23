@@ -27,28 +27,38 @@ import { TOOL_PREFIX } from "./mcp.ts";
 import { stepsOf, sumUsage, type SubagentDetails } from "./trajectory.ts";
 
 export interface AgentType {
+	/** One line: what the model reads to pick it. */
+	description: string;
 	prompt: string;
 	/** Unprefixed orq tool names this agent may use. */
 	tools: string[];
 	/** Which routing rung it runs on under `orq/auto`: easy work goes cheap. */
 	rung: "easy" | "medium" | "hard";
+	/** `built-in`, or the file a user type was read from. */
+	source: string;
 }
 
 /** Agent types mirror the capability pillars in the orqi design plan. */
 export const AGENT_TYPES: Record<string, AgentType> = {
 	investigator: {
+		description: "finds the root cause of a failing trace",
+		source: "built-in",
 		prompt:
 			"You investigate failing orq.ai traces. Walk the span tree to the first upstream failure, classify it (specification / generalization / tool-retrieval / data-eval), and report the root cause with evidence: trace ids, span names, and the failing arguments. Lead with the finding, not the process.",
 		tools: ["list_traces", "list_spans", "get_span", "get_agent", "search_entities"],
 		rung: "easy",
 	},
 	analyst: {
+		description: "cost, latency, error rates and model mix, with the numbers",
+		source: "built-in",
 		prompt:
 			"You analyse orq.ai workspace analytics: cost, latency, error rates and model mix. Always show the numbers you based a claim on, and quantify any recommendation (e.g. estimated cost delta).",
 		tools: ["get_analytics_overview", "query_analytics", "list_traces", "list_models"],
 		rung: "medium",
 	},
 	docs: {
+		description: "answers platform questions from the orq.ai docs only",
+		source: "built-in",
 		prompt:
 			"You answer questions about the orq.ai platform strictly from the documentation. Ground every claim in a doc search result and never invent features. If the docs are silent, say so.",
 		tools: ["search_docs"],
