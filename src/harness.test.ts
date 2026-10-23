@@ -10,7 +10,17 @@ import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, gitBadges, gitOperation, headerBar, hostLabel, sparkline, statusLine, tokens } from "./footer.ts";
-import { exitSummary, orqHarness, repoOf, reserveFor, routeRow, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
+import {
+	exitSummary,
+	orqHarness,
+	repoOf,
+	reserveFor,
+	routeRow,
+	sectionLineRole,
+	sectionRows,
+	sectionsToDraw,
+	type InspectorSection,
+} from "./harness.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
@@ -2929,4 +2939,14 @@ test("a resumed session's routing section counts the replayed decisions: the mar
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("a section line's colour: the memory section reads its own lines, the others warn on a warning mark", () => {
+	expect(sectionLineRole("memory", '  ↳ recalled "q" → nothing · now')).toBe("warning");
+	expect(sectionLineRole("memory", '  + saved "q" · 3m')).toBe("text");
+	expect(sectionLineRole("memory", "  47 notes for this repo")).toBe("muted");
+	expect(sectionLineRole("signals", "  ⚠ 3 errors")).toBe("warning");
+	expect(sectionLineRole("signals", "  3 errors")).toBe("muted");
+	// Only the memory section reads a recall line by its words.
+	expect(sectionLineRole("context", '  ↳ recalled "q" → nothing · now')).toBe("muted");
 });

@@ -149,7 +149,9 @@ thread link.
 
 When the memorq pi package is installed, the sidebar gains a memory section: how many notes memorq
 keeps for the repository, how many the prompt uses and how many the model opened, what was learned
-and after which trigger, and when the next review runs. Each learn is also a step in the trajectory,
+and after which trigger, and when the next review runs. Once the agent has recalled or saved a
+note this session, the first line counts notes, opened, recalled and saved, and the next two show the
+latest of those calls with their age. Each learn is also a step in the trajectory,
 priced in `/cost`. memorq's `/memory` screen picks the model it writes with from the workspace's chat
 models, and `/doctor` says whether memorq is loaded and whether `python3`, which it runs on, is
 there. Without memorq, orqi shows none of this.

@@ -38,6 +38,7 @@ import {
 	isNoteRead,
 	learnHead,
 	learnPhrase,
+	memoryLineRole,
 	memoryLines,
 	noteRoots,
 	readPath,
@@ -224,6 +225,12 @@ export interface InspectorSection {
 /** The reserve that makes pi compact at `pct` of `window`: pi compacts once the context passes `window - reserve`. */
 export function reserveFor(pct: number, window: number): number {
 	return Math.ceil((window * (100 - pct)) / 100);
+}
+
+/** The theme role a sidebar section's body line is painted in: the memory section reads its own lines, the others warn on a `⚠` and are muted otherwise. */
+export function sectionLineRole(id: SectionId, line: string): "muted" | "text" | "dim" | "accent" | "warning" {
+	if (id === "memory") return memoryLineRole(line);
+	return line.trimStart().startsWith("⚠") ? "warning" : "muted";
 }
 
 /** The sections the sidebar draws, in registry order: chosen in orqi.json and available. */
@@ -952,7 +959,7 @@ export function orqHarness(deps: HarnessDeps) {
 				const paintSection = ({ id, lines }: { id: SectionId; lines: string[] }) => [
 					blank,
 					side(theme.fg("dim", lines[0]!)),
-					...lines.slice(1).map((line, i) => side(theme.fg(line.trimStart().startsWith("⚠") ? "warning" : "muted", line))),
+					...lines.slice(1).map((line) => side(theme.fg(sectionLineRole(id, line), line))),
 				];
 				const title = " sidebar ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);

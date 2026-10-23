@@ -490,7 +490,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   extension, loads before orqi's inline one, so either side may emit before the other listens. orqi
   subscribes to `memorq:state` and `memorq:host?` at load (not in `session_start`), asks
   `memorq:state?` and offers `memorq:host` at its own session start, and answers every `memorq:host?`.
-  A payload that fails `isMemorqState` is ignored and the last good one stays drawn; any text from
+  A payload that fails `isMemorqState` is ignored and the last good one stays drawn; a malformed
+  `activity` (`isActivity`) or `activity.recent` entry is dropped alone, as a malformed `learned` is; any text from
   memorq that orqi draws goes through `printable()`. The types are a hand copy of memorq's
   `integrations/pi/state.ts`, and a test assigns memorq's to orqi's both ways: re-copy them when
   memorq changes its payload. The host's `pickModel`, `decide` (optional: the user's decider) and `panel.set` never throw back into memorq,
