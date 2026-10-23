@@ -98,12 +98,14 @@ export function minimapRows(
 	selected?: number,
 	frame = 0,
 	paint: RowPaint = plainRows,
+	marked = true,
 ): string[] {
 	if (steps.length === 0) return [paint.dim(fit(" no steps yet", width))];
 	const current = selected ?? steps.length - 1;
 	const end = Math.max(Math.min(steps.length, current + 1), Math.min(steps.length, height));
 	const start = Math.max(0, Math.min(current, end - height));
-	return steps.slice(start, start + height).map((step, i) => minimapRow(step, width, start + i === current, frame, paint));
+	// `marked` off: the focus is below the trajectory, on an item, so no step wears the gutter.
+	return steps.slice(start, start + height).map((step, i) => minimapRow(step, width, marked && start + i === current, frame, paint));
 }
 
 /** The panel's own footer: `15 steps · turn 3 · $0.113`, and `· ⚠ N` while a warning fires. */
@@ -313,6 +315,16 @@ export function sectionBlock(
 	];
 }
 
+/**
+ * Every line of a body as a row of one item: a section that is one thing to focus (the context section, whose
+ * enter opens `/context`) names it once for all its lines. A string keeps the role it would have been painted in.
+ */
+export function asItem(body: Line[], key: string): Row[] {
+	return body.map((line) =>
+		typeof line === "string" ? { segs: [{ role: plainRole(line), text: line }], item: key } : { ...line, item: key },
+	);
+}
+
 /** A drawn sidebar row, unboxed, and the item it shows, if any: what `/sidebar focus` moves between. */
 export interface FrameRow {
 	text: string;
@@ -329,15 +341,27 @@ export function drawSections(
 	width: number,
 	fg: (role: string, text: string) => string,
 	roleOf: (text: string) => string = plainRole,
+	selected?: { section: SectionId; key: string },
 ): FrameRow[] {
 	return sections.flatMap(({ id, lines: [header, ...body] }) => [
 		{ text: " ".repeat(width) },
 		{ text: paintLine(header, fg, () => "dim") },
 		...body.map((line): FrameRow => {
-			const text = paintLine(line, fg, roleOf);
-			return typeof line !== "string" && line.item ? { text, item: { section: id, key: line.item } } : { text };
+			if (typeof line === "string" || !line.item) return { text: paintLine(line, fg, roleOf) };
+			const item = { section: id, key: line.item };
+			return {
+				text: paintLine(item.section === selected?.section && item.key === selected.key ? withGutter(line) : line, fg, roleOf),
+				item,
+			};
 		}),
 	]);
+}
+
+/** The selection's mark, the trajectory's own: a `▌` in accent in the first cell of the indent. */
+function withGutter(line: Row): Row {
+	const [indent, ...rest] = line.segs;
+	if (!indent?.text.startsWith(" ")) return line;
+	return { ...line, segs: [{ role: "accent", text: "▌" }, { ...indent, text: indent.text.slice(1) }, ...rest] };
 }
 
 /** Where the context goes, in tokens (chars / 4). What the context section and /context read. */

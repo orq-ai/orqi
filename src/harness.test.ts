@@ -607,6 +607,10 @@ function harnessOn(
 		routing?: unknown;
 		catalogue?: ModelInfo[];
 		settingsManager?: SettingsManager;
+		/** `$EDITOR` as the harness would spawn it: what `o` in a peek runs, instead of a real editor. */
+		openEditor?: (command: string, args: string[]) => void;
+		/** Panels stay open until their `done` runs, as pi's overlays do; by default `custom` resolves at once. */
+		hold?: boolean;
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
 		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
 	} = {},
@@ -660,6 +664,7 @@ function harnessOn(
 		permissionMode: options.permissionMode,
 		routing: options.routing as never,
 		settingsManager: options.settingsManager,
+		openEditor: options.openEditor,
 	})(pi as any);
 	const notices: string[] = [];
 	const widgets = new Map<string, unknown>();
@@ -667,8 +672,13 @@ function harnessOn(
 	let footer: { render(width: number): string[] } | undefined;
 	/** How many redraws the harness asked the TUI for. */
 	let renders = 0;
+	/** The raw-input listener `/sidebar focus` registered, until it is released. */
+	let rawInput: ((data: string) => { consume?: boolean } | undefined) | undefined;
+	/** How many panels have been closed (their `done` ran). */
+	let closedPanels = 0;
 	let branchChanged: (() => void) | undefined;
 	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
+	const holdPanels = options.hold === true;
 	const ctx = {
 		mode: "tui",
 		cwd: options.cwd ?? "/work/orqi",
@@ -682,7 +692,12 @@ function harnessOn(
 			setWidget: (key: string, lines: unknown) => widgets.set(key, lines),
 			setWorkingIndicator: () => {},
 			setWorkingMessage: () => {},
-			onTerminalInput: () => () => {},
+			onTerminalInput: (listener: typeof rawInput) => {
+				rawInput = listener;
+				return () => {
+					if (rawInput === listener) rawInput = undefined;
+				};
+			},
 			setFooter: (factory: any) => {
 				footer = factory({ requestRender: () => renders++ }, plainTheme, {
 					onBranchChange: (callback: () => void) => {
@@ -694,12 +709,19 @@ function harnessOn(
 				});
 			},
 			custom: (factory: any, options?: any) => {
-				const component = factory({ requestRender: () => {} }, plainTheme, {}, () => {});
+				let finish = () => {};
+				const closed = new Promise<void>((resolve) => (finish = resolve));
+				const component = factory({ requestRender: () => {} }, plainTheme, {}, () => {
+					closedPanels++;
+					finish();
+				});
 				if (options?.overlayOptions && typeof options.overlayOptions === "function") {
 					opened.sidebar = component;
 					options.onHandle?.({});
-				} else opened.panel = component;
-				return Promise.resolve();
+					return Promise.resolve();
+				}
+				opened.panel = component;
+				return holdPanels ? closed : Promise.resolve();
 			},
 		},
 	};
@@ -758,6 +780,10 @@ function harnessOn(
 		tools,
 		shortcuts,
 		renders: () => renders,
+		/** A key as the terminal sends it, through the listener `/sidebar focus` registered; true when the harness took it. */
+		key: (data: string) => rawInput?.(data)?.consume === true,
+		focused: () => rawInput !== undefined,
+		closedPanels: () => closedPanels,
 	};
 }
 
@@ -849,10 +875,10 @@ test("quiet sections fold to their headers: signals say ok, process its memory; 
 		const process = lines.findIndex((line) => /^ ─ process · \d+ MB ─+$/.test(line));
 		expect(process).toBeGreaterThan(-1);
 		expect(lines[process + 1]).toContain("alt+s"); // folded: the hint follows the header
-		// One item slot per drawn row, for /sidebar focus; no section names items yet.
+		// One item slot per drawn row, for /sidebar focus; only the context section (one item) names any here.
 		const items = (h.opened.sidebar as unknown as { items(): unknown[] }).items();
 		expect(items).toHaveLength(lines.length);
-		expect(items.every((item) => item === undefined)).toBe(true);
+		expect(items.filter((item) => item !== undefined).every((item) => (item as { section: string }).section === "context")).toBe(true);
 		await h.stop();
 
 		writePrefs(dir, { ...readPrefs(dir), sidebarDepth: { process: "expanded" } });
@@ -1723,7 +1749,7 @@ test("memorq's recalls and saves join the reads as events, newest first; misses 
 			expect.stringMatching(/^read ░{12} +0 of 47$/),
 			"recall 8 · 8 missed",
 			expect.stringMatching(/^↳ "q8" → nothing +1m$/),
-			"alt+m more",
+			"alt+m more · enter: peek",
 		]);
 	} finally {
 		await h.stop();
@@ -1760,7 +1786,7 @@ test("the hint names alt+m until a depth key has been used, in any window, and e
 	try {
 		await h.start();
 		h.bus.emit("memorq:state", state);
-		expect(h.memory().at(-1)).toBe("alt+m more");
+		expect(h.memory().at(-1)).toBe("alt+m more · enter: peek");
 		await h.shortcuts.get("alt+m")!(h.ctx);
 		expect(readPrefs(dir).depthKeyUsed).toBe(true);
 		expect(h.drawn().join("\n")).toContain('↳ "k8s rollout" found nothing');
@@ -3188,6 +3214,361 @@ test("a resumed session's routing section counts the replayed decisions: the mar
 		expect(lines[at + 4]).toBe("decider-4b 2× · 0.2 s · $0.00002");
 		// Routing keeps all its lines (its content is not redesigned): the saving survives the compact cap.
 		expect(lines[at + 5]).toMatch(/^(saved|costs) ~\$0\.\d+ (vs|more than) gpt-5\.6-terra$/);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the trajectory shows no current step while the focus is on an item below it", () => {
+	const steps = Array.from({ length: 3 }, (_, i) => ({
+		id: i,
+		turn: 1,
+		role: "tool" as const,
+		label: `t${i + 1}`,
+		detail: "",
+		status: "ok" as const,
+		ts: 0,
+	}));
+	expect(minimapRows(steps, 30, 10).map(bare).at(-1)).toStartWith("▌⚙ tool   t3");
+	const unmarked = minimapRows(steps, 30, 10, undefined, 0, undefined, false).map(bare);
+	expect(unmarked).toHaveLength(3);
+	expect(unmarked.every((row) => row.startsWith(" "))).toBe(true);
+});
+
+// ── /sidebar focus and peek ───────────────────────────────────────────────
+
+const UP = "\x1b[A";
+const DOWN = "\x1b[B";
+const ENTER = "\r";
+const ESC = "\x1b";
+
+/**
+ * A harness with a store of two notes read (the docs note first, the verify note newer), a recall that found
+ * the docs note's title, a save and a recall that found nothing, and the context measured: every kind of item
+ * `/sidebar focus` can reach. `held` keeps panels open until their `done` runs.
+ */
+async function peekHarness(over: { openEditor?: (command: string, args: string[]) => void; hold?: boolean; expanded?: boolean } = {}) {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "orqi-peek-")));
+	const notes = join(dir, "store", "notes");
+	mkdirSync(notes, { recursive: true });
+	const created = new Date(Date.now() - 9 * 86_400_000).toISOString().slice(0, 10);
+	const docs = join(notes, "make-docs-serve-b03006de.md");
+	writeFileSync(
+		docs,
+		`---\nkind: gotcha\ncreated: ${created}\norigin: session_end\n---\n# Make docs serve may lack MkDocs\n\nTrigger: running the docs site locally\n\nRun \`uv sync --group docs\` first.\n\nWhy: The Makefile target assumes the docs group is synced.\n`,
+	);
+	const verify = join(notes, "verify-docs-12345678.md");
+	writeFileSync(verify, "# Verify docs changes with strict build\n\nTrigger: finishing a docs change\n\nRun the strict build.\n");
+	const stores = { notes, rules: join(dir, "store", "rules"), skills: join(dir, "store", "skills") };
+	const h = harnessOn(dir, { cwd: dir, hold: over.hold, openEditor: over.openEditor });
+	// A tall terminal, so the expanded list draws every event; stop() puts the real height back.
+	const rows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+	Object.defineProperty(process.stdout, "rows", { value: 60, configurable: true });
+	const stop = h.stop;
+	h.stop = async () => {
+		await stop();
+		if (rows) Object.defineProperty(process.stdout, "rows", rows);
+		else delete (process.stdout as { rows?: number }).rows;
+	};
+	h.ctx.getContextUsage = () => ({ tokens: 30_000, contextWindow: 1_100_000, percent: 3 }) as never;
+	(h.ctx.sessionManager as any).buildSessionProjection = () => ({ messages: [{ role: "user", content: "x".repeat(4_000), timestamp: 0 }] });
+	await h.start();
+	const at = Date.now();
+	h.bus.emit(
+		"memorq:state",
+		memorqState({
+			stores,
+			activity: {
+				recalls: 2,
+				remembers: 1,
+				recent: [
+					{ kind: "recall", text: "k8s rollout", at: at - 1000, hits: 0 },
+					{ kind: "remember", text: "Pin the docs deps", at: at - 2000, saved: true, trigger: "editing docs", path: docs },
+					{ kind: "recall", text: "mkdocs strict build", at: at - 3000, hits: 5, top: "Verify docs changes with strict build" },
+				],
+			},
+		}),
+	);
+	await h.read("r1", docs);
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	await h.read("r2", verify);
+	// Compact draws only the newest event; expanded, the list the focus walks.
+	if (over.expanded) await h.shortcuts.get("alt+m")!(h.ctx);
+	return { h, dir, docs, verify, stores };
+}
+
+/** The drawn rows the focus marks with the `▌` gutter, borders off. */
+const marked = (h: { drawn(): string[] }) => h.drawn().filter((line) => line.startsWith("▌"));
+
+test("/sidebar focus: ↑↓ walks the trajectory, then the context section and each memory event, and back; esc leaves", async () => {
+	const { h, dir } = await peekHarness();
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		expect(h.focused()).toBe(true);
+		// Where it starts: the newest step, marked as before.
+		expect(h.rows().at(-1)).toStartWith("▌");
+		expect(marked(h).filter((line) => !/^▌[^ ]/.test(line))).toEqual([]);
+		// ↓ past the newest step: the context section as a whole (every body row of it).
+		expect(h.key(DOWN)).toBe(true);
+		expect(h.rows().filter((line) => line.startsWith("▌"))).toEqual([]);
+		const context = marked(h);
+		expect(context.length).toBeGreaterThan(1);
+		const inContext = h.drawn().findIndex((line) => line.startsWith("▌"));
+		expect(h.drawn()[inContext - 1]).toStartWith(" ─ context");
+		// ↓: the newest memory event (compact draws only that one).
+		h.key(DOWN);
+		expect(marked(h)).toEqual([expect.stringMatching(/^▌ ◇ Verify docs changes with st… now$/)]);
+		h.key(DOWN);
+		expect(marked(h)).toEqual([expect.stringMatching(/^▌ ◇ Verify docs changes with st… now$/)]); // the last stop stays
+		// alt+m lists the events; the focus stays on the one it was on, and ↓ goes down the list.
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(marked(h)[0]).toMatch(/^▌ ◇ Verify docs changes with +now$/);
+		h.key(DOWN);
+		expect(marked(h)[0]).toMatch(/^▌ ◇ Make docs serve may lack/);
+		h.key(DOWN);
+		expect(marked(h)[0]).toMatch(/^▌ ↳ "k8s rollout" found nothing +now$/);
+		expect(marked(h)).toHaveLength(2); // the title and its detail line: one event
+		h.key(DOWN);
+		expect(marked(h)[0]).toMatch(/^▌ \+ Pin the docs deps/);
+		h.key(DOWN);
+		expect(marked(h)[0]).toMatch(/^▌ ↳ "mkdocs strict build" found/);
+		// All the way back up: the memory events, the context, then the newest step again.
+		for (let i = 0; i < 4; i++) h.key(UP); // four events up from the last: the first event
+		expect(marked(h)[0]).toMatch(/^▌ ◇ Verify docs changes with/);
+		h.key(UP);
+		expect(h.drawn()[h.drawn().findIndex((line) => line.startsWith("▌")) - 1]).toStartWith(" ─ context");
+		h.key(UP);
+		expect(h.rows().at(-1)).toStartWith("▌");
+		expect(marked(h).filter((line) => !/^▌[^ ]/.test(line))).toEqual([]);
+		// esc gives the keyboard back.
+		h.key(DOWN);
+		expect(h.key(ESC)).toBe(true);
+		expect(h.focused()).toBe(false);
+		expect(marked(h).filter((line) => line.startsWith("▌ "))).toEqual([]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/** Walk the focus down to the memory event whose row matches. */
+function focusEvent(h: { key(data: string): boolean; drawn(): string[] }, title: RegExp) {
+	for (let i = 0; i < 12; i++) h.key(UP); // back to the trajectory, then down from there
+	for (let i = 0; i < 20 && !marked(h).some((line) => title.test(line)); i++) h.key(DOWN);
+	expect(marked(h).some((line) => title.test(line))).toBe(true);
+}
+
+test("enter on a memory event opens the whole note: title, facts, trigger, body, why, path; esc closes", async () => {
+	const { h, dir, docs } = await peekHarness({ hold: true, expanded: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Make docs serve/);
+		h.key(ENTER);
+		const shown = (h.opened.panel as Panel).render(84).map((line) => bare(line));
+		const text = shown.map((line) => line.slice(2, -2).trimEnd());
+		expect(shown[0]).toMatch(/^┌─ note /);
+		expect(text.slice(1, 10)).toEqual([
+			"Make docs serve may lack MkDocs",
+			"gotcha · 9d old · origin: session_end",
+			"",
+			"Trigger: running the docs site locally",
+			"",
+			"Run `uv sync --group docs` first.",
+			"",
+			"Why: The Makefile target assumes the docs group is synced.",
+			"",
+		]);
+		// The path is long and has no spaces: the panel breaks it where it must, and it is all there.
+		expect(text.slice(10, -3).join("")).toBe(docs);
+		expect(text.at(-2)).toBe("esc close · o open in $EDITOR · ↑↓ other events");
+		// While the overlay is open the sidebar leaves every key to it.
+		expect(h.key(ESC)).toBe(false);
+		(h.opened.panel as Panel).handleInput(ESC);
+		expect(h.closedPanels()).toBe(1);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// Closed, the focus is back where it was.
+		expect(h.key(DOWN)).toBe(true);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("↑↓ in the overlay move to the previous and next event without closing it, and the sidebar follows", async () => {
+	const { h, dir } = await peekHarness({ hold: true, expanded: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Verify docs changes/);
+		h.key(ENTER);
+		const panel = h.opened.panel as Panel;
+		const title = () => bare(panel.render(84)[1]!).slice(2, -2).trimEnd();
+		const badge = () => bare(panel.render(84)[0]!);
+		expect(title()).toBe("Verify docs changes with strict build");
+		expect(badge()).toContain("1/5");
+		// The next event down the sidebar is the other note, then the recall that found nothing.
+		panel.handleInput(DOWN);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(title()).toBe("Make docs serve may lack MkDocs");
+		expect(badge()).toContain("2/5");
+		expect(marked(h)[0]).toContain("Make docs serve");
+		panel.handleInput(DOWN);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(title()).toBe('"k8s rollout"');
+		expect(marked(h)[0]).toContain('"k8s rollout"');
+		panel.handleInput(DOWN);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// The save names its file, so it opens the note it wrote: the same one the read above opened.
+		expect(title()).toBe("Make docs serve may lack MkDocs");
+		expect(badge()).toContain("4/5");
+		expect(marked(h)[0]).toContain("Pin the docs deps");
+		panel.handleInput(UP);
+		panel.handleInput(UP);
+		panel.handleInput(UP);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(title()).toBe("Verify docs changes with strict build");
+		// Past the first event it stays; nothing closed.
+		panel.handleInput(UP);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(title()).toBe("Verify docs changes with strict build");
+		expect(h.closedPanels()).toBe(0);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a recall opens its top hit's note when it can be found, else the query and what it found", async () => {
+	const { h, dir } = await peekHarness({ hold: true, expanded: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /↳ "mkdocs strict/);
+		h.key(ENTER);
+		const text = (h.opened.panel as Panel).render(84).map((line) => bare(line).slice(2, -2).trimEnd());
+		expect(text[1]).toBe("Verify docs changes with strict build");
+		expect(text).toContain("Run the strict build.");
+		(h.opened.panel as Panel).handleInput(ESC);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		focusEvent(h, /↳ "k8s rollout"/);
+		h.key(ENTER);
+		const miss = (h.opened.panel as Panel).render(84).map((line) => bare(line).slice(2, -2).trimEnd());
+		expect(miss.slice(1, 5)).toEqual([
+			'"k8s rollout"',
+			expect.stringMatching(/^recall · found nothing · now$/),
+			"",
+			"memory has no note on this yet",
+		]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a note whose file is gone shows a short message and never throws", async () => {
+	const { h, dir, docs } = await peekHarness({ hold: true, expanded: true });
+	try {
+		rmSync(docs);
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Make docs serve/);
+		expect(h.key(ENTER)).toBe(true);
+		const text = (h.opened.panel as Panel).render(84).map((line) => bare(line).slice(2, -2).trimEnd());
+		expect(text.slice(1, 5)).toEqual(["Make docs serve may lack MkDocs", "", "The file is gone.", ""]);
+		expect(text.slice(5, -3).join("")).toBe(docs);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("o opens the note's file in $EDITOR with the path as an argument; unset, it says so and opens nothing", async () => {
+	const calls: { command: string; args: string[] }[] = [];
+	const { h, dir, docs } = await peekHarness({
+		hold: true,
+		expanded: true,
+		openEditor: (command, args) => void calls.push({ command, args }),
+	});
+	const editor = process.env.EDITOR;
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Make docs serve/);
+		h.key(ENTER);
+		const panel = h.opened.panel as Panel;
+		process.env.EDITOR = "code -w";
+		panel.handleInput("o");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(calls).toEqual([{ command: "code", args: ["-w", docs] }]);
+		delete process.env.EDITOR;
+		panel.handleInput("o");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(calls).toHaveLength(1);
+		expect(h.notices.at(-1)).toContain("$EDITOR is not set");
+		expect(bare(panel.render(84).at(-2)!)).toContain("$EDITOR is not set");
+		// A recall with no note to open has nothing for `o`.
+		(h.opened.panel as Panel).handleInput(ESC);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		focusEvent(h, /↳ "k8s rollout"/);
+		h.key(ENTER);
+		process.env.EDITOR = "vim";
+		(h.opened.panel as Panel).handleInput("o");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(calls).toHaveLength(1);
+	} finally {
+		if (editor === undefined) delete process.env.EDITOR;
+		else process.env.EDITOR = editor;
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("enter on the context section opens the /context table; enter on a trajectory step still peeks at it", async () => {
+	const { h, dir } = await peekHarness({ hold: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		h.key(ENTER); // the newest step
+		expect(bare(h.opened.panel!.render(84)[0]!)).not.toContain("context");
+		// While a step's peek is open the sidebar leaves the keys to it (it was swallowing esc).
+		expect(h.key(ESC)).toBe(false);
+		(h.opened.panel as Panel).handleInput(ESC);
+		expect(h.closedPanels()).toBe(1);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		h.drawn(); // the TUI redraws between keys
+		h.key(DOWN); // into the context section
+		expect(h.key(ENTER)).toBe(true);
+		const lines = (h.opened.panel as Panel).render(84).map((line) => bare(line));
+		expect(lines[0]).toMatch(/^┌─ context .*30k of 1\.1M · 3%/);
+		expect(lines.join("\n")).toContain("tools");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a keyboard that is not on an item passes through: other keys are not taken", async () => {
+	const { h, dir } = await peekHarness();
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		expect(h.key("a")).toBe(false);
+		h.key(DOWN);
+		expect(h.key("a")).toBe(false);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an item that leaves the sidebar (its section folds back to compact) is no longer the focus: the newest step is", async () => {
+	const { h, dir } = await peekHarness({ expanded: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /↳ "k8s rollout"/);
+		expect(h.rows().filter((line) => line.startsWith("▌"))).toEqual([]);
+		await h.shortcuts.get("alt+m")!(h.ctx); // compact draws only the newest event
+		expect(marked(h).filter((line) => /k8s/.test(line))).toEqual([]);
+		expect(h.rows().at(-1)).toStartWith("▌"); // the trajectory has its marker back
+		// ↓ from there enters the first item again, not a ghost of the old one.
+		h.key(DOWN);
+		expect(marked(h)[0]).toBeDefined();
+		expect(h.rows().filter((line) => line.startsWith("▌"))).toEqual([]);
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });

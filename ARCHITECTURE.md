@@ -53,6 +53,7 @@ orqi
 | `src/context-section.ts` | The context section: its compact and expanded lines, the header summary and `contextEstimates` (growth, turns left, the cache's last move, a compaction), all worked out when state changes |
 | `src/memory-section.ts` | The memory section: memorq's `memorq:state` and the notes the model read as one list of events, compact and expanded, its types, which `read` calls opened a note |
 | `src/note-info.ts` | The title and trigger of a note file, read once per path (and again when its modified time moves), off the render path |
+| `src/note-peek.ts` / `src/sidebar-focus.ts` | `/sidebar focus`: the walk through the trajectory and then the items below it (`moveFocus`), and the whole note behind a memory event as an overlay's rows, read when it opens (`peekOf`), with the `$EDITOR` command for `o` |
 | `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
 | `src/model-picker.ts` | pi's `/model` selector over one kind of workspace model: chat models for memorq and `/route models`, classifiers for `/decider` |
 | `src/decider.ts` | The decider: the one decision model every Decisions call asks (`/decider`, `orqi.json`, `ORQI_ROUTE_CLASSIFIER`), the API adapter and the `orq-decisions` provider |

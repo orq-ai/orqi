@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { estimateTokens, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
@@ -18,6 +19,7 @@ import {
 	type Paint,
 } from "./footer.ts";
 import {
+	asItem,
 	contextUsed,
 	BODY_INDENT,
 	drawSections,
@@ -59,6 +61,8 @@ import {
 	type NoteRead,
 } from "./memory-section.ts";
 import { NoteInfos } from "./note-info.ts";
+import { editorCommand, peekOf } from "./note-peek.ts";
+import { type Focus, type ItemRef, moveFocus, stopsOf } from "./sidebar-focus.ts";
 import { type RoutingStats, routingBody, routingStats, routingSummary } from "./routing-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
@@ -113,6 +117,8 @@ export interface HarnessDeps {
 	now?: () => number;
 	/** This session's pi settings, so `/compact-at` can move the compaction reserve in memory. */
 	settingsManager?: SettingsManager;
+	/** Run `$EDITOR` on a note's file (peek's `o`), the terminal handed over until it exits; tests replace it. Throws when it cannot start. */
+	openEditor?: (command: string, args: string[]) => void;
 }
 
 const ROUTE_ENTRY = "orqi-route";
@@ -813,6 +819,12 @@ export function orqHarness(deps: HarnessDeps) {
 		// ── minimap state ─────────────────────────────────────────────────────
 		let minimapForced: boolean | undefined; // undefined = auto by width
 		let minimapSelected: number | undefined;
+		/** The item `/sidebar focus` is on below the trajectory (a memory event, the context section); then no step is selected. */
+		let sideSelected: ItemRef | undefined;
+		/** The item of each row of the last frame, for ↑↓ to walk. */
+		let frameItems: (ItemRef | undefined)[] = [];
+		/** An overlay of orqi's own (a step, a note, /context) is open from `/sidebar focus`: it takes every key, esc included. */
+		let peeking = false;
 		let minimapFocused = false;
 		let releaseKeys: (() => void) | undefined;
 		let sideRoot: ReturnType<typeof composeLayout> | undefined;
@@ -989,7 +1001,8 @@ export function orqHarness(deps: HarnessDeps) {
 				id: "context",
 				title: "context",
 				summary: (frame) => (split ? contextSummary(split, frame.depth) : undefined),
-				lines: (w, frame) => (split && estimates ? contextBody(split, estimates, frame.depth, w, now()) : undefined),
+				// One item for `/sidebar focus`: enter opens the /context table, whatever row it is on.
+				lines: (w, frame) => (split && estimates ? asItem(contextBody(split, estimates, frame.depth, w, now()), "context") : undefined),
 			},
 			{
 				id: "memory",
@@ -1045,6 +1058,7 @@ export function orqHarness(deps: HarnessDeps) {
 				render(width: number): string[] {
 					try {
 						lastFrame = inspectorFrame(width);
+						frameItems = lastFrame.map((row) => row.item);
 					} catch {
 						// Keep the last good frame.
 					}
@@ -1085,7 +1099,13 @@ export function orqHarness(deps: HarnessDeps) {
 				});
 				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				const height = showTrajectory ? Math.max(MIN_TRAJECTORY, slot - FRAME_CHROME - below) : 0;
-				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
+				// An item that has left the frame (an event pushed out, a section folded) is no longer the focus.
+				const shown = (item: ItemRef) =>
+					drawn.some(
+						(block) => block.id === item.section && block.lines.some((line) => typeof line !== "string" && line.item === item.key),
+					);
+				if (sideSelected && !shown(sideSelected)) sideSelected = undefined;
+				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, sideSelected === undefined);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
 				const title = " sidebar ";
@@ -1098,7 +1118,7 @@ export function orqHarness(deps: HarnessDeps) {
 							? "alt+s · /sidebar focus" // focus walks the trajectory
 							: "alt+s · /sidebar";
 				// Without the trajectory above it, the first section needs no blank line to set it apart.
-				const underneath = drawSections(drawn, inner, theme.fg).slice(showTrajectory ? 0 : 1);
+				const underneath = drawSections(drawn, inner, theme.fg, undefined, sideSelected).slice(showTrajectory ? 0 : 1);
 				// FRAME_CHROME counts the lines here that are neither trajectory rows nor sections.
 				const chrome = [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
@@ -1213,8 +1233,91 @@ export function orqHarness(deps: HarnessDeps) {
 		/** Hand the keyboard back to the editor (and to any dialog over it). */
 		const blurMinimap = () => {
 			minimapFocused = false;
+			sideSelected = undefined;
 			releaseKeys?.();
 			releaseKeys = undefined;
+		};
+
+		/** Run an overlay of our own from `/sidebar focus`: while it is open the sidebar passes every key through to it. */
+		const whilePeeking = async (open: () => Promise<void> | void) => {
+			peeking = true;
+			try {
+				await open();
+			} finally {
+				peeking = false;
+			}
+		};
+
+		/** `$EDITOR` on a file, with pi's terminal handed over for as long as it runs (as pi's own external editor does). */
+		const runEditor = (command: string, args: string[]) => {
+			tuiRef?.stop();
+			try {
+				const run = spawnSync(command, args, { stdio: "inherit" });
+				if (run.error) throw run.error;
+			} finally {
+				tuiRef?.start();
+				tuiRef?.requestRender(true);
+			}
+		};
+
+		/**
+		 * The whole note behind a memory event, in an overlay over the transcript. The file is read here, when it
+		 * opens and when ↑↓ moves to another event, never in a render. `o` opens the file in `$EDITOR`.
+		 */
+		const peekMemory = async (ctx: ExtensionContext, key: string) => {
+			const events = memory?.events ?? [];
+			const stores = memory?.state.stores;
+			let at = events.findIndex((event) => event.key === key);
+			if (at < 0 || !stores) return;
+			const { theme } = ctx.ui;
+			const paint = { bold: (text: string) => theme.bold(text), dim: (text: string) => theme.fg("dim", text) };
+			let live: Panel | undefined;
+			let shown = peekOf(events[at]!, stores, paint, now(), noteRoots());
+			const spec = (note?: string): PanelSpec => ({
+				title: "note",
+				badge: `${at + 1}/${events.length}`,
+				rows: shown.rows,
+				hint: note ?? `esc close · ${shown.path ? "o open in $EDITOR · " : ""}↑↓ other events`,
+				keys: {
+					o: () => {
+						if (!shown.path) return;
+						const command = editorCommand(process.env, shown.path);
+						if (!command) {
+							const message = "$EDITOR is not set: set it to open notes from here";
+							ctx.ui.notify(message, "warning");
+							live?.update(spec(message));
+							return;
+						}
+						try {
+							(deps.openEditor ?? runEditor)(command.command, command.args);
+						} catch (error) {
+							ctx.ui.notify(`Could not start ${command.command}: ${error instanceof Error ? error.message : error}`, "warning");
+						}
+					},
+					up: () => move(-1),
+					down: () => move(1),
+				},
+			});
+			// ↑↓ go to the event above or below in the sidebar, and the sidebar's selection follows.
+			const move = (step: -1 | 1) => {
+				const next = events[at + step];
+				if (!next) return;
+				at += step;
+				shown = peekOf(next, stores, paint, now(), noteRoots());
+				sideSelected = { section: "memory", key: next.key };
+				live?.update(spec());
+				render();
+			};
+			await panel(ctx, spec(), 84, (opened) => {
+				live = opened;
+			});
+		};
+
+		/** Enter on an item below the trajectory: a memory event shows its note, the context section the /context table. */
+		const openItem = (ctx: ExtensionContext, item: ItemRef) => {
+			if (item.section === "context") return whilePeeking(() => views.showContext(ctx));
+			if (item.section === "memory") return whilePeeking(() => peekMemory(ctx, item.key));
+			return undefined;
 		};
 
 		/** Keyboard focus without stealing the editor: raw input is intercepted only while focused. */
@@ -1223,18 +1326,27 @@ export function orqHarness(deps: HarnessDeps) {
 			minimapFocused = true;
 			releaseKeys?.();
 			releaseKeys = ctx.ui.onTerminalInput((data) => {
+				// An overlay opened from here is on top: it takes the keys (esc closes it), not the sidebar.
+				if (peeking) return undefined;
 				const steps = trajectory.steps;
 				const current = minimapSelected ?? steps.length - 1;
+				const walk = (dir: -1 | 1) => {
+					const next: Focus = moveFocus({ step: minimapSelected, item: sideSelected }, dir, steps.length, stopsOf(frameItems));
+					minimapSelected = next.step;
+					sideSelected = next.item;
+				};
 				if (matchesKey(data, "escape")) {
 					minimapSelected = undefined;
 					blurMinimap();
 				} else if (matchesKey(data, "up")) {
-					minimapSelected = Math.max(0, current - 1);
+					walk(-1);
 				} else if (matchesKey(data, "down")) {
-					minimapSelected = current + 1 >= steps.length ? undefined : current + 1;
+					walk(1);
+				} else if (matchesKey(data, "enter") && sideSelected) {
+					void openItem(ctx, sideSelected);
 				} else if (matchesKey(data, "enter") && steps[current]) {
 					const { title, body } = peekLines(steps[current]!);
-					void panel(ctx, { title, rows: body, hint: "esc close" });
+					void whilePeeking(() => panel(ctx, { title, rows: body, hint: "esc close" }));
 				} else {
 					return undefined;
 				}
@@ -2013,7 +2125,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerCommand("sidebar", {
 			description:
-				"the sidebar's sections: /sidebar picks which show, /sidebar on|off shows or hides it (alt+s), /sidebar focus moves through the trajectory with ↑↓ and enter",
+				"the sidebar's sections: /sidebar picks which show, /sidebar on|off shows or hides it (alt+s), /sidebar focus moves through the trajectory, the context section and the memory events with ↑↓, and enter peeks",
 			handler: async (args, ctx) => {
 				const arg = args.trim();
 				if (arg === "focus") {
@@ -2037,7 +2149,17 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// Not `/export trajectory`: `/export` is pi's (HTML export), and pi drops
 		// any extension command that collides with a built-in.
-		registerViewCommands(pi, { deps, trajectory, traces, panel, studio, measure, agentKey, split: () => split, returnTo: () => returnTo });
+		const views = registerViewCommands(pi, {
+			deps,
+			trajectory,
+			traces,
+			panel,
+			studio,
+			measure,
+			agentKey,
+			split: () => split,
+			returnTo: () => returnTo,
+		});
 
 		// ctrl+g in the model selector opens the garden; /garden is the direct jump.
 		// The opener goes through the session ctx: it is the only notify orqi has at

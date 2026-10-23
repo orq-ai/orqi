@@ -183,7 +183,7 @@ function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-function age(ms: number): string {
+export function age(ms: number): string {
 	if (ms < 60_000) return "now";
 	if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
 	if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
@@ -258,6 +258,10 @@ export interface MemoryEvent {
 	hits?: number;
 	/** The dim line under an expanded event: when the note applies, a recall's top hit, or why a recall found nothing. */
 	detail?: string;
+	/** The note file behind a read, or behind a save when memorq says where it wrote it: what peek opens. Absent otherwise. */
+	path?: string;
+	/** A recall's top hit, by title (memorq sends no path): peek looks for the note by it. */
+	top?: string;
 }
 
 /** Everything the section draws, worked out when state changes: the state, the events newest first and the counts. */
@@ -298,18 +302,30 @@ export function memoryView(
 	for (const read of reads) {
 		const note = info(read.path);
 		const title = clean(note.title);
-		if (title) events.push({ key: `read:${read.path}`, kind: "read", at: read.at, title, detail: when(clean(note.trigger)) });
+		if (title)
+			events.push({ key: `read:${read.path}`, kind: "read", at: read.at, title, detail: when(clean(note.trigger)), path: read.path });
 	}
 	for (const entry of recent) {
 		const text = clean(entry.text);
 		if (!text) continue;
 		if (entry.kind === "recall") {
 			const detail = recallDetail(entry.hits, clean(entry.top));
-			events.push({ key: `recall:${entry.at}:${text}`, kind: "recall", at: entry.at, title: text, hits: entry.hits, detail });
+			const top = clean(entry.top);
+			events.push({
+				key: `recall:${entry.at}:${text}`,
+				kind: "recall",
+				at: entry.at,
+				title: text,
+				hits: entry.hits,
+				detail,
+				...(top ? { top } : {}),
+			});
 			continue;
 		}
-		const key = `save:${entry.at}:${clean(entry.path) || text}`;
-		events.push({ key, kind: entry.saved === false ? "dupe" : "save", at: entry.at, title: text, detail: when(clean(entry.trigger)) });
+		const path = clean(entry.path);
+		const key = `save:${entry.at}:${path || text}`;
+		const kind = entry.saved === false ? "dupe" : "save";
+		events.push({ key, kind, at: entry.at, title: text, detail: when(clean(entry.trigger)), ...(path ? { path } : {}) });
 	}
 	events.sort((a, b) => b.at - a.at);
 	const recalls = activity?.recalls ?? 0;
@@ -324,7 +340,9 @@ export function memorySummary(view: MemoryView | undefined, depth: Depth): strin
 	if (!state.stores.notes && !state.notes) return undefined;
 	if (!state.notes) return "no notes";
 	const notes = plural(state.notes, "note");
-	return depth === "expanded" && view.read > 0 ? `${notes} · ${view.read} read` : notes;
+	// Clamped like the compact row: paths read can outnumber the notes a store holds (a moved store, a copy).
+	const read = Math.min(view.read, state.notes);
+	return depth === "expanded" && read > 0 ? `${notes} · ${read} read` : notes;
 }
 
 /** Why a repository with no notes learns none, when it has a reason. */
@@ -583,7 +601,7 @@ function compactBody(view: MemoryView, width: number, { now, hint }: MemoryBodyO
 	if (counts) lines.push(counts);
 	if (urgent) lines.push(urgent);
 	else if (newest) lines.push(compactEvent(newest, width, now));
-	if (hint) lines.push({ segs: [seg("dim", "alt+m more")] });
+	if (hint) lines.push({ segs: [seg("dim", "alt+m more · enter: peek")] });
 	return lines;
 }
 

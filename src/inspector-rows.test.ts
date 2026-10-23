@@ -3,6 +3,7 @@
 import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
+	asItem,
 	BODY_INDENT,
 	COMPACT_LINES,
 	drawSections,
@@ -259,4 +260,43 @@ test("process folds to its resident memory; expanded, it shows the last minute a
 	expect(visibleWidth(lineText(line!))).toBe(36);
 	expect(processSummary([1.2 * 1024 * MB])).toBe("1.2 GB");
 	expect(processBody([1.2 * 1024 * MB], 1.2 * 1024 * MB, "expanded")).toEqual(["1.2 GB  █             peak 1.2 GB"]);
+});
+
+test("the selected item's rows take the trajectory's gutter: a `▌` in accent where the indent was, the width unchanged", () => {
+	const event = (key: string, title: string): Row[] => [
+		{
+			item: key,
+			segs: [
+				{ role: "accent", text: "◇ " },
+				{ role: "text", text: title },
+			],
+		},
+		{ item: key, segs: [{ role: "dim", text: "  when: x" }] },
+	];
+	const memory = sectionBlock("memory", "2 notes", [...event("a", "first"), ...event("b", "second")], 20);
+	const draw = (selected?: { section: "memory" | "context"; key: string }) =>
+		drawSections([{ id: "memory", lines: memory }], 20, tag, () => "muted", selected);
+	const plain = (text: string) => text.replace(/<\/?[a-zA-Z]+>/g, "");
+	expect(draw().map((row) => plain(row.text))).toEqual(draw({ section: "memory", key: "none" }).map((row) => plain(row.text)));
+	const rows = draw({ section: "memory", key: "b" });
+	// Rows 3 and 4 (after the blank and the header, the first event's two) are the second event's.
+	expect(rows.slice(2, 4).map((row) => plain(row.text))).toEqual(["  ◇ first           ", "    when: x         "]);
+	expect(rows.slice(4).map((row) => plain(row.text))).toEqual(["▌ ◇ second          ", "▌   when: x         "]);
+	expect(rows[4]!.text.startsWith("<accent>▌</accent> ")).toBe(true);
+	expect(rows.every((row) => visibleWidth(plain(row.text)) === 20)).toBe(true);
+	// The same key in another section is not selected.
+	expect(draw({ section: "context", key: "b" }).some((row) => plain(row.text).startsWith("▌"))).toBe(false);
+});
+
+test("a section that is one thing to focus names its item on every line, strings keeping the role they were painted in", () => {
+	const rows = asItem(["plain", "⚠ warned", { item: "tools", segs: [{ role: "dim", text: "d" }] }], "context");
+	expect(rows.map((row) => row.item)).toEqual(["context", "context", "context"]);
+	expect(rows.map((row) => row.segs)).toEqual([
+		[{ role: "muted", text: "plain" }],
+		[{ role: "warning", text: "⚠ warned" }],
+		[{ role: "dim", text: "d" }],
+	]);
+	// Painted, a string reads the same as it did: the frame's blank indent aside, one run in one role.
+	const block = sectionBlock("context", undefined, asItem(["plain"], "context"), 12);
+	expect(paintLine(block[1], tag, () => "x")).toBe("  <muted>plain</muted>     ");
 });

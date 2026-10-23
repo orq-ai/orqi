@@ -151,6 +151,7 @@ export class Panel implements Component {
 
 	update(spec: PanelSpec): void {
 		this.spec = spec;
+		this.offset = 0;
 		this.selected = Math.min(this.selected, Math.max(0, this.visible().length - 1));
 		this.requestRender();
 	}
@@ -204,10 +205,10 @@ export class Panel implements Component {
 			this.done();
 			return;
 		}
-		if (
-			!this.spec.selectable &&
-			(matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))
-		) {
+		// A panel whose keys name ↑ or ↓ owns them (a peek moves between events); paging still scrolls.
+		const owns = (key: string) => this.spec.keys !== undefined && key in this.spec.keys;
+		const arrow = (matchesKey(data, "up") && !owns("up")) || (matchesKey(data, "down") && !owns("down"));
+		if (!this.spec.selectable && (arrow || matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))) {
 			const step = matchesKey(data, "pageUp") || matchesKey(data, "pageDown") ? this.height() : 1;
 			this.offset = Math.max(0, this.offset + (matchesKey(data, "up") || matchesKey(data, "pageUp") ? -step : step));
 			this.requestRender();

@@ -18,7 +18,7 @@ What orqi adds on top of the agent.
 | `/btw <question>` | A side answer on the cheapest model, not added to the conversation |
 | `/trajectory [path]` | Writes this session as a Harbor ATIF `trajectory.json` |
 | `/open` | Opens this session's thread in Studio. `/open trace` for the last answer, `/open agent` in agent mode |
-| `/sidebar` | Picks which sidebar sections show. `/sidebar on\|off` shows or hides it (also `alt+s`), `/sidebar focus` moves through the trajectory with ↑↓ and enter |
+| `/sidebar` | Picks which sidebar sections show. `/sidebar on\|off` shows or hides it (also `alt+s`), `/sidebar focus` moves with ↑↓ through the trajectory, then the context section and the memory events, and enter peeks: a step opens its detail, a memory event the whole note (`o` opens its file in `$EDITOR`, ↑↓ moves to the other events), the context section the `/context` table |
 | `/refresh` | Reloads the workspace's models and agents without restarting |
 
 ## orq.ai platform

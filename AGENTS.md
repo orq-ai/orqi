@@ -472,6 +472,21 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   drawn row (`drawSections`, the component's `items()`), so `/sidebar focus` can map rows to items.
   `alt+c` and `alt+m` toggle context and memory between compact and expanded, saved as `sidebarDepth`
   in the same file and the same way (`savePrefs`).
+- **`/sidebar focus` walks the trajectory, then the items below it, and enter peeks.** `moveFocus`
+  (`src/sidebar-focus.ts`) steps through the trajectory's steps and then the distinct items of the drawn
+  rows (`stopsOf` over the frame's `items()`; the context section names one item on all its rows through
+  `asItem`). The selected item's rows wear the trajectory's `▌` gutter (`drawSections`), and the
+  trajectory shows none while an item has the focus; an item that leaves the frame (a section folded
+  back) is dropped from the focus. Enter on a memory event opens its note in a `Panel`
+  (`peekMemory`, `src/note-peek.ts`): the file is read when the overlay opens and when ↑↓ moves to another
+  event, never in a render, and a missing or unreadable one is a line of text. A save's path is opened only
+  inside a store (memorq sends it), a recall's top hit is found by title in the stores. `o` runs `$EDITOR`
+  with the path as an argument, no shell, the terminal handed over as pi's own editor does (`runEditor`;
+  `deps.openEditor` in tests); with `$EDITOR` unset the overlay says so. Enter on the context section
+  calls the same `showContext` the `/context` command runs. **While an overlay opened from focus is up
+  the sidebar's `onTerminalInput` passes every key through** (`peeking`): it runs before the overlay, so
+  it would otherwise swallow esc and the arrows. A `Panel` whose `keys` name `up` or `down` owns those
+  keys (paging still scrolls).
 - **The context section's estimates are worked out when state changes, and its lines are fitted to a 34-cell body.**
   `contextEstimates` (`src/context-section.ts`) runs from `measure` (session start, after a run, on a model
   switch, on a compaction), on every trajectory change (a route, a message) and when `/compact-at` moves the

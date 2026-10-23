@@ -129,6 +129,8 @@ test("a skill read is an event but not one of the notes read: the bar counts not
 	expect(shown.text[1]).toBe(lr("read █░░░░░░░░░░░", "2 of 22"));
 	expect(draw(state(), "expanded", { reads: some }).text[0]).toBe(header("22 notes · 2 read"));
 	expect(draw(state(), "expanded", { reads: some }).text.join("\n")).toContain("Some note");
+	// The header clamps like the row: more paths read than the store holds never says `30 read` of 22.
+	expect(draw(state({ notes: 22 }), "expanded", { reads: reads(30) }).text[0]).toBe(header("22 notes · 22 read"));
 	// A skill read alone: an event, and nothing of the notes read.
 	expect(draw(state(), "compact", { reads: some.slice(2) }).text[1]).toBe(lr("read ░░░░░░░░░░░░", "0 of 22"));
 });
@@ -251,8 +253,8 @@ test("the hint names the key until it has been used; the section stays within fo
 	const full = active([remember("Run make test offline", 10_000), recall("q", MIN, 0)]);
 	const hinted = draw(full, "compact", { hint: true });
 	expect(hinted.text.slice(1)).toHaveLength(4);
-	expect(hinted.text[4]).toBe("  alt+m more");
-	expect(hinted.runs[4]).toEqual(["dim:alt+m more"]);
+	expect(hinted.text[4]).toBe("  alt+m more · enter: peek");
+	expect(hinted.runs[4]).toEqual(["dim:alt+m more · enter: peek"]);
 	expect(draw(full, "compact", { hint: false }).text.slice(1)).toHaveLength(3);
 	// A folded section has no hint: there is nothing to open.
 	expect(draw(state(), "compact", { hint: true }).text).toEqual([header("22 notes")]);
@@ -459,4 +461,21 @@ test("seen entries: merged across states by what they are, newest first, capped"
 	for (let i = 0; i < MAX_SEEN + 10; i++) seen = mergeRecent(seen, active([recall(`q${i}`, -i * MIN, 0)]));
 	expect(seen).toHaveLength(MAX_SEEN);
 	expect(seen[0]!.text).toBe(`q${MAX_SEEN + 9}`);
+});
+
+test("an event names its note file when it has one: a read's path, a save's, never a recall's", () => {
+	const seen = [
+		remember("Run make test offline", MIN, { path: "/m/orq/notes/offline.md" }),
+		remember("Unwritten", 2 * MIN),
+		recall("mkdocs strict build", 3 * MIN, 5, "Verify docs changes"),
+	];
+	const view = memoryView(active(seen), [read("/m/orq/notes/docs.md", 4 * MIN)], info, seen)!;
+	expect(view.events.map((event) => [event.kind, event.path])).toEqual([
+		["save", "/m/orq/notes/offline.md"],
+		["save", undefined],
+		["recall", undefined],
+		["read", "/m/orq/notes/docs.md"],
+	]);
+	// A recall carries its top hit's title, which is how peek finds the note.
+	expect(view.events[2]?.top).toBe("Verify docs changes");
 });
