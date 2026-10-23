@@ -62,7 +62,9 @@ export function minimapRow(step: Step, width: number, current: boolean, frame = 
 		case "subagent": {
 			const n = descendants(step);
 			const cost = step.usage?.cost ? ` ${dollars(step.usage.cost)}` : "";
-			body = `${step.label}${outcome}${n ? ` +${n}` : ""}${cost}`;
+			// While it runs, the call in flight: `investigator get_span +2`.
+			const live = running ? [...(step.children ?? [])].reverse().find((child) => child.status === "running") : undefined;
+			body = `${step.label}${live ? ` ${live.label}` : ""}${outcome}${n ? ` +${n}` : ""}${cost}`;
 			break;
 		}
 		case "route":

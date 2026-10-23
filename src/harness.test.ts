@@ -180,6 +180,46 @@ test("live events and a rebuild produce the same steps", () => {
 	expect(shape(live.steps)).toEqual(shape(rebuilt.steps));
 });
 
+test("a nested call attaches to its subagent step and the result replaces it", () => {
+	const t = new Trajectory();
+	t.toolStart("s1", "subagent", { agent: "investigator", task: "why" });
+	t.childStart("s1", "s1/1", "mcp__orq__get_span", { span_id: "x" });
+	expect(t.steps.at(-1)!.children).toHaveLength(1);
+	expect(t.steps.at(-1)!.children![0]).toMatchObject({
+		role: "tool",
+		label: "get_span",
+		status: "running",
+		toolCallId: "s1/1",
+		turn: t.steps.at(-1)!.turn,
+	});
+	t.childEnd("s1/1", false, 12);
+	expect(t.steps.at(-1)!.children![0]).toMatchObject({ status: "ok", durationMs: 12 });
+	t.gate("s1/1", "benign");
+	expect(t.steps.at(-1)!.children![0]!.door).toBe("benign");
+	// pi's final result carries the child session's full steps, which win over the live ones.
+	t.message({
+		role: "toolResult",
+		toolCallId: "s1",
+		content: [{ type: "text", text: "done" }],
+		details: {
+			agent: "investigator",
+			model: "m",
+			steps: [{ role: "assistant", label: "a", detail: "", status: "ok", ts: 0, id: 1, turn: 1 }],
+		},
+	} as any);
+	expect(t.steps.at(-1)!.children).toHaveLength(1);
+	expect(t.steps.at(-1)!.children![0]!.role).toBe("assistant");
+});
+
+test("a nested call under a non-subagent parent is ignored", () => {
+	const t = new Trajectory();
+	t.toolStart("b1", "bash", { command: "ls" });
+	t.childStart("b1", "b1/1", "read", { path: "x" });
+	t.childStart("nope", "nope/1", "read", { path: "x" });
+	expect(t.steps.at(-1)!.children).toBeUndefined();
+	expect(t.steps).toHaveLength(1);
+});
+
 test("a failed model call is an error step, and route decisions are steps of their own", () => {
 	const trajectory = new Trajectory();
 	trajectory.message({ role: "user", content: "hi", timestamp: 1 });
@@ -327,6 +367,24 @@ test("minimap rows: one glyph per role, +N for a subagent's steps, a gutter on t
 	// A running step spins.
 	const running: Step = { id: 9, turn: 1, role: "tool", label: "orq_get_agent", detail: "", status: "running", ts: 0 };
 	expect(bare(minimapRow(running, 30, false, 2))).toStartWith(" ⠹ tool   orq_get_agent");
+});
+
+test("a running subagent row names the child call in flight", () => {
+	const step = {
+		id: 1,
+		turn: 1,
+		role: "subagent",
+		label: "investigator",
+		detail: "",
+		status: "running",
+		ts: 0,
+		toolCallId: "s1",
+		children: [
+			{ id: 2, turn: 1, role: "tool", label: "list_spans", detail: "", status: "ok", ts: 0 },
+			{ id: 3, turn: 1, role: "tool", label: "get_span", detail: "", status: "running", ts: 0 },
+		],
+	} as Step;
+	expect(minimapRow(step, 40, false, 0)).toContain("investigator get_span +2");
 });
 
 test("minimap rows stay pinned to the newest step unless a row is selected", () => {
@@ -995,6 +1053,34 @@ test("a read of a note counts, wherever memorq keeps it; other reads and failed 
 		await h.stop();
 		if (home === undefined) delete process.env.ORQ_NOTES_HOME;
 		else process.env.ORQ_NOTES_HOME = home;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a subagent's calls draw under its row while it runs, not as rows of their own", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-nested-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		await h.handlers.get("tool_execution_start")!(
+			{ toolCallId: "s1", toolName: "subagent", args: { agent: "investigator", task: "t" } },
+			h.ctx,
+		);
+		await h.handlers.get("tool_execution_start")!(
+			{ toolCallId: "s1/1", toolName: "read", args: { path: "/x" }, parentToolCallId: "s1" },
+			h.ctx,
+		);
+		expect(h.rows()).toEqual([expect.stringMatching(/sub +investigator read \+1$/)]);
+		await h.handlers.get("tool_execution_end")!(
+			{ toolCallId: "s1/1", toolName: "read", isError: false, durationMs: 1, parentToolCallId: "s1" },
+			h.ctx,
+		);
+		expect(h.rows()).toEqual([expect.stringMatching(/sub +investigator \+1$/)]);
+		// A nested call with no subagent step to sit under draws nowhere.
+		await h.read("b1/1", "/y", false, "b1");
+		expect(h.rows()).toHaveLength(1);
+	} finally {
+		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

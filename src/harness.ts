@@ -1207,13 +1207,13 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("turn_start", (_event, ctx) => ctx.ui.setWorkingMessage(isAgentModel(ctx.model?.id) ? `${ctx.model!.id.slice(6)}` : "thinking"));
 		pi.on("tool_execution_start", (event, ctx) => {
 			if (event.toolName === "read" && typeof event.args?.path === "string") readPaths.set(event.toolCallId, event.args.path);
-			if (event.parentToolCallId) return;
+			if (event.parentToolCallId) return trajectory.childStart(event.parentToolCallId, event.toolCallId, event.toolName, event.args ?? {});
 			trajectory.toolStart(event.toolCallId, event.toolName, event.args ?? {});
 			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : shortTool(event.toolName));
 		});
 		pi.on("tool_execution_end", (event, ctx) => {
 			countNoteRead(event.toolCallId, event.isError, ctx.cwd);
-			if (event.parentToolCallId) return;
+			if (event.parentToolCallId) return trajectory.childEnd(event.toolCallId, event.isError, event.durationMs);
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
 			syncWidgets(ctx);
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
