@@ -590,6 +590,11 @@ creates a minor release; `!` or a `BREAKING CHANGE:` footer creates a major rele
 tag or publish a release. The workflow token must be allowed to write its version commit and `v*`
 tag on `main`.
 
+Squash merge uses the PR title as the commit subject on `main`, so that title is what the resolver
+and git-cliff read. `.github/workflows/pr-title.yml` (`scripts/check-pr-title.ts`) rejects a PR whose
+title is not a Conventional Commits subject, so a merge always resolves to the right bump and a
+changelog line rather than silently shipping none.
+
 The release then checks its tag against `package.json`, runs the tests and typecheck, builds the
 three tarballs with a `.sha256` sidecar each (`bun run dist`), runs the linux one to prove it starts,
 attests the tarballs, and creates the GitHub Release as a draft that is published only once every
