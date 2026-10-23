@@ -190,10 +190,24 @@ test("findNoteByTitle looks in each folder, skips what is not a note and gives u
 	});
 });
 
-test("$EDITOR opens the file as an argument, never through a shell; unset or blank says so", () => {
-	expect(editorCommand({ EDITOR: "vim" }, "/m/notes/a b.md")).toEqual({ command: "vim", args: ["/m/notes/a b.md"] });
+test("the editor is pi's: its externalEditor setting, then $VISUAL, then $EDITOR; the file last, no shell", () => {
+	const path = "/m/notes/a b.md";
+	expect(editorCommand({ EDITOR: "vim" }, path)).toEqual({ command: "vim", args: [path] });
+	expect(editorCommand({ VISUAL: "nvim", EDITOR: "vim" }, path)).toEqual({ command: "nvim", args: [path] });
+	expect(editorCommand({ VISUAL: "nvim", EDITOR: "vim" }, path, "emacs -nw")).toEqual({ command: "emacs", args: ["-nw", path] });
+	// A blank setting or variable is as good as none, and falls through to the next.
+	expect(editorCommand({ VISUAL: "  ", EDITOR: "vim" }, path, "   ")).toEqual({ command: "vim", args: [path] });
 	// An editor with flags splits on spaces; a path with metacharacters stays one argument.
 	expect(editorCommand({ EDITOR: "code  -w" }, "/m/n; rm -rf ~.md")).toEqual({ command: "code", args: ["-w", "/m/n; rm -rf ~.md"] });
-	expect(editorCommand({}, "/m/a.md")).toBeUndefined();
-	expect(editorCommand({ EDITOR: "   " }, "/m/a.md")).toBeUndefined();
+	expect(editorCommand({}, path)).toBeUndefined();
+	expect(editorCommand({ EDITOR: "   " }, path)).toBeUndefined();
+});
+
+test("a title is looked for in the first 8 KB only", () => {
+	store((_dir, stores) => {
+		writeFileSync(join(stores.notes, "far.md"), `${"x".repeat(9000)}\n# Far title\n`);
+		writeFileSync(join(stores.notes, "near.md"), "# Near title\n");
+		expect(findNoteByTitle([stores.notes], "far title")).toBeUndefined();
+		expect(findNoteByTitle([stores.notes], "near title")).toBe(join(stores.notes, "near.md"));
+	});
 });

@@ -44,7 +44,10 @@ export function moveFocus(focus: Focus, dir: -1 | 1, steps: number, stops: ItemR
 		return { step: steps - 1 };
 	}
 	const current = focus.step ?? steps - 1;
-	if (dir === -1) return current < 1 ? (steps === 0 ? {} : { step: 0 }) : { step: current - 1 };
+	if (dir === -1) {
+		if (current >= 1) return { step: current - 1 };
+		return steps === 0 ? {} : { step: 0 };
+	}
 	if (current + 1 < steps) return { step: current + 1 };
 	return stops[0] ? { item: stops[0] } : {};
 }

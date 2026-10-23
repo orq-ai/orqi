@@ -26,12 +26,14 @@ export interface Peek {
 const MAX_BYTES = 64 * 1024;
 /** Files looked at when a recall's top hit is found by its title: a store has dozens, not thousands. */
 const MAX_SCAN = 400;
+/** How much of a file a title scan reads: the heading sits at the top. */
+const TITLE_BYTES = 8192;
 const DAY = 86_400_000;
 
-function readHead(path: string): string {
+function readHead(path: string, max = MAX_BYTES): string {
 	const fd = openSync(path, "r");
 	try {
-		const buffer = Buffer.alloc(Math.min(MAX_BYTES, fstatSync(fd).size));
+		const buffer = Buffer.alloc(Math.min(max, fstatSync(fd).size));
 		const got = readSync(fd, buffer, 0, buffer.length, 0);
 		return buffer.subarray(0, got).toString("utf8");
 	} finally {
@@ -112,7 +114,7 @@ function safeMtime(path: string): number | undefined {
 /** The title of a note file, from its first heading; empty when it has none or cannot be read. */
 function titleOf(path: string): string {
 	try {
-		const { body } = split(readHead(path).slice(0, 8192));
+		const { body } = split(readHead(path, TITLE_BYTES));
 		return printable(body.match(/^# +(.+)$/m)?.[1] ?? "").trim();
 	} catch {
 		return "";
@@ -190,9 +192,13 @@ export function peekOf(event: MemoryEvent, stores: MemorqState["stores"], paint:
 	}
 }
 
-/** `$EDITOR` as a command and its arguments, with the file last; undefined when it is unset or blank. No shell reads any of it. */
-export function editorCommand(env: NodeJS.ProcessEnv, path: string): { command: string; args: string[] } | undefined {
-	const parts = (env.EDITOR ?? "").trim().split(/\s+/).filter(Boolean);
-	const [command, ...args] = parts;
+/**
+ * The editor as pi chooses it (its `externalEditor` setting, then `$VISUAL`, then `$EDITOR`; pi's `nano` default is left
+ * out, so an unset editor says so) as a command and its arguments, the file last; undefined when none is set.
+ * Split on spaces and run without a shell, so a path is one argument whatever it holds.
+ */
+export function editorCommand(env: NodeJS.ProcessEnv, path: string, configured?: string): { command: string; args: string[] } | undefined {
+	const chosen = [configured, env.VISUAL, env.EDITOR].find((value) => typeof value === "string" && value.trim() !== "");
+	const [command, ...args] = (chosen ?? "").trim().split(/\s+/).filter(Boolean);
 	return command ? { command, args: [...args, path] } : undefined;
 }

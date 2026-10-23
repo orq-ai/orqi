@@ -608,7 +608,7 @@ function harnessOn(
 		catalogue?: ModelInfo[];
 		settingsManager?: SettingsManager;
 		/** `$EDITOR` as the harness would spawn it: what `o` in a peek runs, instead of a real editor. */
-		openEditor?: (command: string, args: string[]) => void;
+		openEditor?: (command: string, args: string[]) => void | Promise<void>;
 		/** Panels stay open until their `done` runs, as pi's overlays do; by default `custom` resolves at once. */
 		hold?: boolean;
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
@@ -3248,7 +3248,14 @@ const ESC = "\x1b";
  * the docs note's title, a save and a recall that found nothing, and the context measured: every kind of item
  * `/sidebar focus` can reach. `held` keeps panels open until their `done` runs.
  */
-async function peekHarness(over: { openEditor?: (command: string, args: string[]) => void; hold?: boolean; expanded?: boolean } = {}) {
+async function peekHarness(
+	over: {
+		openEditor?: (command: string, args: string[]) => void | Promise<void>;
+		hold?: boolean;
+		expanded?: boolean;
+		settingsManager?: SettingsManager;
+	} = {},
+) {
 	const dir = realpathSync(mkdtempSync(join(tmpdir(), "orqi-peek-")));
 	const notes = join(dir, "store", "notes");
 	mkdirSync(notes, { recursive: true });
@@ -3261,7 +3268,7 @@ async function peekHarness(over: { openEditor?: (command: string, args: string[]
 	const verify = join(notes, "verify-docs-12345678.md");
 	writeFileSync(verify, "# Verify docs changes with strict build\n\nTrigger: finishing a docs change\n\nRun the strict build.\n");
 	const stores = { notes, rules: join(dir, "store", "rules"), skills: join(dir, "store", "skills") };
-	const h = harnessOn(dir, { cwd: dir, hold: over.hold, openEditor: over.openEditor });
+	const h = harnessOn(dir, { cwd: dir, hold: over.hold, openEditor: over.openEditor, settingsManager: over.settingsManager });
 	// A tall terminal, so the expanded list draws every event; stop() puts the real height back.
 	const rows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 	Object.defineProperty(process.stdout, "rows", { value: 60, configurable: true });
@@ -3565,11 +3572,59 @@ test("an item that leaves the sidebar (its section folds back to compact) is no 
 		await h.shortcuts.get("alt+m")!(h.ctx); // compact draws only the newest event
 		expect(marked(h).filter((line) => /k8s/.test(line))).toEqual([]);
 		expect(h.rows().at(-1)).toStartWith("▌"); // the trajectory has its marker back
+		// Enter acts on the newest step, not on the event that is no longer there.
+		h.key(ENTER);
+		expect(bare(h.opened.panel!.render(84)[0]!)).toMatch(/^┌─ step /);
+		(h.opened.panel as Panel).handleInput(ESC);
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		// ↓ from there enters the first item again, not a ghost of the old one.
 		h.key(DOWN);
 		expect(marked(h)[0]).toBeDefined();
 		expect(h.rows().filter((line) => line.startsWith("▌"))).toEqual([]);
 	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("o runs the editor pi would: its externalEditor setting, then $VISUAL, then $EDITOR", async () => {
+	const calls: { command: string; args: string[] }[] = [];
+	const settings = { externalEditor: "" };
+	const settingsManager = { getSettings: () => settings, getProjectSettings: () => ({}) } as unknown as SettingsManager;
+	const { h, dir, docs } = await peekHarness({
+		hold: true,
+		expanded: true,
+		settingsManager,
+		// Slow, as a real editor is: the key is done only when the editor is.
+		openEditor: async (command, args) => {
+			await new Promise((resolve) => setTimeout(resolve, 1));
+			calls.push({ command, args });
+		},
+	});
+	const { EDITOR, VISUAL } = process.env;
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Make docs serve/);
+		h.key(ENTER);
+		const panel = h.opened.panel as Panel;
+		const open = async () => {
+			panel.handleInput("o");
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		};
+		process.env.EDITOR = "vim";
+		process.env.VISUAL = "nvim";
+		await open();
+		settings.externalEditor = "emacs -nw";
+		await open();
+		expect(calls).toEqual([
+			{ command: "nvim", args: [docs] },
+			{ command: "emacs", args: ["-nw", docs] },
+		]);
+	} finally {
+		if (EDITOR === undefined) delete process.env.EDITOR;
+		else process.env.EDITOR = EDITOR;
+		if (VISUAL === undefined) delete process.env.VISUAL;
+		else process.env.VISUAL = VISUAL;
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}

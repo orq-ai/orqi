@@ -111,7 +111,9 @@ export function boxLines(spec: PanelSpec, width: number, selected = 0, paint: Pa
 		const wrapped = spec.rows.flatMap((row) => (row === "" ? [""] : wrapTextWithAnsi(row, inner)));
 		for (const row of wrapped.slice(offset, offset + height)) out.push(line(paint.text(row)));
 		if (wrapped.length > height) {
-			const shown = `${offset + 1}-${Math.min(wrapped.length, offset + height)} of ${wrapped.length} lines · ↑↓ scroll`;
+			// A panel whose keys own ↑↓ (a peek moves between events with them) scrolls with paging only.
+			const keys = spec.keys && "up" in spec.keys && "down" in spec.keys ? "pgup/pgdn" : "↑↓";
+			const shown = `${offset + 1}-${Math.min(wrapped.length, offset + height)} of ${wrapped.length} lines · ${keys} scroll`;
 			out.push(line(paint.dim(shown)));
 		}
 	} else {
@@ -149,9 +151,10 @@ export class Panel implements Component {
 		}
 	}
 
-	update(spec: PanelSpec): void {
+	/** New content for the panel. The scroll stays (a streaming answer updates on every token); `top` starts a different document at its top. */
+	update(spec: PanelSpec, { top = false }: { top?: boolean } = {}): void {
 		this.spec = spec;
-		this.offset = 0;
+		if (top) this.offset = 0;
 		this.selected = Math.min(this.selected, Math.max(0, this.visible().length - 1));
 		this.requestRender();
 	}

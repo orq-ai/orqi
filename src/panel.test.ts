@@ -1,7 +1,7 @@
 /** The overlay panel's keys: a panel that owns ↑↓ stops scrolling on them, and a new spec starts at the top. */
 
 import { expect, test } from "bun:test";
-import { Panel, plainPanel, type PanelSpec } from "./panel.ts";
+import { boxLines, Panel, plainPanel, type PanelSpec } from "./panel.ts";
 
 const rows = Array.from({ length: 40 }, (_, i) => `line ${i}`);
 const strip = (panel: Panel) => panel.render(40).join("\n");
@@ -37,6 +37,22 @@ test("a new spec starts at the top: the next event's note is not opened half way
 	const panel = make({ title: "t", rows, height: 5 });
 	panel.handleInput("\x1b[6~");
 	expect(strip(panel)).not.toContain("line 0");
-	panel.update({ title: "t", rows: ["another note", ...rows], height: 5 });
+	panel.update({ title: "t", rows: ["another note", ...rows], height: 5 }, { top: true });
 	expect(strip(panel)).toContain("another note");
+});
+
+test("an update of the same document keeps the scroll: /btw and /trace update on every delta", () => {
+	const panel = make({ title: "t", rows, height: 5 });
+	panel.handleInput("\x1b[6~");
+	expect(strip(panel)).toContain("line 5");
+	panel.update({ title: "t", rows: [...rows, "one more token"], height: 5 });
+	expect(strip(panel)).toContain("line 5");
+	expect(strip(panel)).not.toContain("line 0 ");
+});
+
+test("the scroll hint names the keys that scroll: pgup/pgdn when the panel's keys own ↑↓", () => {
+	expect(boxLines({ title: "t", rows, height: 5 }, 60).join("\n")).toContain("↑↓ scroll");
+	const owning = boxLines({ title: "t", rows, height: 5, keys: { up: () => {}, down: () => {} } }, 60).join("\n");
+	expect(owning).toContain("pgup/pgdn scroll");
+	expect(owning).not.toContain("↑↓");
 });

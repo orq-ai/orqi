@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { estimateTokens, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
@@ -62,7 +62,7 @@ import {
 } from "./memory-section.ts";
 import { NoteInfos } from "./note-info.ts";
 import { editorCommand, peekOf } from "./note-peek.ts";
-import { type Focus, type ItemRef, moveFocus, stopsOf } from "./sidebar-focus.ts";
+import { type Focus, type ItemRef, moveFocus, sameItem, stopsOf } from "./sidebar-focus.ts";
 import { type RoutingStats, routingBody, routingStats, routingSummary } from "./routing-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
@@ -118,7 +118,7 @@ export interface HarnessDeps {
 	/** This session's pi settings, so `/compact-at` can move the compaction reserve in memory. */
 	settingsManager?: SettingsManager;
 	/** Run `$EDITOR` on a note's file (peek's `o`), the terminal handed over until it exits; tests replace it. Throws when it cannot start. */
-	openEditor?: (command: string, args: string[]) => void;
+	openEditor?: (command: string, args: string[]) => void | Promise<void>;
 }
 
 const ROUTE_ENTRY = "orqi-route";
@@ -1099,13 +1099,14 @@ export function orqHarness(deps: HarnessDeps) {
 				});
 				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				const height = showTrajectory ? Math.max(MIN_TRAJECTORY, slot - FRAME_CHROME - below) : 0;
-				// An item that has left the frame (an event pushed out, a section folded) is no longer the focus.
-				const shown = (item: ItemRef) =>
+				// An item that has left the frame (an event pushed out, a section folded) is not drawn as the focus; the
+				// keys drop it when they next run (`onSideKey`), so a render changes no state.
+				const isDrawn = (item: ItemRef) =>
 					drawn.some(
 						(block) => block.id === item.section && block.lines.some((line) => typeof line !== "string" && line.item === item.key),
 					);
-				if (sideSelected && !shown(sideSelected)) sideSelected = undefined;
-				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, sideSelected === undefined);
+				const selected = sideSelected && isDrawn(sideSelected) ? sideSelected : undefined;
+				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, selected === undefined);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
 				const title = " sidebar ";
@@ -1118,7 +1119,7 @@ export function orqHarness(deps: HarnessDeps) {
 							? "alt+s · /sidebar focus" // focus walks the trajectory
 							: "alt+s · /sidebar";
 				// Without the trajectory above it, the first section needs no blank line to set it apart.
-				const underneath = drawSections(drawn, inner, theme.fg, undefined, sideSelected).slice(showTrajectory ? 0 : 1);
+				const underneath = drawSections(drawn, inner, theme.fg, undefined, selected).slice(showTrajectory ? 0 : 1);
 				// FRAME_CHROME counts the lines here that are neither trajectory rows nor sections.
 				const chrome = [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
@@ -1248,12 +1249,18 @@ export function orqHarness(deps: HarnessDeps) {
 			}
 		};
 
-		/** `$EDITOR` on a file, with pi's terminal handed over for as long as it runs (as pi's own external editor does). */
-		const runEditor = (command: string, args: string[]) => {
+		/**
+		 * The editor on a file, with pi's terminal handed over for as long as it runs. Async, as pi's own external editor
+		 * is (`spawn`, not `spawnSync`: a synchronous child can fight the editor for the console on Windows); no shell.
+		 */
+		const runEditor = async (command: string, args: string[]) => {
 			tuiRef?.stop();
 			try {
-				const run = spawnSync(command, args, { stdio: "inherit" });
-				if (run.error) throw run.error;
+				await new Promise<void>((resolve, reject) => {
+					const child = spawn(command, args, { stdio: "inherit" });
+					child.on("error", reject);
+					child.on("close", () => resolve());
+				});
 			} finally {
 				tuiRef?.start();
 				tuiRef?.requestRender(true);
@@ -1279,17 +1286,19 @@ export function orqHarness(deps: HarnessDeps) {
 				rows: shown.rows,
 				hint: note ?? `esc close · ${shown.path ? "o open in $EDITOR · " : ""}↑↓ other events`,
 				keys: {
-					o: () => {
+					o: async () => {
 						if (!shown.path) return;
-						const command = editorCommand(process.env, shown.path);
+						// pi's choice: its externalEditor setting, then $VISUAL, then $EDITOR.
+						const configured = (deps.settingsManager?.getSettings() as { externalEditor?: string } | undefined)?.externalEditor;
+						const command = editorCommand(process.env, shown.path, configured);
 						if (!command) {
-							const message = "$EDITOR is not set: set it to open notes from here";
+							const message = "$EDITOR is not set (nor $VISUAL, nor pi's externalEditor): set one to open notes from here";
 							ctx.ui.notify(message, "warning");
 							live?.update(spec(message));
 							return;
 						}
 						try {
-							(deps.openEditor ?? runEditor)(command.command, command.args);
+							await (deps.openEditor ?? runEditor)(command.command, command.args);
 						} catch (error) {
 							ctx.ui.notify(`Could not start ${command.command}: ${error instanceof Error ? error.message : error}`, "warning");
 						}
@@ -1305,7 +1314,7 @@ export function orqHarness(deps: HarnessDeps) {
 				at += step;
 				shown = peekOf(next, stores, paint, now(), noteRoots());
 				sideSelected = { section: "memory", key: next.key };
-				live?.update(spec());
+				live?.update(spec(), { top: true });
 				render();
 			};
 			await panel(ctx, spec(), 84, (opened) => {
@@ -1330,6 +1339,8 @@ export function orqHarness(deps: HarnessDeps) {
 				if (peeking) return undefined;
 				const steps = trajectory.steps;
 				const current = minimapSelected ?? steps.length - 1;
+				// The item the focus was on may have left the frame since: then it is the newest step that moves.
+				if (sideSelected && !stopsOf(frameItems).some((stop) => sameItem(stop, sideSelected))) sideSelected = undefined;
 				const walk = (dir: -1 | 1) => {
 					const next: Focus = moveFocus({ step: minimapSelected, item: sideSelected }, dir, steps.length, stopsOf(frameItems));
 					minimapSelected = next.step;
