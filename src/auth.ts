@@ -35,7 +35,8 @@ let cliProfile: string | undefined;
  * `ORQ_API_BASE_URL`, which the CLI reads for something else entirely.
  */
 export function apiBaseUrl(env: NodeJS.ProcessEnv = process.env, server = cliServer): string {
-	return server ?? env.ORQ_SERVER ?? DEFAULT_SERVER;
+	// whoami echoes ORQ_SERVER back as `server`, so it passes the same gate.
+	return server ? envServer("the orq CLI's server", server, DEFAULT_SERVER) : envServer("ORQ_SERVER", env.ORQ_SERVER, DEFAULT_SERVER);
 }
 
 /** CLI 11 moved its default host to my.orq.ai (api.orq.ai still answers). */
@@ -70,6 +71,30 @@ export function normalizeServer(input: string): { server: string } | { error: st
 	if (url.protocol !== "https:" && !(local && url.protocol === "http:"))
 		return { error: `${raw}: an orq host needs https (http only on localhost)` };
 	return { server: `${url.origin}${url.pathname.replace(/\/+$/, "")}` };
+}
+
+/**
+ * An orq URL taken from the environment or from whoami, or `fallback` when it
+ * is unset or not a valid one. `--server`/`/server` are already gated by
+ * `normalizeServer` (https only, localhost aside, no userinfo or query), but
+ * `ORQ_SERVER`, `ORQ_MCP_URL`, `ORQ_GATEWAY_URL` and the server whoami reports
+ * (which is `ORQ_SERVER` echoed back) reached the base URL raw, so a value like
+ * `http://attacker.tld` would receive the bearer token in cleartext. This stops
+ * cleartext, not a hostile https host, which passes by design. A refused value
+ * falls back rather than carrying a credential to it, and says so once on
+ * stderr: silently, an on-prem http host would just turn into orq cloud.
+ */
+const refusedServers = new Set<string>();
+function envServer(name: string, value: string | undefined, fallback: string): string {
+	if (!value) return fallback;
+	const checked = normalizeServer(value);
+	if ("server" in checked) return checked.server;
+	if (!refusedServers.has(value)) {
+		refusedServers.add(value);
+		// Not checked.error: it echoes the value, and a userinfo URL would print its password.
+		console.error(`orqi: ignoring ${name}: not an https orq host (http only on localhost); using ${fallback}.`);
+	}
+	return fallback;
 }
 
 // Their own arguments are theirs: `orqi mcp add x -- srv --server …` is a server's flag.
@@ -153,12 +178,12 @@ export function exportedServer(): string | undefined {
 	return LAUNCH_ENV.ORQ_SERVER || undefined;
 }
 
-export function mcpUrl(): string {
-	return process.env.ORQ_MCP_URL ?? `${apiBaseUrl()}/v2/mcp`;
+export function mcpUrl(env: NodeJS.ProcessEnv = process.env): string {
+	return envServer("ORQ_MCP_URL", env.ORQ_MCP_URL, `${apiBaseUrl(env)}/v2/mcp`);
 }
 
-export function routerUrl(): string {
-	return process.env.ORQ_GATEWAY_URL ?? `${apiBaseUrl()}/v3/router`;
+export function routerUrl(env: NodeJS.ProcessEnv = process.env): string {
+	return envServer("ORQ_GATEWAY_URL", env.ORQ_GATEWAY_URL, `${apiBaseUrl(env)}/v3/router`);
 }
 
 // The CLI talks to the same backend the MCP server does, and that one stalls
