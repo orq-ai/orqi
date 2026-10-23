@@ -196,7 +196,8 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **Plan mode is enforced by the gate, not by the prompt.** pi's own plan-mode example relies on
   the prompt and a Bash allowlist; orqi's `planBlock` (`src/gate.ts`) is an allowlist of tools
   instead, read per call, so `/plan` bites mid-turn and a plugin tool nobody reviewed is blocked
-  rather than trusted. Subagents' orq calls re-enter the gate through the parent's `executeTool`;
+  rather than trusted. memorq's `memory_recall` is on the list (it only searches notes); `memory_write` is not.
+  Subagents' orq calls re-enter the gate through the parent's `executeTool`;
   `agent/<key>` is blocked because a managed agent runs its own tools server-side, and selecting an
   agent model switches plan mode off for the same reason. Bash always asks while planning, even
   under `--auto`, with no "for this turn" choice (and a turn-wide yes given before `/plan` does not
