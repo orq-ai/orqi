@@ -786,6 +786,7 @@ export function orqHarness(deps: HarnessDeps) {
 			const kind = noteKind(path, memorqState.stores, roots, cwd) ?? noteKind(file, realStores ?? memorqState.stores, realRoots, cwd);
 			if (!kind) return;
 			noteInfos.load(file);
+			trajectory.note(toolCallId, file);
 			noteReads = noteRead(noteReads, file, now(), kind);
 			refreshMemory();
 			render();
@@ -1067,12 +1068,6 @@ export function orqHarness(deps: HarnessDeps) {
 			} as Component;
 			function inspectorFrame(width: number): FrameRow[] {
 				const inner = Math.max(10, width - 2);
-				const rowPaint = {
-					bright: (text: string) => theme.fg("accent", text),
-					text: (text: string) => theme.fg("text", text),
-					dim: (text: string) => theme.fg("dim", text),
-					error: (text: string) => theme.fg("error", text),
-				};
 				const found = signals(trajectory.steps, trajectory.turn);
 				// Under the trajectory: what needs attention, where the context goes, what memory knows,
 				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
@@ -1106,7 +1101,16 @@ export function orqHarness(deps: HarnessDeps) {
 						(block) => block.id === item.section && block.lines.some((line) => typeof line !== "string" && line.item === item.key),
 					);
 				const selected = sideSelected && isDrawn(sideSelected) ? sideSelected : undefined;
-				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint, selected === undefined);
+				const rows = minimapRows(
+					trajectory.steps,
+					inner,
+					height,
+					minimapSelected,
+					frame,
+					theme.fg,
+					selected === undefined,
+					(path) => noteInfos.get(path).title,
+				);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
 				const title = " sidebar ";

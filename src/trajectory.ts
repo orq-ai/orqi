@@ -56,6 +56,12 @@ export interface Step {
 	/** The gate's verdict on an orq tool call. Session-local: a resume does not rebuild it. */
 	door?: Door;
 	gate?: "waiting" | "allowed" | "denied";
+	/** On a `read` that opened a memorq note: the file, set by the harness once it knows (`Trajectory.note`). */
+	note?: string;
+	/** On a `memory_recall`: the notes it found, counted from its result. */
+	hits?: number;
+	/** On a `memory_write`: false when the note was already there. */
+	saved?: boolean;
 }
 
 /** A routing decision in brief: the rung it named, the model a dry run would have used, whether it was an unsure stay or a retry. */
@@ -124,8 +130,18 @@ export function argSummary(args: Record<string, unknown> | undefined, max = 3): 
 		.join(" ");
 }
 
+/** The notes a recall found, from what `memorq.py recall` printed; undefined for any other text (an error, a newer format). */
+export function recallHits(text: string): number | undefined {
+	if (text.startsWith('No notes match "')) return 0;
+	if (!text.startsWith('Notes matching "')) return undefined;
+	const hits = text.split("\n").filter((line) => line.startsWith("- `")).length;
+	return hits || undefined;
+}
+
 export class Trajectory {
 	steps: Step[] = [];
+	/** The note file each `read` opened, by tool call: a rebuild from messages (compaction, /tree) keeps them. */
+	private notes = new Map<string, string>();
 	samples: ContextSample[] = [];
 	turn = 0;
 	private nextId = 1;
@@ -165,6 +181,7 @@ export class Trajectory {
 	}
 
 	reset(): void {
+		this.notes.clear();
 		this.steps = [];
 		this.samples = [];
 		this.turn = 0;
@@ -302,6 +319,15 @@ export class Trajectory {
 			step.status = message.isError ? "error" : "ok";
 			step.durationMs = message.durationMs ?? step.durationMs;
 			step.text = text;
+			if (step.toolName === "memory_recall") {
+				const hits = recallHits(text);
+				if (hits !== undefined && !message.isError) step.hits = hits;
+			}
+			if (step.toolName === "memory_write" && !message.isError && /^(✓ saved|= already saved) /.test(text.trim())) {
+				step.saved = text.trim().startsWith("✓");
+			}
+			const note = this.notes.get(message.toolCallId ?? "");
+			if (note) step.note = note;
 			if (step.role === "subagent") {
 				const details = message.details as SubagentDetails | undefined;
 				step.model = details?.model;
@@ -332,6 +358,13 @@ export class Trajectory {
 			});
 		}
 		this.changed();
+	}
+
+	/** A `read` opened this note file: its row reads as a note. The harness calls it where it counts the read; a render follows. */
+	note(toolCallId: string, file: string): void {
+		this.notes.set(toolCallId, file);
+		const step = this.steps.find((candidate) => candidate.toolCallId === toolCallId);
+		if (step) step.note = file;
 	}
 
 	/** pi's `tool_execution_end`: the duration is known here before the result message lands. */

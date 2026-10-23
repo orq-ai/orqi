@@ -298,15 +298,15 @@ test("minimap rows: one glyph per role, +N for a subagent's steps, a gutter on t
 	trajectory.route("hard ▲", "floor");
 	const rows = trajectory.steps.map((step, i) => bare(minimapRow(step, 36, i === trajectory.steps.length - 1)));
 	expect(rows.every((row) => visibleWidth(row) === 36)).toBe(true);
-	expect(rows[0]).toStartWith(" › user   why is support-triage");
-	expect(rows[2]).toBe(" ⚙ tool   orq_list_traces ✓ 0.8s".padEnd(36));
-	expect(rows[3]).toBe(" ⇢ sub    investigator ✓ +4 $0.004".padEnd(36));
-	expect(rows.at(-1)).toStartWith("▌» route  hard ▲ floor");
+	expect(rows[0]).toStartWith(" › why is support-triage");
+	expect(rows[2]).toBe(" ⚙ tool orq_list_traces ✓ 0.8s".padEnd(36));
+	expect(rows[3]).toBe(" ⇢ investigator ✓ +4 $0.004".padEnd(36));
+	expect(rows.at(-1)).toStartWith("▌» hard ▲ floor");
 	// Long text is cut at the panel's width, with an ellipsis.
 	expect(rows[4]!.trimEnd()).toEndWith("…");
 	// A running step spins.
 	const running: Step = { id: 9, turn: 1, role: "tool", label: "orq_get_agent", detail: "", status: "running", ts: 0 };
-	expect(bare(minimapRow(running, 30, false, 2))).toStartWith(" ⠹ tool   orq_get_agent");
+	expect(bare(minimapRow(running, 30, false, 2))).toStartWith(" ⠹ tool orq_get_agent");
 });
 
 test("minimap rows stay pinned to the newest step unless a row is selected", () => {
@@ -321,10 +321,10 @@ test("minimap rows stay pinned to the newest step unless a row is selected", () 
 	}));
 	const pinned = minimapRows(steps, 30, 10).map(bare);
 	expect(pinned).toHaveLength(10);
-	expect(pinned.at(-1)).toStartWith("▌⚙ tool   t30");
+	expect(pinned.at(-1)).toStartWith("▌⚙ tool t30");
 	const back = minimapRows(steps, 30, 10, 3).map(bare);
-	expect(back[0]).toStartWith(" ⚙ tool   t1");
-	expect(back[3]).toStartWith("▌⚙ tool   t4");
+	expect(back[0]).toStartWith(" ⚙ tool t1");
+	expect(back[3]).toStartWith("▌⚙ tool t4");
 	expect(minimapRows([], 30, 10)[0]).toContain("no steps yet");
 	// The counts ride on the trajectory's title rule; a long session drops "steps" before it outgrows the panel.
 	expect(trajectoryTitle(0, 0, 36)).toBe(` ─ trajectory ${"─".repeat(22)}`);
@@ -756,7 +756,7 @@ function harnessOn(
 		opened
 			.sidebar!.render(38)
 			.map((line) => bare(line).slice(1, -1).trimEnd())
-			.filter((line) => /^[ ▌][^─\s] (user|assist|agent|tool|sub|route|memory) /.test(line));
+			.filter((line) => /^[ ▌][^─\s] \S/.test(line));
 	return {
 		commands,
 		ctx,
@@ -1203,9 +1203,29 @@ test("a note read shows its title from the file, read once when the read is coun
 		expect(
 			h
 				.drawn()
-				.filter((line) => /serving the docs|Docs need the docs group/.test(line))
+				.filter((line) => line.startsWith("  ") && /serving the docs|Docs need the docs group/.test(line))
 				.map((line) => line.trim()),
 		).toEqual([expect.stringMatching(/^◇ Docs need the docs group +now$/), "when: serving the docs"]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the trajectory row of a note read is `◇ memory <title>`; another read keeps `⚙ tool read`", async () => {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "orqi-memory-")));
+	const notes = join(dir, "store", "notes");
+	mkdirSync(notes, { recursive: true });
+	const file = join(notes, "make-docs-serve-aabbccdd.md");
+	writeFileSync(file, "# Make docs serve\n");
+	const stores = { notes, rules: join(dir, "store", "rules"), skills: join(dir, "store", "skills") };
+	const h = harnessOn(dir, { cwd: dir });
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ stores }));
+		await h.read("r1", file);
+		await h.read("r2", join(dir, "src", "main.ts"));
+		expect(h.rows()).toEqual([" ◇ memory Make docs serve", "▌⚙ tool read ✓"]);
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
@@ -2338,9 +2358,9 @@ test("panel sections: a rule, an indented body, one calm line when empty", () =>
 
 test("minimap rows mark a call waiting on the gate", () => {
 	const step: Step = { id: 5, turn: 1, role: "tool", label: "delete_dataset", detail: "", status: "running", ts: 0, gate: "waiting" };
-	expect(bare(minimapRow(step, 36, false)).trimEnd()).toBe(" ⠋ tool   delete_dataset ?");
+	expect(bare(minimapRow(step, 36, false)).trimEnd()).toBe(" ⠋ tool delete_dataset ?");
 	const done: Step = { ...step, status: "ok", gate: "allowed" };
-	expect(bare(minimapRow(done, 36, false)).trimEnd()).toBe(" ⚙ tool   delete_dataset ✓");
+	expect(bare(minimapRow(done, 36, false)).trimEnd()).toBe(" ⚙ tool delete_dataset ✓");
 	// A managed agent's reply is labelled as the agent's.
 	const reply: Step = {
 		id: 6,
@@ -2352,7 +2372,7 @@ test("minimap rows mark a call waiting on the gate", () => {
 		ts: 0,
 		model: "agent/qa-val-agent",
 	};
-	expect(bare(minimapRow(reply, 36, false)).trimEnd()).toBe(" ▌ agent  I can help");
+	expect(bare(minimapRow(reply, 36, false)).trimEnd()).toBe(" ▌ agent I can help");
 });
 
 test("the context split: prompt and skills index apart, active schemas, the rest is messages", () => {
@@ -3230,7 +3250,7 @@ test("the trajectory shows no current step while the focus is on an item below i
 		status: "ok" as const,
 		ts: 0,
 	}));
-	expect(minimapRows(steps, 30, 10).map(bare).at(-1)).toStartWith("▌⚙ tool   t3");
+	expect(minimapRows(steps, 30, 10).map(bare).at(-1)).toStartWith("▌⚙ tool t3");
 	const unmarked = minimapRows(steps, 30, 10, undefined, 0, undefined, false).map(bare);
 	expect(unmarked).toHaveLength(3);
 	expect(unmarked.every((row) => row.startsWith(" "))).toBe(true);
@@ -3362,8 +3382,10 @@ test("/sidebar focus: ↑↓ walks the trajectory, then the context section and 
 /** Walk the focus down to the memory event whose row matches. */
 function focusEvent(h: { key(data: string): boolean; drawn(): string[] }, title: RegExp) {
 	for (let i = 0; i < 12; i++) h.key(UP); // back to the trajectory, then down from there
-	for (let i = 0; i < 20 && !marked(h).some((line) => title.test(line)); i++) h.key(DOWN);
-	expect(marked(h).some((line) => title.test(line))).toBe(true);
+	// A section's event wears `▌ ` and a space; the trajectory's own row for the same note reads `▌◇`, which is not it.
+	const onEvent = () => marked(h).some((line) => line.startsWith("▌ ") && title.test(line));
+	for (let i = 0; i < 20 && !onEvent(); i++) h.key(DOWN);
+	expect(onEvent()).toBe(true);
 }
 
 test("enter on a memory event opens the whole note: title, facts, trigger, body, why, path; esc closes", async () => {

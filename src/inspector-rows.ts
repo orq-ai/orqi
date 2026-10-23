@@ -29,14 +29,10 @@ const ROLE: Record<Step["role"], string> = {
 	memory: "memory",
 };
 
-export interface RowPaint {
-	bright(text: string): string;
-	text(text: string): string;
-	dim(text: string): string;
-	error(text: string): string;
-}
+/** Paints a run of text in a theme role (`theme.fg`); the plain default leaves it as it is. */
+export type Paint = (role: string, text: string) => string;
 
-export const plainRows: RowPaint = { bright: (s) => s, text: (s) => s, dim: (s) => s, error: (s) => s };
+export const plainPaint: Paint = (_role, text) => text;
 
 function seconds(ms: number | undefined): string {
 	return ms === undefined ? "" : `${(ms / 1000).toFixed(1)}s`;
@@ -47,39 +43,111 @@ function descendants(step: Step): number {
 	return (step.children ?? []).reduce((n, child) => n + 1 + descendants(child), 0);
 }
 
+const seg = (role: Role, text: string, flex?: true): Seg => (flex ? { role, text, flex } : { role, text });
+
+/** Which memory mark a tool step wears: a note it read, a recall, a save; undefined for any other tool. */
+function memoryKind(step: Step): "note" | "recall" | "save" | undefined {
+	if (step.role !== "tool") return undefined;
+	if (step.note) return "note";
+	if (step.toolName === "memory_recall") return "recall";
+	if (step.toolName === "memory_write") return "save";
+	return undefined;
+}
+
+const argText = (step: Step, key: string) => {
+	const value = step.args?.[key];
+	return typeof value === "string" ? value : "";
+};
+
+/** What a recall found, after its query: nothing says so in warning, a count in text, no result yet nothing. */
+function foundSegs(hits: number | undefined): Seg[] {
+	if (hits === undefined) return [];
+	return hits === 0 ? [seg("warning", " nothing")] : [seg("text", ` ${hits}`)];
+}
+
 /**
- * One row, exactly `width` columns. `current` gets the `▌` gutter, `frame`
- * animates a running step.
+ * The mark of a step and the text after it. `end` is the outcome (` ✓`, ` ✗`, a gate's ` ?`), placed after the
+ * flexible text, so a long name or title gives way and the outcome stays.
  */
-export function minimapRow(step: Step, width: number, current: boolean, frame = 0, paint: RowPaint = plainRows): string {
-	const running = step.status === "running";
-	const glyph = running && step.role !== "user" ? SPINNER[frame % SPINNER.length]! : GLYPH[step.role];
-	const outcome = running ? "" : step.status === "error" ? " ✗" : step.role === "tool" || step.role === "subagent" ? " ✓" : "";
-	let body: string;
+function markAndBody(step: Step, titleOf: (path: string) => string, end: string): { mark: Seg; body: Seg[] } {
+	const tail = end ? [seg("dim", end)] : [];
+	switch (memoryKind(step)) {
+		case "note":
+			return { mark: seg("accent", "◇"), body: [seg("muted", "memory "), seg("text", titleOf(step.note!), true), ...tail] };
+		case "recall": {
+			const query = argText(step, "query");
+			return {
+				mark: seg(step.hits === 0 ? "warning" : "success", "↳"),
+				body: [seg("muted", "recall "), ...(query ? [seg("text", `"${query}"`, true)] : []), ...foundSegs(step.hits), ...tail],
+			};
+		}
+		case "save":
+			return {
+				mark: step.saved === false ? seg("dim", "=") : seg("success", "+"),
+				body: [seg("muted", "save "), seg("text", argText(step, "title"), true), ...tail],
+			};
+		default:
+	}
 	switch (step.role) {
+		case "user":
+			return { mark: seg("muted", GLYPH.user), body: [seg("text", step.detail, true)] };
+		case "assistant": {
+			// A managed agent's reply reads as the agent's, not orqi's: the one row that keeps a word.
+			const agent = step.model?.startsWith("agent/") ? [seg("muted", "agent ")] : [];
+			const placeholder = step.status === "running" ? "streaming…" : "(tool calls)";
+			const text = step.detail ? seg("text", step.detail, true) : seg("dim", placeholder, true);
+			return { mark: seg("syntaxFunction", GLYPH.assistant), body: [...agent, text] };
+		}
 		case "tool":
-			body = `${step.label}${step.gate === "waiting" ? " ?" : ""}${outcome}${step.durationMs !== undefined && step.durationMs >= 500 ? ` ${seconds(step.durationMs)}` : ""}`;
-			break;
+			return { mark: seg("dim", GLYPH.tool), body: [seg("dim", "tool "), seg("dim", step.label, true), ...tail] };
 		case "subagent": {
 			const n = descendants(step);
 			const cost = step.usage?.cost ? ` ${dollars(step.usage.cost)}` : "";
-			body = `${step.label}${outcome}${n ? ` +${n}` : ""}${cost}`;
-			break;
+			return {
+				mark: seg("text", GLYPH.subagent),
+				body: [seg("text", step.label, true), ...tail, ...(n ? [seg("text", ` +${n}`)] : []), ...(cost ? [seg("dim", cost)] : [])],
+			};
 		}
-		case "route":
 		case "memory":
-			body = `${step.label} ${step.detail}`;
-			break;
+			return { mark: seg("accent", GLYPH.memory), body: [seg("muted", "memory "), seg("text", `${step.label} ${step.detail}`, true)] };
 		default:
-			body = step.detail || (step.role === "assistant" ? (running ? "streaming…" : "(tool calls)") : "");
+			return { mark: seg("text", GLYPH.route), body: [seg("text", `${step.label} ${step.detail}`, true)] };
 	}
-	const gutter = current ? paint.bright("▌") : " ";
-	const tone = step.status === "error" ? paint.error : step.role === "user" ? paint.bright : step.role === "tool" ? paint.dim : paint.text;
-	// A managed agent's reply reads as the agent's, not orqi's.
-	const role = step.role === "assistant" && step.model?.startsWith("agent/") ? "agent" : ROLE[step.role];
-	const line = `${gutter}${tone(glyph)} ${paint.dim(role.padEnd(6))} ${tone(body)}`;
-	const fitted = truncateToWidth(line, width, "…");
-	return fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted)));
+}
+
+const basenameOf = (path: string) => path.split("/").pop() || path;
+
+/**
+ * One trajectory row as segments, exactly `width` columns: the gutter (`▌` in accent on the current row), a mark
+ * that says what happened, then the text. A tool reads as what it did: a note it read, a recall, a save; any other
+ * keeps `⚙ tool <name> ✓`. `titleOf` names a note from the cache filled when its read was counted, so a render
+ * opens no file. An error turns the whole row `error`. `frame` animates a running step.
+ */
+export function trajectoryRow(step: Step, width: number, current: boolean, frame = 0, titleOf: (path: string) => string = basenameOf): Row {
+	const running = step.status === "running";
+	const failed = step.status === "error";
+	const tool = step.role === "tool" || step.role === "subagent";
+	const settled = tool && !running && !memoryKind(step) ? " ✓" : "";
+	const slow = step.role === "tool" && !memoryKind(step) && step.durationMs !== undefined && step.durationMs >= 500;
+	const gate = step.role === "tool" && step.gate === "waiting" ? " ?" : "";
+	const end = `${gate}${failed ? " ✗" : settled}${slow && !running ? ` ${seconds(step.durationMs)}` : ""}`;
+	const { mark, body } = markAndBody(step, titleOf, end);
+	const shown = running && step.role !== "user" ? seg(mark.role, SPINNER[frame % SPINNER.length]!) : mark;
+	const gutter = current ? seg("accent", "▌") : seg("text", " ");
+	const segs = [gutter, shown, seg("text", " "), ...body].map((part): Seg => (failed ? { ...part, role: "error" } : part));
+	return { segs: fitSegs(segs, width) };
+}
+
+/** One row, painted, exactly `width` columns. */
+export function minimapRow(
+	step: Step,
+	width: number,
+	current: boolean,
+	frame = 0,
+	paint: Paint = plainPaint,
+	titleOf?: (path: string) => string,
+): string {
+	return paintLine(trajectoryRow(step, width, current, frame, titleOf), paint, () => "text");
 }
 
 const fit = (text: string, width: number) => {
@@ -97,15 +165,18 @@ export function minimapRows(
 	height: number,
 	selected?: number,
 	frame = 0,
-	paint: RowPaint = plainRows,
+	paint: Paint = plainPaint,
 	marked = true,
+	titleOf?: (path: string) => string,
 ): string[] {
-	if (steps.length === 0) return [paint.dim(fit(" no steps yet", width))];
+	if (steps.length === 0) return [paint("dim", fit(" no steps yet", width))];
 	const current = selected ?? steps.length - 1;
 	const end = Math.max(Math.min(steps.length, current + 1), Math.min(steps.length, height));
 	const start = Math.max(0, Math.min(current, end - height));
 	// `marked` off: the focus is below the trajectory, on an item, so no step wears the gutter.
-	return steps.slice(start, start + height).map((step, i) => minimapRow(step, width, marked && start + i === current, frame, paint));
+	return steps
+		.slice(start, start + height)
+		.map((step, i) => minimapRow(step, width, marked && start + i === current, frame, paint, titleOf));
 }
 
 /** The panel's own footer: `15 steps · turn 3 · $0.113`, and `· ⚠ N` while a warning fires. */

@@ -20,8 +20,12 @@ import {
 	sectionLines,
 	signalBody,
 	signalSummary,
+	trajectoryRow,
 	trajectoryTitle,
+	minimapRow,
+	minimapRows,
 } from "./inspector-rows.ts";
+import { Trajectory, type Step } from "./trajectory.ts";
 
 /** A theme that names each role, so a test reads which role painted what. */
 const tag = (role: string, text: string) => `<${role}>${text}</${role}>`;
@@ -299,4 +303,138 @@ test("a section that is one thing to focus names its item on every line, strings
 	// Painted, a string reads the same as it did: the frame's blank indent aside, one run in one role.
 	const block = sectionBlock("context", undefined, asItem(["plain"], "context"), 12);
 	expect(paintLine(block[1], tag, () => "x")).toBe("  <muted>plain</muted>     ");
+});
+
+// ── trajectory rows: marks, not a word column ─────────────────────────────
+
+const stepOf = (over: Partial<Step>): Step => ({ id: 1, turn: 1, role: "tool", label: "t", detail: "", status: "ok", ts: 0, ...over });
+/** A row as the roles that paint it: `<role>text</role>` per segment, blanks left bare. */
+const roles = (row: Row) => row.segs.map((s) => (s.text.trim() ? `<${s.role}>${s.text}</${s.role}>` : s.text)).join("");
+const TITLES: Record<string, string> = { "/notes/a.md": "Verify docs strict build" };
+const titleOf = (path: string) => TITLES[path] ?? path;
+
+test("a user row is a muted `›` and its text; an assistant row a syntaxFunction `▌` and its text", () => {
+	const user = trajectoryRow(stepOf({ role: "user", label: "user", detail: "what can you remember" }), 36, false, 0, titleOf);
+	expect(plain(user.segs)).toBe(" › what can you remember".padEnd(36));
+	expect(roles(user)).toBe(" <muted>›</muted> <text>what can you remember</text>" + " ".repeat(12));
+	const reply = trajectoryRow(stepOf({ role: "assistant", label: "assist", detail: "From this workshop" }), 36, false, 0, titleOf);
+	expect(plain(reply.segs).trimEnd()).toBe(" ▌ From this workshop");
+	expect(roles(reply)).toStartWith(" <syntaxFunction>▌</syntaxFunction> <text>From this workshop</text>");
+	// The seven cells the word column took are the text's.
+	const long = stepOf({ role: "user", label: "user", detail: "x".repeat(60) });
+	expect(plain(trajectoryRow(long, 36, false).segs)).toBe(` › ${"x".repeat(32)}…`);
+});
+
+test("a note read is `◇ memory <title>`: accent mark, muted label, the title from the cache", () => {
+	const row = trajectoryRow(stepOf({ toolName: "read", label: "read", note: "/notes/a.md" }), 36, false, 0, titleOf);
+	expect(plain(row.segs).trimEnd()).toBe(" ◇ memory Verify docs strict build");
+	expect(roles(row)).toStartWith(" <accent>◇</accent> <muted>memory </muted><text>Verify docs strict build</text>");
+	// A long title gives way, the mark and label stay.
+	const cut = plain(trajectoryRow(stepOf({ label: "read", note: "/notes/a.md" }), 24, false, 0, titleOf).segs);
+	expect(cut).toBe(" ◇ memory Verify docs s…");
+});
+
+test('a recall is `↳ recall "<query>" <n>`; found nothing it warns; no result yet it says no count', () => {
+	const found = stepOf({ toolName: "memory_recall", label: "memory_recall", args: { query: "mkdocs strict build" }, hits: 5 });
+	const row = trajectoryRow(found, 36, false, 0, titleOf);
+	expect(plain(row.segs).trimEnd()).toBe(' ↳ recall "mkdocs strict build" 5');
+	expect(roles(row)).toStartWith(' <success>↳</success> <muted>recall </muted><text>"mkdocs strict build"</text><text> 5</text>');
+	const miss = trajectoryRow(stepOf({ toolName: "memory_recall", args: { query: "k8s" }, hits: 0 }), 36, false);
+	expect(plain(miss.segs).trimEnd()).toBe(' ↳ recall "k8s" nothing');
+	expect(roles(miss)).toStartWith(' <warning>↳</warning> <muted>recall </muted><text>"k8s"</text><warning> nothing</warning>');
+	const asked = trajectoryRow(stepOf({ toolName: "memory_recall", args: { query: "k8s" }, status: "running" }), 36, false, 1);
+	expect(plain(asked.segs).trimEnd()).toBe(' ⠙ recall "k8s"');
+	// A long query gives way before the count does.
+	const wide = trajectoryRow(stepOf({ toolName: "memory_recall", args: { query: "q".repeat(50) }, hits: 12 }), 36, false);
+	expect(plain(wide.segs)).toEndWith("… 12");
+});
+
+test("a save is `+ save <title>`; one already known reads `= save`", () => {
+	const save = stepOf({ toolName: "memory_write", args: { title: "Run make test offline", trigger: "t", body: "b" }, saved: true });
+	const row = trajectoryRow(save, 36, false);
+	expect(plain(row.segs).trimEnd()).toBe(" + save Run make test offline");
+	expect(roles(row)).toStartWith(" <success>+</success> <muted>save </muted><text>Run make test offline</text>");
+	const known = trajectoryRow({ ...save, saved: false }, 36, false);
+	expect(roles(known)).toStartWith(" <dim>=</dim> <muted>save </muted>");
+});
+
+test("any other tool keeps `⚙ tool <name> ✓` in dim; a long one still shows its ✓", () => {
+	const row = trajectoryRow(stepOf({ label: "orq_list_traces", durationMs: 800 }), 36, false);
+	expect(plain(row.segs).trimEnd()).toBe(" ⚙ tool orq_list_traces ✓ 0.8s");
+	expect(roles(row)).toStartWith(" <dim>⚙</dim> <dim>tool </dim><dim>orq_list_traces</dim><dim> ✓ 0.8s</dim>");
+	const tight = plain(trajectoryRow(stepOf({ label: "orq_list_traces_and_more_things" }), 24, false).segs);
+	expect(tight).toBe(" ⚙ tool orq_list_trac… ✓");
+});
+
+test("an errored tool is error all through, memory tools too; a gate wait marks `?`", () => {
+	const bad = trajectoryRow(stepOf({ label: "orq_get_agent", status: "error" }), 36, false);
+	expect(plain(bad.segs).trimEnd()).toBe(" ⚙ tool orq_get_agent ✗");
+	expect(bad.segs.filter((s) => s.text.trim()).every((s) => s.role === "error")).toBe(true);
+	const recall = trajectoryRow(stepOf({ toolName: "memory_recall", args: { query: "k8s" }, status: "error" }), 36, false);
+	expect(plain(recall.segs).trimEnd()).toBe(' ↳ recall "k8s" ✗');
+	expect(recall.segs.filter((s) => s.text.trim()).every((s) => s.role === "error")).toBe(true);
+	const waiting = trajectoryRow(stepOf({ label: "delete_dataset", status: "running", gate: "waiting" }), 36, false);
+	expect(plain(waiting.segs).trimEnd()).toBe(" ⠋ tool delete_dataset ?");
+});
+
+test("the current row wears the accent gutter; a narrow row keeps its mark", () => {
+	const row = trajectoryRow(stepOf({ role: "user", label: "user", detail: "hello there" }), 36, true);
+	expect(roles(row)).toStartWith("<accent>▌</accent><muted>›</muted>");
+	for (const step of [
+		stepOf({ role: "user", label: "user", detail: "hello there" }),
+		stepOf({ role: "assistant", label: "assist", detail: "hello there" }),
+		stepOf({ toolName: "memory_recall", args: { query: "k8s" }, hits: 2 }),
+		stepOf({ label: "orq_get_agent" }),
+	]) {
+		const narrow = trajectoryRow(step, 6, false);
+		expect(visibleWidth(plain(narrow.segs))).toBe(6);
+		expect(plain(narrow.segs)).toMatch(/^ [›▌↳⚙] /);
+	}
+});
+
+test("minimap rows paint each segment in its own role; selection and scroll still work", () => {
+	const steps = Array.from({ length: 12 }, (_, i) => stepOf({ id: i + 1, label: `t${i + 1}` }));
+	const rows = minimapRows(steps, 30, 5, 6, 0, tag, true);
+	expect(rows).toHaveLength(5);
+	expect(rows.find((row) => row.startsWith("<accent>▌</accent>"))).toContain("<dim>t7</dim>");
+	expect(strip(minimapRow(steps[0]!, 30, false, 0, ansi)).trimEnd()).toBe(" ⚙ tool t1 ✓");
+});
+
+test("a recall and a save learn their outcome from the tool's result; a read learns its note from the harness", () => {
+	const trajectory = new Trajectory();
+	trajectory.toolStart("r1", "memory_recall", { query: "mkdocs" });
+	trajectory.message({
+		role: "toolResult",
+		toolCallId: "r1",
+		toolName: "memory_recall",
+		content: [{ type: "text", text: 'Notes matching "mkdocs":\n- `/n/a.md` — A — x\n- `/n/b.md` — B — y' }],
+	});
+	trajectory.toolStart("r2", "memory_recall", { query: "k8s" });
+	trajectory.message({
+		role: "toolResult",
+		toolCallId: "r2",
+		toolName: "memory_recall",
+		content: [{ type: "text", text: 'No notes match "k8s".' }],
+	});
+	trajectory.toolStart("w1", "memory_write", { title: "T" });
+	trajectory.message({
+		role: "toolResult",
+		toolCallId: "w1",
+		toolName: "memory_write",
+		content: [{ type: "text", text: "= already saved /n/t.md" }],
+	});
+	trajectory.toolStart("f1", "read", { path: "/n/a.md" });
+	trajectory.note("f1", "/n/a.md");
+	expect(trajectory.steps.map((s) => [s.hits, s.saved, s.note])).toEqual([
+		[2, undefined, undefined],
+		[0, undefined, undefined],
+		[undefined, false, undefined],
+		[undefined, undefined, "/n/a.md"],
+	]);
+	// A rebuild from messages (compaction, /tree) keeps the note the harness found.
+	trajectory.fromMessages([
+		{ role: "assistant", content: [{ type: "toolCall", id: "f1", name: "read", arguments: { path: "/n/a.md" } }] },
+		{ role: "toolResult", toolCallId: "f1", toolName: "read", content: [{ type: "text", text: "x" }] },
+	]);
+	expect(trajectory.steps[0]!.note).toBe("/n/a.md");
 });
