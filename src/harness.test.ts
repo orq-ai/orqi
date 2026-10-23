@@ -213,6 +213,49 @@ test("a nested call attaches to its subagent step and the result replaces it", (
 	expect(t.steps.at(-1)!.children![0]!.role).toBe("assistant");
 });
 
+test("a background subagent stays running until its orqi-subagent message lands", () => {
+	const t = new Trajectory();
+	t.toolStart("s1", "subagent", { agent: "docs", task: "t", background: true });
+	// The tool returns at once, so pi ends its execution: that is not the subagent finishing.
+	t.toolEnd("s1", false, 5);
+	expect(t.steps.at(-1)!.status).toBe("running");
+	t.message({
+		role: "toolResult",
+		toolCallId: "s1",
+		content: [{ type: "text", text: "started" }],
+		details: { agent: "docs", model: "m", background: true },
+	} as any);
+	expect(t.steps.at(-1)!.status).toBe("running");
+	t.message({
+		role: "custom",
+		customType: "orqi-subagent",
+		content: 'subagent "docs" finished',
+		details: {
+			toolCallId: "s1",
+			agent: "docs",
+			model: "m",
+			steps: [],
+			usage: { input: 1, output: 1, cacheRead: 0, cost: 0.01 },
+			isError: false,
+			durationMs: 900,
+		},
+	} as any);
+	expect(t.steps.at(-1)).toMatchObject({ status: "ok", durationMs: 900, usage: { cost: 0.01 } });
+});
+
+test("an orqi-subagent message for a call not on the branch is ignored", () => {
+	const t = new Trajectory();
+	expect(() =>
+		t.message({
+			role: "custom",
+			customType: "orqi-subagent",
+			content: "x",
+			details: { toolCallId: "gone", agent: "docs", isError: false },
+		} as any),
+	).not.toThrow();
+	expect(t.steps).toHaveLength(0);
+});
+
 test("a nested call under a non-subagent parent is ignored", () => {
 	const t = new Trajectory();
 	t.toolStart("b1", "bash", { command: "ls" });
@@ -546,6 +589,7 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 		events: { on: () => () => {}, emit: () => {} },
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: () => {},
+		registerMessageRenderer: () => {},
 		registerShortcut: () => {},
 		registerTool: () => {},
 		setModel: async (model: unknown) => {
@@ -690,6 +734,7 @@ function harnessOn(
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
 		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
 		agentTypes?: HarnessDeps["agentTypes"];
+		subagents?: HarnessDeps["subagents"];
 	} = {},
 ) {
 	const tools = new Map<string, any>();
@@ -715,6 +760,7 @@ function harnessOn(
 		},
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
+		registerMessageRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
 		appendEntry: (customType: string, data: any) => {
 			entries.push({ customType, data });
 			branch.push({ type: "custom", customType, data, timestamp: new Date().toISOString() });
@@ -742,6 +788,7 @@ function harnessOn(
 		routing: options.routing as never,
 		settingsManager: options.settingsManager,
 		agentTypes: options.agentTypes,
+		subagents: options.subagents,
 	})(pi as any);
 	const notices: string[] = [];
 	const widgets = new Map<string, unknown>();
@@ -2644,6 +2691,63 @@ test("/subagents lists built-in, user and project types, then the files that did
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("a resumed background subagent is drawn finished from its orqi-subagent entry, and shutdown stops running ones", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-bg-"));
+	const call = {
+		type: "toolCall",
+		id: "s1",
+		name: "subagent",
+		arguments: { agent: "docs", task: "what is a deployment", background: true },
+	};
+	const branch = [
+		{ type: "message", message: { role: "user", content: "go", timestamp: 1 } },
+		{ type: "message", message: { role: "assistant", content: [call], timestamp: 2 } },
+		{
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolCallId: "s1",
+				content: [{ type: "text", text: "started" }],
+				details: { agent: "docs", model: "m", background: true },
+			},
+		},
+		{
+			type: "custom_message",
+			customType: "orqi-subagent",
+			content: 'subagent "docs" finished (#s1):\nA deployment is a prompt config.',
+			display: true,
+			details: {
+				toolCallId: "s1",
+				agent: "docs",
+				model: "m",
+				steps: [],
+				usage: { input: 10, output: 5, cacheRead: 0, cost: 0.002 },
+				isError: false,
+				durationMs: 900,
+			},
+		},
+	];
+	let disposed = 0;
+	const subagents = { running: new Set([{ dispose: () => disposed++ }]) };
+	const h = harnessOn(dir, { branch, subagents });
+	try {
+		await h.start();
+		expect(h.rows()).toContainEqual(expect.stringMatching(/sub +docs ✓ \$0\.002$/));
+		// The transcript line for the message: who, what model, what it cost.
+		const drawn = h.renderers.get("orqi-subagent")!(
+			{ role: "custom", customType: "orqi-subagent", content: "x", display: true, details: branch[3]!.details },
+			{ expanded: false },
+			{ fg: (_t: string, text: string) => text },
+		);
+		expect(drawn.render(80).join("\n").trim()).toBe("⇢ docs finished · m · ↑10 ↓5 · $0.002");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+	expect(disposed).toBe(1);
+	expect(subagents.running.size).toBe(0);
 });
 
 test("plan mode blocks a subagent's one-way call: a user-defined type cannot act while planning", async () => {

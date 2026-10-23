@@ -77,7 +77,15 @@ export interface SubagentDetails {
 	agent: string;
 	model?: string;
 	steps?: Step[];
+	/** The tool returned at once; the result comes later as an `orqi-subagent` message. */
+	background?: boolean;
 }
+
+/** A background subagent's result: a persisted custom message, steered into the conversation. */
+export const SUBAGENT_ENTRY = "orqi-subagent";
+
+/** What that message carries: the run, and which call it finishes. */
+export type SubagentResultDetails = SubagentDetails & { toolCallId: string; usage?: StepUsage; isError: boolean; durationMs?: number };
 
 type Block = { type: string; text?: string; id?: string; name?: string; arguments?: Record<string, unknown> };
 type AnyMessage = {
@@ -295,9 +303,27 @@ export class Trajectory {
 			}
 			return;
 		}
+		if (message.role === "custom" && (message as { customType?: string }).customType === SUBAGENT_ENTRY) {
+			// A background subagent finishing; one whose call is not on this branch (after /new) is dropped.
+			const details = (message as { details?: SubagentResultDetails }).details;
+			const step = details && this.steps.find((candidate) => candidate.toolCallId === details.toolCallId && candidate.role === "subagent");
+			if (!step) return;
+			step.status = details.isError ? "error" : "ok";
+			step.text = textOf(message.content);
+			step.durationMs = details.durationMs ?? step.durationMs;
+			step.model = details.model ?? step.model;
+			if (details.steps) step.children = details.steps;
+			step.usage = details.usage ?? (step.children ? sumUsage(step.children) : step.usage);
+			return;
+		}
 		if (message.role === "toolResult") {
 			const step = this.steps.find((candidate) => candidate.toolCallId === message.toolCallId);
 			if (!step) return;
+			if (step.role === "subagent" && (message.details as SubagentDetails | undefined)?.background) {
+				// Started, not finished: it stays running until its orqi-subagent message lands.
+				step.model = (message.details as SubagentDetails).model;
+				return;
+			}
 			const text = textOf(message.content);
 			step.status = message.isError ? "error" : "ok";
 			step.durationMs = message.durationMs ?? step.durationMs;
@@ -339,6 +365,8 @@ export class Trajectory {
 	toolEnd(toolCallId: string, isError: boolean, durationMs?: number): void {
 		const step = this.steps.find((candidate) => candidate.toolCallId === toolCallId);
 		if (!step) return;
+		// A background subagent's tool returns at once; its result message (or a foreground fallback's) settles it.
+		if (step.role === "subagent" && step.args?.background === true && !isError) return;
 		step.status = isError ? "error" : "ok";
 		step.durationMs = durationMs ?? step.durationMs;
 		this.changed();

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { AGENT_TYPES, createSubagentTool, type AgentType } from "./subagent.ts";
+import { AGENT_TYPES, createSubagentTool, FOREGROUND_NOTE, runsInBackground, startedText, type AgentType } from "./subagent.ts";
 
 const auditor: AgentType = {
 	description: "audits evaluators",
@@ -16,7 +16,12 @@ function tool(types: Record<string, AgentType> = { ...AGENT_TYPES, auditor }) {
 			throw new Error("no model should be resolved");
 		},
 	};
-	return createSubagentTool({ modelRuntime: modelRuntime as any, agentDir: "/tmp/orqi-test", types: () => types });
+	return createSubagentTool({
+		modelRuntime: modelRuntime as any,
+		agentDir: "/tmp/orqi-test",
+		types: () => types,
+		host: { running: new Set() },
+	});
 }
 
 const ctx = {
@@ -53,4 +58,17 @@ test("a type added after the tool was built is usable on the next call", async (
 	types.auditor = auditor;
 	const result = (await t.execute("s1", { agent: "auditor", task: "t" }, undefined, undefined, ctx as any)) as any;
 	expect(result.content[0].text).toContain("not in this workspace");
+});
+
+test("a background run needs a UI and a live session to deliver its result to", () => {
+	const live = { pi: {} as any, running: new Set<{ dispose(): void }>() };
+	expect(runsInBackground(true, true, live)).toBe(true);
+	expect(runsInBackground(undefined, true, live)).toBe(false);
+	expect(runsInBackground(true, false, live)).toBe(false); // one-shot: the result would land after exit
+	expect(runsInBackground(true, true, { running: new Set() })).toBe(false);
+	expect(FOREGROUND_NOTE).toBe("(ran in the foreground: this run has no session to deliver a background result to)");
+});
+
+test("the immediate result names the call id", () => {
+	expect(startedText("docs", "s1")).toBe('subagent "docs" started in the background (#s1). Keep working; its result arrives as a message.');
 });

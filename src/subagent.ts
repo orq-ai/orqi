@@ -24,7 +24,9 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { dollars, shortModel, tokens } from "./footer.ts";
 import { TOOL_PREFIX } from "./mcp.ts";
-import { stepsOf, sumUsage, type SubagentDetails } from "./trajectory.ts";
+import { stepsOf, SUBAGENT_ENTRY, sumUsage, type StepUsage, type SubagentDetails, type SubagentResultDetails } from "./trajectory.ts";
+
+export { SUBAGENT_ENTRY };
 
 export interface AgentType {
 	/** One line: what the model reads to pick it. */
@@ -77,6 +79,33 @@ export interface SubagentDeps {
 	modelFor?: (agent: AgentType, parent: Model<any> | undefined) => Model<any> | undefined;
 	/** The types the model may pick: the built-ins plus the user's files, reread on each call. */
 	types: () => Record<string, AgentType>;
+	/** Where a background run delivers its result, and the children still running. */
+	host: SubagentHost;
+}
+
+/**
+ * The live session's `pi` handle (set by an extension factory on each session load, so it follows
+ * /new and /resume) and the background children still running, which session_shutdown disposes.
+ */
+export interface SubagentHost {
+	pi?: Pick<ExtensionAPI, "sendMessage">;
+	running: Set<{ dispose(): void }>;
+}
+
+/** Whether a call that asked for the background gets it: one-shot has no session left to deliver to. */
+export function runsInBackground(wanted: boolean | undefined, hasUI: boolean, host: SubagentHost): boolean {
+	return wanted === true && hasUI && host.pi !== undefined;
+}
+
+export const FOREGROUND_NOTE = "(ran in the foreground: this run has no session to deliver a background result to)";
+
+export const startedText = (agent: string, toolCallId: string) =>
+	`subagent "${agent}" started in the background (#${toolCallId}). Keep working; its result arrives as a message.`;
+
+/** `gpt-5 · ↑12k ↓800 · $0.004`: the line under a subagent's result, foreground or background. */
+export function summaryLine(model: string | undefined, usage: StepUsage | undefined): string {
+	const spend = usage ? `↑${tokens(usage.input + usage.cacheRead)} ↓${tokens(usage.output)} · ${dollars(usage.cost)}` : "";
+	return [model ? shortModel(model) : "", spend].filter(Boolean).join(" · ");
 }
 
 const AGENT_PREFIX = "agent/";
@@ -131,8 +160,14 @@ export function createSubagentTool(deps: SubagentDeps) {
 		parameters: Type.Object({
 			agent: Type.String({ description: `One of ${Object.keys(types).join(", ")}, or "agent/<key>" for a managed orq agent.` }),
 			task: Type.String({ description: "Self-contained task description; the subagent sees nothing else." }),
+			background: Type.Optional(
+				Type.Boolean({
+					description:
+						"Return at once; the result arrives as a message when the subagent finishes. Use for long investigations so you can keep working.",
+				}),
+			),
 		}),
-		execute: async (_id, { agent, task }, signal, _onUpdate, ctx) => {
+		execute: async (toolCallId, { agent, task, background }, signal, _onUpdate, ctx) => {
 			const managed = agent.startsWith(AGENT_PREFIX);
 			const types = deps.types();
 			const def = Object.hasOwn(types, agent) ? types[agent] : undefined;
@@ -169,6 +204,9 @@ export function createSubagentTool(deps: SubagentDeps) {
 					isError: true,
 				};
 			}
+			const inBackground = runsInBackground(background, (ctx as { hasUI?: boolean } | undefined)?.hasUI === true, deps.host);
+			// A background child outlives the turn, so the turn's Esc must not reach its calls either.
+			const callerSignal = inBackground ? undefined : signal;
 			const allowed = new Set((def?.tools ?? []).map((name) => `${TOOL_PREFIX}${name}`));
 			// The orq tools live on the parent session (pi's MCP connected them there),
 			// so the child gets proxies that run each call through the parent's
@@ -191,7 +229,7 @@ export function createSubagentTool(deps: SubagentDeps) {
 									description: tool.description,
 									parameters: tool.parameters,
 									execute: async (_callId, args, callSignal) => {
-										const outcome = await parent.executeTool!(tool.name, args, { signal: callSignal ?? signal });
+										const outcome = await parent.executeTool!(tool.name, args, { signal: callSignal ?? callerSignal });
 										return { ...outcome.result, isError: outcome.isError };
 									},
 								}),
@@ -219,27 +257,68 @@ export function createSubagentTool(deps: SubagentDeps) {
 				sessionManager: SessionManager.inMemory(),
 				settingsManager: SettingsManager.inMemory(),
 			});
-			const abort = () => session.abort();
-			signal?.addEventListener("abort", abort, { once: true });
-			try {
-				await session.prompt(task);
+			/** What the child left: its answer or its error, its steps and its spend. */
+			const outcome = () => {
 				const messages = session.state.messages as any[];
 				const details: SubagentDetails = { agent, model: model.id, steps: stepsOf(messages) };
 				const usage = usageOf(messages);
 				const last = [...messages].reverse().find((msg) => msg.role === "assistant");
-				if (last?.stopReason === "error") {
-					return {
-						content: [{ type: "text" as const, text: `subagent "${agent}" failed: ${last.errorMessage ?? "model call failed"}` }],
-						details,
-						usage,
-						isError: true,
-					};
-				}
+				const error = last?.stopReason === "error" ? (last.errorMessage ?? "model call failed") : undefined;
 				const text = ((last?.content ?? []) as any[])
 					.filter((block: any) => block.type === "text")
 					.map((block: any) => block.text)
 					.join("\n");
-				return { content: [{ type: "text" as const, text: text || "(subagent returned no text)" }], details, usage };
+				return { text: text || "(subagent returned no text)", error, details, usage };
+			};
+			if (inBackground) {
+				// Not awaited, and deaf to the turn's signal: Esc ends the turn, not the investigation.
+				const started = Date.now();
+				const { host } = deps;
+				host.running.add(session);
+				const settle = (failure?: unknown) => {
+					// Gone from the set means session_shutdown disposed it: there is no session to tell.
+					if (!host.running.delete(session)) return;
+					const done = outcome();
+					session.dispose();
+					const error = failure === undefined ? done.error : String(failure);
+					const details: SubagentResultDetails = {
+						...done.details,
+						toolCallId,
+						isError: error !== undefined,
+						durationMs: Date.now() - started,
+						usage: { input: done.usage.input, output: done.usage.output, cacheRead: done.usage.cacheRead, cost: done.usage.cost.total },
+					};
+					const content =
+						error === undefined
+							? `subagent "${agent}" finished (#${toolCallId}):\n${done.text}`
+							: `subagent "${agent}" failed (#${toolCallId}): ${error}`;
+					try {
+						host.pi?.sendMessage(
+							{ customType: SUBAGENT_ENTRY, content, display: true, details },
+							{ deliverAs: "steer", triggerTurn: true },
+						);
+					} catch {
+						// A handle that died with its session: the result has nowhere to go.
+					}
+				};
+				session.prompt(task).then(
+					() => settle(),
+					(failure) => settle(failure ?? "unknown error"),
+				);
+				return {
+					content: [{ type: "text" as const, text: startedText(agent, toolCallId) }],
+					details: { agent, model: model.id, background: true } satisfies SubagentDetails,
+				};
+			}
+			const abort = () => session.abort();
+			signal?.addEventListener("abort", abort, { once: true });
+			try {
+				await session.prompt(task);
+				const { text, error, details, usage } = outcome();
+				if (error !== undefined) {
+					return { content: [{ type: "text" as const, text: `subagent "${agent}" failed: ${error}` }], details, usage, isError: true };
+				}
+				return { content: [{ type: "text" as const, text: background ? `${text}\n\n${FOREGROUND_NOTE}` : text }], details, usage };
 			} finally {
 				signal?.removeEventListener("abort", abort);
 				session.dispose();
@@ -262,13 +341,12 @@ export function createSubagentTool(deps: SubagentDeps) {
 			const details = result.details as SubagentDetails | undefined;
 			const usage = (result as { usage?: Usage }).usage;
 			const spend = usage
-				? `↑${tokens(usage.input + usage.cacheRead)} ↓${tokens(usage.output)} · ${dollars(usage.cost.total)}`
+				? { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cost: usage.cost.total }
 				: details?.steps
-					? dollars(sumUsage(details.steps).cost)
-					: "";
+					? sumUsage(details.steps)
+					: undefined;
 			const head = text.replace(/\s+/g, " ").slice(0, 110);
-			const model = details?.model ? `${shortModel(details.model)} · ` : "";
-			return new Text(`${theme.fg("muted", head)}\n${theme.fg("dim", `${model}${spend}`)}`, 0, 0);
+			return new Text(`${theme.fg("muted", head)}\n${theme.fg("dim", summaryLine(details?.model, spend))}`, 0, 0);
 		},
 	});
 }
