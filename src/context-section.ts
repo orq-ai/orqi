@@ -205,25 +205,26 @@ function compositionBar(split: ContextSplit, width: number): Row {
 }
 
 /**
- * Line 2: the 3 biggest parts, `■ tools 21k ■ skills 4k ■ prompt 4k`. The space after a swatch always stays.
+ * Line 2: the 3 biggest parts, `■ tools 21k ■ skills 4k ■ prompt 4k`. The gaps between entries always stay.
  * The body is two cells narrower than the wireframe's, and that line is 35 wide: when it does not fit, the
- * gaps between entries go from the right, one per entry as needed, and only if it still does not fit is a
- * part left out.
+ * spaces after the swatches go from the right (`■prompt 4k` still reads as one entry, `4k■ prompt` does
+ * not), and only if it still does not fit is a part left out.
  */
 function legend(split: ContextSplit, width: number): Row {
 	const entries = [...partsOf(split)]
 		.sort((a, b) => b.n - a.n)
 		.slice(0, 3)
-		.map((part) => ({ part, label: ` ${part.name} ${whole(part.n)}` }));
-	const cells = (n: number) => entries.slice(0, n).reduce((sum, entry) => sum + 1 + entry.label.length, 0);
+		.map((part) => ({ part, label: `${part.name} ${whole(part.n)}` }));
+	// Swatch, label and the gaps between entries; the spaces after the swatches are extra.
+	const cells = (n: number) => entries.slice(0, n).reduce((sum, entry) => sum + 1 + entry.label.length, n - 1);
 	let count = entries.length;
 	while (count > 1 && cells(count) > width) count--;
-	// Gaps between the kept entries, fewest first from the right: `loose` of them stay.
-	const loose = Math.max(0, Math.min(count - 1, width - cells(count)));
+	// Spaces after the swatches, fewest first from the right: `loose` of them stay.
+	const loose = Math.max(0, Math.min(count, width - cells(count)));
 	const segs: Seg[] = [];
 	entries.slice(0, count).forEach(({ part, label }, i) => {
-		if (i > 0 && i <= loose) segs.push(seg("muted", " "));
-		segs.push(seg(part.role, "■"), seg("muted", label));
+		if (i > 0) segs.push(seg("muted", " "));
+		segs.push(seg(part.role, "■"), seg("muted", i < loose ? ` ${label}` : label));
 	});
 	return { segs };
 }

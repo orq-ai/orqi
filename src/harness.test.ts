@@ -959,7 +959,7 @@ test("the context section is measured when state changes: a run, then a compacti
 			paused: false,
 			enabled: "on",
 		});
-		expect(section()[2]).toBe("  ■ msgs 28k ■ prompt 1k■ memory 900");
+		expect(section()[2]).toBe("  ■ msgs 28k ■ prompt 1k ■memory 900");
 		// More than the prompt holds is clamped; the same raw number again is not a change, so it measures nothing.
 		let reads = 0;
 		h.ctx.getContextUsage = () => {

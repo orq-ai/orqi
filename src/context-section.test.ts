@@ -75,7 +75,7 @@ test("session start: a composition bar of what fills it, the three biggest, and 
 	expect(shown.text).toEqual([
 		expect.stringContaining(" ─ context · 30k · 3% "),
 		`  ${bar(34)}`,
-		"  ■ tools 21k ■ skills 4k■ prompt 4k", // the wireframe's 35 cells: the last gap goes, never the space after a swatch
+		"  ■ tools 21k ■ skills 4k ■prompt 4k", // the wireframe's 35 cells: the last swatch's space goes, never a gap
 		"  cache — · first turn writes it",
 	]);
 	// tools, prompt and skills, each in its role, each as wide as its share of what is used (21.4 : 4.2 : 4.4 of 34).
@@ -94,8 +94,8 @@ test("session start: a composition bar of what fills it, the three biggest, and 
 		return lineText(contextBody(split, estimate(split), "compact", width, NOW)[1]!);
 	};
 	expect(legendAt(35, {})).toBe("■ tools 21k ■ skills 4k ■ prompt 4k");
-	expect(legendAt(34, { messages: 781_000, window: 10_000_000 })).toBe("■ msgs 781k ■ tools 21k■ skills 4k"); // 35 cells loose: the last gap goes
-	expect(legendAt(33, {})).toBe("■ tools 21k■ skills 4k■ prompt 4k");
+	expect(legendAt(34, { messages: 781_000, window: 10_000_000 })).toBe("■ msgs 781k ■ tools 21k ■skills 4k"); // 35 cells loose: the last swatch's space goes
+	expect(legendAt(33, {})).toBe("■ tools 21k ■skills 4k ■prompt 4k");
 	expect(legendAt(30, {})).toBe("■ tools 21k ■ skills 4k"); // even without gaps three are 33: the third entry is left out
 	expect(shown.runs[3]).toEqual(["dim:cache — · first turn writes it"]);
 });
