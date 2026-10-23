@@ -144,6 +144,11 @@ test("env-supplied hosts are gated like a typed one, so the token never rides pl
 	expect(mcpUrl({ ORQ_MCP_URL: "https://:secret@attacker.tld" })).toBe("https://my.orq.ai/v2/mcp");
 	expect(routerUrl({ ORQ_GATEWAY_URL: "http://attacker.tld" })).toBe("https://my.orq.ai/v3/router");
 	expect(routerUrl({})).toBe("https://my.orq.ai/v3/router");
+
+	// whoami echoes ORQ_SERVER back as its `server`, which outranks the env
+	// value, so the gate has to hold there too or the usual launch skips it.
+	expect(apiBaseUrl({ ORQ_SERVER: "http://attacker.tld" }, "http://attacker.tld")).toBe("https://my.orq.ai");
+	expect(apiBaseUrl({}, "https://my.staging.orq.ai/")).toBe("https://my.staging.orq.ai");
 });
 
 test("a host is read as the base URL the CLI stores, and anything else is refused", () => {
