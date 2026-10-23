@@ -184,9 +184,15 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `find_`/`retrieve_` are benign, `create_`/`update_` two-way (recorded, never stopped),
   `delete_`/`submit_`/`invoke_` one-way. A verb not in the table is one-way: a new server tool asks
   before it runs until someone adds it, and a test lists every server tool so that happens on
-  purpose. A classifier per call was rejected: it would sit in front of every read. The system
-  prompt no longer tells the model to ask before a delete; it tells it the dialog will. One-shot has
-  no one to ask, so a one-way call is blocked there with a reason that says to rerun interactively.
+  purpose. Two calls the verb understates are judged on their arguments (`OVERRIDES`):
+  `create_experiment` with `auto_run` starts the run at once (an agent task runs a managed agent per
+  row), and `update_datapoint` overwrites golden data, so both are one-way. A `subagent` call with
+  `agent: "agent/<key>"` asks too: the managed agent runs its tools server-side, where no later call
+  meets the gate, so it is `invoke_agent` under another name. "Allow for this turn" covers that tool,
+  or that agent, only: yes to `delete_skill` is not yes to `delete_dataset`. A classifier per call
+  was rejected: it would sit in front of every read. The system prompt no longer tells the model to
+  ask before a delete or an `auto_run`; it tells it the dialog will. One-shot has no one to ask, so a
+  one-way call is blocked there with a reason that says to rerun interactively.
 - **Plan mode is enforced by the gate, not by the prompt.** pi's own plan-mode example relies on
   the prompt and a Bash allowlist; orqi's `planBlock` (`src/gate.ts`) is an allowlist of tools
   instead, read per call, so `/plan` bites mid-turn and a plugin tool nobody reviewed is blocked
@@ -202,8 +208,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   the prompt cache); outside plan mode it returns an error. The model is told about a switch once,
   as a hidden message on the next turn, and the gate's block reasons remind it after that. The plan
   goes to `<agentDir>/plans/<session>.md`, not the repo. "Execute in a fresh session" only prefills
-  `/plan run`, because `newSession` exists only on a command's context, not a tool's. Approval does
-  not pre-authorize one-way calls: the gate still asks for each.
+  `/plan run`, because `newSession` exists only on a command's context, not a tool's. `/plan run`
+  runs the text the user approved, read from `exit_plan`'s result on the branch, and refuses when the
+  file no longer matches it: the file sits outside the repo but anything (a Bash call, a plugin) can
+  write it between the approval and the run. Approval does not pre-authorize one-way calls: the gate
+  still asks for each.
 - **One decider, picked like the chat model.** Every Decisions API call goes through
   `decider.decide` (`src/decider.ts`), never `classifyWithOrq` with a model id of its own; a test
   scrapes `src/` to keep it that way. So the model `/decider` picks (pi's `/model` selector over the
@@ -291,9 +300,12 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   `spawnSync` and `Bun.spawn` hand a child the launch environment, not `process.env` as changed
   since. `orqEnv()` is the launch environment plus the current `ORQ_SERVER` only, never all of
   `process.env`: orqi moves `ORQ_API_KEY` onto the winning candidate, and a CLI handed that would
-  report every credential as `ORQ_API_KEY`. Not done: on a switch every candidate is tried against
-  the new host, so a custom host that passes the check has seen every key orqi holds; the stored
-  `/login` key carries no host to filter by.
+  report every credential as `ORQ_API_KEY`. Every candidate is tried against the new host before
+  `verifyOrqHost` runs, so a custom host sees each key it is sent even when it refuses them all.
+  Only the CLI's own sign-ins are resolved for that host (whoami reads it); a `/login` key, a profile
+  key and `ORQ_API_KEY` carry no host to filter by. So `/server` to a host outside
+  `OFFICIAL_SERVERS` asks first, naming those credentials, and a no tries the CLI's sign-ins alone.
+  A failed whoami forgets the host the last one named, so the check and the verify agree.
 - **The update swaps by `renameSync`, never by extracting the tarball over the running binary.**
   GNU tar truncates a file it is overwriting rather than unlinking it first, so `tar -xzf` onto a
   busy executable is `ETXTBSY` on Linux; bsdtar on macOS unlinks first and succeeds. Both

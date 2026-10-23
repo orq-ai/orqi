@@ -124,8 +124,10 @@ here, run it in a fresh session (`/plan run`), or send feedback. Plans are saved
 | Action | What happens |
 |---|---|
 | A shell command | A dialog: allow once, allow for this turn, or deny. `--auto` (or `--permission-mode=auto`) allows them for the session. One-shot runs refuse them |
-| `delete_*`, `submit_*`, `invoke_*`, or an orq tool orqi does not know | Always waits for your approval |
-| `create_*`, `update_*` | Runs without asking, and is counted |
+| `delete_*`, `submit_*`, `invoke_*`, or an orq tool orqi does not know | Always waits for your approval. "Allow for this turn" covers that tool only |
+| `create_experiment` with `auto_run`, `update_datapoint` | Always waits for your approval: the run starts at once, the datapoint is overwritten |
+| A subagent handed to a managed agent (`agent/<key>`) | Always waits for your approval: the agent runs its own tools |
+| Other `create_*`, `update_*` | Runs without asking, and is counted |
 | Reads | Run |
 
 When the model needs a decision it asks in a dialog with options, a recommended pick or free text.

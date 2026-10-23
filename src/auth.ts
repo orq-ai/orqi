@@ -467,7 +467,13 @@ export function readWhoami(json: string, read: (file: string) => string = (file)
  */
 function readSession({ run = runOrq, read }: SessionDeps = {}): Whoami {
 	const whoami = run(WHOAMI_ARGS);
-	if (!whoami.ok) return { failure: whoami.stderr.trim() || "orq auth whoami failed" };
+	if (!whoami.ok) {
+		// The host an earlier whoami named is not the CLI's answer now (ORQ_SERVER may have
+		// moved since): fall back to ORQ_SERVER, so the credential check and verifyOrqHost
+		// talk to the same host.
+		cliServer = undefined;
+		return { failure: whoami.stderr.trim() || "orq auth whoami failed" };
+	}
 	const result = readWhoami(whoami.stdout, read);
 	cliServer = result.server;
 	cliProfile = result.profile;

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
+	API_KEY_LOGIN_SOURCE,
 	apiBaseUrl,
 	credentialCandidates,
 	exportedServer,
@@ -212,6 +213,9 @@ type Ui = {
 	setStatus(key: string, text: string | undefined): void;
 	setWidget(key: string, content: string[] | undefined): void;
 };
+
+/** Credentials the CLI resolved for the host it is on now: the only ones a host orqi does not know gets unasked. */
+const HOST_SCOPED = new Set([SESSION_SOURCE, API_KEY_LOGIN_SOURCE]);
 
 /** What the boot found, handed to the extension so it starts in the right state. */
 export interface Boot {
@@ -668,7 +672,10 @@ export function orqCommands(
 		const host = (server: string) => server.replace(/^https?:\/\//, "");
 		const exportedNote = () =>
 			exportedServer() ? ` ORQ_SERVER=${exportedServer()} is exported in your shell, so the next launch uses that again.` : "";
-		const switchServer = async (ctx: Parameters<typeof report>[0] & { ui: Ui }, server: string) => {
+		const switchServer = async (
+			ctx: Parameters<typeof report>[0] & { ui: Ui & { confirm(title: string, message: string): Promise<boolean> } },
+			server: string,
+		) => {
 			const pinned = profileServerOf(cli(["server", "current", "-o", "json"]).stdout);
 			if (pinned) {
 				ctx.ui.notify(`the orq profile in force pins ${pinned}; unset ORQ_PROFILE to switch host`, "warning");
@@ -682,10 +689,25 @@ export function orqCommands(
 				else process.env.ORQ_SERVER = previous;
 			};
 			process.env.ORQ_SERVER = server;
+			let pick = (all: Credential[]) => all;
 			if (OFFICIAL_SERVERS.includes(server)) {
 				if (!report(ctx, cli(["server", "use", "--", server]))) return restore();
-			} else stageServer(server);
-			const outcome = await recover(pi, ctx, (all) => all);
+			} else {
+				// Every candidate is sent to the host until one is accepted, and the check that it
+				// answers as orq only follows an acceptance: a host that refuses everything has seen
+				// them all. The CLI's sign-ins are its own for this host (whoami now reads it); the
+				// rest (a /login key, a profile key, ORQ_API_KEY) were issued elsewhere.
+				const foreign = readCandidates(authPath).candidates.filter((c) => !HOST_SCOPED.has(c.source));
+				const send =
+					foreign.length > 0 &&
+					(await ctx.ui.confirm(
+						`Send ${foreign.map((c) => c.source).join(", ")} to ${host(server)}?`,
+						`${host(server)} is not an orq host orqi knows, and these credentials were not issued for it. It sees each one it is sent, accepted or not. No tries only the CLI's own sign-in there (ORQ_SERVER=${server} orq auth login).`,
+					));
+				if (!send) pick = (all) => all.filter((c) => HOST_SCOPED.has(c.source));
+				stageServer(server);
+			}
+			const outcome = await recover(pi, ctx, pick);
 			if (staged() === server) {
 				// Nothing accepted there, or it did not answer as orq: back where it was.
 				stageServer(undefined);

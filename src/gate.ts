@@ -19,10 +19,31 @@ const VERBS: [RegExp, Door][] = [
 	[/^(delete|submit|invoke)_/, "one_way"],
 ];
 
-/** The door a bare orq tool name opens; anything unlisted is one_way. */
-export function doorOf(tool: string): Door {
-	return VERBS.find(([pattern]) => pattern.test(tool))?.[1] ?? "one_way";
+/**
+ * Calls whose verb understates them, judged on their arguments. `auto_run`
+ * starts the experiment at once (an agent task runs a managed agent per row);
+ * `update_datapoint` overwrites a datapoint's inputs and expected output, and
+ * the server keeps no earlier version.
+ */
+const OVERRIDES: Record<string, (input: Record<string, unknown> | undefined) => Door | undefined> = {
+	create_experiment: (input) => (input?.auto_run ? "one_way" : undefined),
+	update_datapoint: () => "one_way",
+};
+
+/** The door a bare orq tool name opens, given its arguments; anything unlisted is one_way. */
+export function doorOf(tool: string, input?: Record<string, unknown>): Door {
+	return (
+		(Object.hasOwn(OVERRIDES, tool) ? OVERRIDES[tool]!(input) : undefined) ??
+		VERBS.find(([pattern]) => pattern.test(tool))?.[1] ??
+		"one_way"
+	);
 }
+
+/** The managed agent a `subagent` call delegates to (`agent/<key>`), if any. */
+const managedAgent = (toolName: string, input: Record<string, unknown> | undefined) => {
+	const agent = toolName === "subagent" ? String(input?.agent ?? "") : "";
+	return agent.startsWith("agent/") ? agent : undefined;
+};
 
 /** True when the verb is in the table: what the test checks every server tool against. */
 export const knownVerb = (tool: string) => VERBS.some(([pattern]) => pattern.test(tool));
@@ -51,10 +72,8 @@ export function planBlock(toolName: string, input: Record<string, unknown> | und
 		`Plan mode is read-only: ${what}. Put the change in the plan and finish with exit_plan; it runs once the user approves.`;
 	if (PLAN_READS.has(toolName)) return undefined;
 	if (toolName === "subagent")
-		return String(input?.agent ?? "").startsWith("agent/")
-			? blocked("a managed agent runs its own tools, which may change things")
-			: undefined;
-	if (toolName.startsWith(TOOL_PREFIX) && doorOf(bareName(toolName)) === "benign") return undefined;
+		return managedAgent(toolName, input) ? blocked("a managed agent runs its own tools, which may change things") : undefined;
+	if (toolName.startsWith(TOOL_PREFIX) && doorOf(bareName(toolName), input) === "benign") return undefined;
 	return blocked(`${toolName} is blocked`);
 }
 
@@ -68,9 +87,11 @@ type ToolContext = Pick<ExtensionContext, "hasUI" | "ui">;
 /**
  * The `tool_call` handler and its per-turn memo. `endTurn` runs on `agent_end`,
  * so an "allow for this turn" decision never outlives the answer it was given
- * for. `auto` applies only to interactive local Bash commands: headless runs
- * still have no person who can authorize a command. The mode is read on every
- * call, so `/plan` takes effect on the next tool call, mid-turn included.
+ * for, and a one-way yes covers that tool (or that managed agent) only: yes to
+ * `delete_skill` is not yes to `delete_dataset`. `auto` applies only to
+ * interactive local Bash commands: headless runs still have no person who can
+ * authorize a command. The mode is read on every call, so `/plan` takes effect
+ * on the next tool call, mid-turn included.
  */
 export function toolGate(
 	trajectory: { gate(toolCallId: string, door: Door, gate?: Step["gate"]): void },
@@ -79,7 +100,7 @@ export function toolGate(
 ) {
 	const mode = typeof permissionMode === "function" ? permissionMode : () => permissionMode;
 	let bashAllowedForTurn = false;
-	let oneWayOrqAllowedForTurn = false;
+	const oneWayAllowedForTurn = new Set<string>();
 
 	const ask = async (
 		event: ToolCall,
@@ -118,14 +139,15 @@ export function toolGate(
 	return {
 		endTurn: () => {
 			bashAllowedForTurn = false;
-			oneWayOrqAllowedForTurn = false;
+			oneWayAllowedForTurn.clear();
 		},
 		onToolCall: async (event: ToolCall, ctx: ToolContext): Promise<ToolCallEventResult | undefined> => {
 			const planning = mode() === "plan";
 			if (planning && event.toolName !== "bash") {
 				const reason = planBlock(event.toolName, event.input);
 				if (reason) {
-					if (event.toolName.startsWith(TOOL_PREFIX)) trajectory.gate(event.toolCallId, doorOf(bareName(event.toolName)), "denied");
+					if (event.toolName.startsWith(TOOL_PREFIX))
+						trajectory.gate(event.toolCallId, doorOf(bareName(event.toolName), event.input), "denied");
 					return { block: true, reason };
 				}
 			}
@@ -148,9 +170,21 @@ export function toolGate(
 					planning ? [ALLOW_ONCE, DENY] : undefined,
 				);
 			}
+			// A managed agent runs its tools server-side, out of this gate's sight, as invoke_agent would.
+			const agent = managedAgent(event.toolName, event.input);
+			if (agent)
+				return ask(
+					event,
+					ctx,
+					`${agent} · managed agent: runs its own tools, which may change things`,
+					event.input,
+					() => oneWayAllowedForTurn.has(agent),
+					() => oneWayAllowedForTurn.add(agent),
+					`the managed agent (${agent})`,
+				);
 			if (!event.toolName.startsWith(TOOL_PREFIX)) return undefined;
 			const tool = bareName(event.toolName);
-			const door = doorOf(tool);
+			const door = doorOf(tool, event.input);
 			if (door !== "one_way") {
 				trajectory.gate(event.toolCallId, door);
 				return undefined;
@@ -160,10 +194,8 @@ export function toolGate(
 				ctx,
 				`${tool} · one-way: cannot be undone`,
 				event.input,
-				() => oneWayOrqAllowedForTurn,
-				() => {
-					oneWayOrqAllowedForTurn = true;
-				},
+				() => oneWayAllowedForTurn.has(tool),
+				() => oneWayAllowedForTurn.add(tool),
 				`this one-way call (${tool})`,
 			);
 		},

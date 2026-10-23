@@ -228,16 +228,19 @@ async function withServerCommand(
 	reconnect: (candidates: Credential[]) => Promise<any>,
 	run: (h: ReturnType<typeof recoveryHarness>, cli: string[][]) => Promise<void>,
 	current = '{"server":"https://my.orq.ai","profile_server":""}',
+	candidates: Credential[] = [good],
 ) {
 	const prior = process.env.ORQ_SERVER;
 	const cli: string[][] = [];
 	const h = recoveryHarness(reconnect, {
-		readCandidates: () => ({ candidates: [good] }),
+		readCandidates: () => ({ candidates }),
 		runOrq: (args) => {
 			cli.push(args);
 			return { ok: true, stdout: args[1] === "current" ? current : "", stderr: "" };
 		},
 	});
+	// A host orqi does not know asks before it is sent credentials issued elsewhere; yes unless a test says no.
+	h.ctx.ui.confirm = async () => true;
 	try {
 		await run(h, cli);
 	} finally {
@@ -282,6 +285,45 @@ test("/server puts the previous host back, unsaved, when another host accepts no
 			// The rollback reconnected on the old host, so nothing stays pinned.
 			expect(h.widgets.get("orq-auth")).toBeUndefined();
 		},
+	);
+});
+
+test("/server asks before a host it does not know sees credentials issued for another", async () => {
+	const session: Credential = { token: "jwt-session-there", source: SESSION_SOURCE };
+	const sent: string[][] = [];
+	await withServerCommand(
+		async (candidates) => {
+			if (staged()) {
+				sent.push(candidates.map((c) => c.token));
+				throw new CredentialsRejected([{ source: "acme.example.com", reason: "401" }]);
+			}
+			return connected(candidates);
+		},
+		async (h) => {
+			const asked: string[] = [];
+			// No: only the CLI's own sign-in for that host is tried.
+			h.ctx.ui.confirm = async (title: string) => {
+				asked.push(title);
+				return false;
+			};
+			await h.commands.get("server")!("https://acme.example.com", h.ctx);
+			expect(asked).toEqual(["Send /login key, ORQ_API_KEY to acme.example.com?"]);
+			expect(sent).toEqual([["jwt-session-there"]]);
+			// Yes: every candidate, as before.
+			h.ctx.ui.confirm = async () => true;
+			await h.commands.get("server")!("https://acme.example.com", h.ctx);
+			expect(sent.at(-1)).toEqual(["sk-orq-good", "sk-orq-env", "jwt-session-there"]);
+			// orq's own hosts are not asked about.
+			asked.length = 0;
+			h.ctx.ui.confirm = async (title: string) => {
+				asked.push(title);
+				return false;
+			};
+			await h.commands.get("server")!("my.staging.orq.ai", h.ctx);
+			expect(asked).toEqual([]);
+		},
+		undefined,
+		[good, { token: "sk-orq-env", source: "ORQ_API_KEY" }, session],
 	);
 });
 
@@ -1003,6 +1045,21 @@ test("askToken sends only a CLI without the command back to the session file", (
 	});
 	expect(askToken(answer(true, '{"token":""}'))).toEqual({ error: "orq auth token did not answer with a token" });
 	expect(TOKEN_ARGS).toEqual(["auth", "token", "-o", "json"]);
+});
+
+test("a failed whoami forgets the host the last one named", () => {
+	const saved = process.env.ORQ_SERVER;
+	process.env.ORQ_SERVER = "https://acme.example.com";
+	try {
+		const answer = (ok: boolean) => () => ({ ok, stdout: '{"server":"https://my.staging.orq.ai"}', stderr: ok ? "" : "boom" });
+		credentialCandidates("/nonexistent/auth.json", { run: answer(true), read: () => "{}" });
+		expect(apiBaseUrl()).toBe("https://my.staging.orq.ai");
+		credentialCandidates("/nonexistent/auth.json", { run: answer(false), read: () => "{}" });
+		expect(apiBaseUrl()).toBe("https://acme.example.com");
+	} finally {
+		if (saved === undefined) delete process.env.ORQ_SERVER;
+		else process.env.ORQ_SERVER = saved;
+	}
 });
 
 test("the login session candidate takes the CLI's token and workspace, the file's only from an older CLI", () => {

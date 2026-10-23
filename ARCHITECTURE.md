@@ -137,7 +137,8 @@ wait for the user in a dialog (allow once, allow for this turn, deny), unless an
 started with `--permission-mode=auto` (or `--auto`); headless runs still block Bash because nobody
 can confirm it. Orq tools read their door off the verb: reads are benign, `create_`/`update_` are
 two-way and only recorded, while `delete_`/`submit_`/`invoke_` and any verb not in the table are
-one-way and always wait for the dialog.
+one-way and always wait for the dialog. `create_experiment` with `auto_run`, `update_datapoint` and a
+`subagent` call that hands the task to a managed agent (`agent/<key>`) are one-way too.
 
 Plan mode (`/plan`, `alt+p`, `--plan`) is a third permission mode the gate reads on every call.
 It lets through reads only (`read`, `ask_user`, `web_*`, benign orq tools, subagents, whose own calls pass the gate too),
