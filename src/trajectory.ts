@@ -77,7 +77,15 @@ export interface SubagentDetails {
 	agent: string;
 	model?: string;
 	steps?: Step[];
+	/** The tool returned at once; the result comes later as an `orqi-subagent` message. */
+	background?: boolean;
 }
+
+/** A background subagent's result: a persisted custom message, steered into the conversation. */
+export const SUBAGENT_ENTRY = "orqi-subagent";
+
+/** What that message carries: the run, and which call it finishes. */
+export type SubagentResultDetails = SubagentDetails & { toolCallId: string; usage?: StepUsage; isError: boolean; durationMs?: number };
 
 type Block = { type: string; text?: string; id?: string; name?: string; arguments?: Record<string, unknown> };
 type AnyMessage = {
@@ -295,9 +303,27 @@ export class Trajectory {
 			}
 			return;
 		}
+		if (message.role === "custom" && (message as { customType?: string }).customType === SUBAGENT_ENTRY) {
+			// A background subagent finishing; one whose call is not on this branch (after /new) is dropped.
+			const details = (message as { details?: SubagentResultDetails }).details;
+			const step = details && this.steps.find((candidate) => candidate.toolCallId === details.toolCallId && candidate.role === "subagent");
+			if (!step) return;
+			step.status = details.isError ? "error" : "ok";
+			step.text = textOf(message.content);
+			step.durationMs = details.durationMs ?? step.durationMs;
+			step.model = details.model ?? step.model;
+			if (details.steps) step.children = details.steps;
+			step.usage = details.usage ?? (step.children ? sumUsage(step.children) : step.usage);
+			return;
+		}
 		if (message.role === "toolResult") {
 			const step = this.steps.find((candidate) => candidate.toolCallId === message.toolCallId);
 			if (!step) return;
+			if (step.role === "subagent" && (message.details as SubagentDetails | undefined)?.background) {
+				// Started, not finished: it stays running until its orqi-subagent message lands.
+				step.model = (message.details as SubagentDetails).model;
+				return;
+			}
 			const text = textOf(message.content);
 			step.status = message.isError ? "error" : "ok";
 			step.durationMs = message.durationMs ?? step.durationMs;
@@ -305,7 +331,8 @@ export class Trajectory {
 			if (step.role === "subagent") {
 				const details = message.details as SubagentDetails | undefined;
 				step.model = details?.model;
-				step.children = details?.steps;
+				// The child session's full steps win over the calls drawn live.
+				if (details?.steps) step.children = details.steps;
 				const usage = (message as { usage?: AnyMessage["usage"] }).usage;
 				if (usage) step.usage = { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cost: usage.cost?.total ?? 0 };
 				if (!step.usage && step.children) step.usage = sumUsage(step.children);
@@ -338,14 +365,65 @@ export class Trajectory {
 	toolEnd(toolCallId: string, isError: boolean, durationMs?: number): void {
 		const step = this.steps.find((candidate) => candidate.toolCallId === toolCallId);
 		if (!step) return;
+		// A background subagent's tool returns at once; its result message (or a foreground fallback's) settles it.
+		if (step.role === "subagent" && step.args?.background === true && !isError) return;
 		step.status = isError ? "error" : "ok";
 		step.durationMs = durationMs ?? step.durationMs;
 		this.changed();
 	}
 
-	/** The gate's verdict on a call; a call with no step (a subagent's) is ignored. */
+	/**
+	 * A call or a subagent's call: top-level steps first, then one level of children, the latest
+	 * first. pi restarts nested ids (`s1/1`) once the parent's run ends, so a background child reuses them.
+	 */
+	private findStep(toolCallId: string): Step | undefined {
+		const top = this.steps.find((candidate) => candidate.toolCallId === toolCallId);
+		if (top) return top;
+		for (let i = this.steps.length - 1; i >= 0; i--) {
+			const children = this.steps[i]!.children ?? [];
+			for (let j = children.length - 1; j >= 0; j--) if (children[j]!.toolCallId === toolCallId) return children[j];
+		}
+		return undefined;
+	}
+
+	/**
+	 * A subagent's own call (pi's nested `tool_execution_start`), drawn under its subagent step while
+	 * it runs. A nested call under anything but a subagent (a script, a future tool) has nowhere to sit.
+	 */
+	childStart(parentToolCallId: string, toolCallId: string, toolName: string, args: Record<string, unknown>): void {
+		const parent = this.steps.find((candidate) => candidate.toolCallId === parentToolCallId && candidate.role === "subagent");
+		if (!parent) return;
+		parent.children ??= [];
+		// The same call reported twice is one row; a finished id seen again is a new call (see findStep).
+		if (parent.children.some((child) => child.toolCallId === toolCallId && child.status === "running")) return;
+		parent.children.push({
+			role: "tool",
+			label: shortTool(toolName),
+			toolName,
+			detail: argSummary(args),
+			status: "running",
+			ts: Date.now(),
+			toolCallId,
+			args,
+			id: this.nextId++,
+			// The turn it ran in: a background subagent's calls go on past the turn that started it.
+			turn: this.turn,
+		});
+		this.changed();
+	}
+
+	/** pi's nested `tool_execution_end`. */
+	childEnd(toolCallId: string, isError: boolean, durationMs?: number): void {
+		const step = this.findStep(toolCallId);
+		if (!step) return;
+		step.status = isError ? "error" : "ok";
+		step.durationMs = durationMs ?? step.durationMs;
+		this.changed();
+	}
+
+	/** The gate's verdict on a call, a subagent's own calls included. */
 	gate(toolCallId: string, door: Door, gate?: Step["gate"]): void {
-		const step = this.steps.find((candidate) => candidate.toolCallId === toolCallId);
+		const step = this.findStep(toolCallId);
 		if (!step) return;
 		step.door = door;
 		step.gate = gate;
@@ -414,7 +492,17 @@ export interface Signals {
 
 /** What the signals section warns about, from the steps alone. */
 export function signals(steps: Step[], turn = steps.at(-1)?.turn ?? 0): Signals {
-	const tools = steps.filter((step) => step.role === "tool");
+	// A subagent's calls count too: their own turn while it runs, the subagent's once its result replaced them.
+	const tools = steps.flatMap((step) =>
+		step.role === "tool"
+			? [step]
+			: step.role === "subagent"
+				? (step.children ?? [])
+						.filter((child) => child.role === "tool")
+						// Live calls carry the turn they ran in; replayed ones carry the child session's, so they take the parent's.
+						.map((child) => (step.status === "running" ? child : { ...child, turn: step.turn }))
+				: [],
+	);
 	const counts = new Map<string, { tool: string; count: number }>();
 	for (const step of tools) {
 		if (step.turn !== turn) continue;

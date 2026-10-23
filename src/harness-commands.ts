@@ -10,7 +10,7 @@
 import { parse as parseYaml } from "yaml";
 import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { runOrq } from "./auth.ts";
@@ -20,6 +20,7 @@ import { contextUsed, type ContextSplit } from "./inspector-rows.ts";
 import { DEFAULT_MODEL, talkable } from "./model.ts";
 import { bareName, schemaLines, TOOL_PREFIX } from "./mcp.ts";
 import { readSkill, skillOrigin } from "./skills.ts";
+import { AGENT_TYPES } from "./subagent.ts";
 import type { Panel, PanelSpec } from "./panel.ts";
 import {
 	agentUrl,
@@ -735,6 +736,53 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 					},
 				},
 			}));
+		},
+	});
+
+	// The subagent types the model can pick: built-in, the user's, the project's, and the files that did not load.
+	pi.registerCommand("subagents", {
+		description: "The subagent types the model can delegate to: built-in and yours",
+		handler: async (_args, ctx) => {
+			const { types, problems } = deps.agentTypes?.() ?? { types: AGENT_TYPES, problems: [] };
+			const entries = Object.entries(types);
+			// With the separator: `agents-backup/` beside it is not the user's folder.
+			const userAgents = `${join(deps.agentDir, "agents")}${sep}`;
+			const origin = (source: string) => (source === "built-in" ? "built-in" : source.startsWith(userAgents) ? "user" : "project");
+			const home = (path: string) => path.replace(homedir(), "~");
+			const width = Math.max(...entries.map(([name]) => name.length));
+			await panel(ctx, {
+				title: "subagents",
+				badge: `${entries.length} loaded${problems.length ? ` · ${problems.length} skipped` : ""}`,
+				rows: [
+					...entries.map(([name, type]) => `${name.padEnd(width)}  ${origin(type.source).padEnd(8)}  ${type.description}`),
+					...problems.map((problem) => `✗ ${home(problem.file)}: ${problem.reason}`),
+				],
+				disabled: new Set(problems.map((_, i) => entries.length + i)),
+				selectable: true,
+				filterable: true,
+				hint: "type to filter · ↑↓ move · enter details · esc close · add one in .orqi/agents/<name>.md",
+				keys: {
+					enter: (i) => {
+						const [name, type] = entries[i]!;
+						void panel(ctx, {
+							title: `subagent ${name}`,
+							badge: origin(type.source),
+							rows: [
+								"description",
+								`  ${type.description}`,
+								"",
+								`tools  ${type.tools.join(", ")}`,
+								`rung   ${type.rung}`,
+								`path   ${type.source === "built-in" ? "built-in" : home(type.source)}`,
+								"",
+								"prompt",
+								...type.prompt.split("\n").map((line) => `  ${line}`),
+							],
+							hint: "↑↓ scroll · esc back",
+						});
+					},
+				},
+			});
 		},
 	});
 

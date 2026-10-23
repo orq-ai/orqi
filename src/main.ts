@@ -71,7 +71,8 @@ import { orqHarness, repoOf } from "./harness.ts";
 import { createLocalTools, EXCLUDED_TOOLS } from "./local-tools.ts";
 import { takePermissionModeFlag } from "./permission-mode.ts";
 import { createAskUserTool } from "./ask-user.ts";
-import { createSubagentTool } from "./subagent.ts";
+import { createSubagentTool, type SubagentHost } from "./subagent.ts";
+import { agentTypesFor } from "./agent-types.ts";
 import { extensionsUpdate, runUpdate } from "./update.ts";
 import { resolveSession } from "./resume.ts";
 import { projectTrusted, rebrandTrustWarning } from "./trust.ts";
@@ -552,6 +553,10 @@ const model = pickModel(models);
 // the permission gate; whole-file replacement (`EXCLUDED_TOOLS`) stays off because targeted
 // edits are inspectable.
 const localTools = createLocalTools(process.cwd());
+/** Built-in subagent types plus `<agentDir>/agents` and a trusted project's `.orqi/agents`, read fresh each time. */
+const loadedAgentTypes = () => agentTypesFor(process.cwd(), AGENT_DIR);
+/** Background subagents: the live session's `pi` to deliver to, and the children still running. */
+const subagentHost: SubagentHost = { running: new Set() };
 const customTools = [
 	...localTools,
 	createAskUserTool(),
@@ -559,6 +564,8 @@ const customTools = [
 		model,
 		modelRuntime,
 		agentDir: AGENT_DIR,
+		types: () => loadedAgentTypes().types,
+		host: subagentHost,
 		// Under orq/auto a subagent runs on its type's rung (investigator and
 		// docs easy, analyst medium); otherwise on whatever the parent runs.
 		modelFor: (agent, parent) =>
@@ -687,8 +694,14 @@ const makeServices = async () => {
 				createMcpExtension(),
 				mcp.extension,
 				commands,
+				// Each session load hands the subagent tool its live handle, so a background result follows /new and /resume.
+				(pi) => {
+					subagentHost.pi = pi;
+				},
 				orqHarness({
 					agentDir: AGENT_DIR,
+					agentTypes: loadedAgentTypes,
+					subagents: subagentHost,
 					catalogue: () => models.catalogue,
 					modelRuntime,
 					memorq: () => (memorqPackage ? "installed" : "none"),

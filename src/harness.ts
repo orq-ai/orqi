@@ -52,11 +52,23 @@ import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
 import { COMPACT_AT_MAX, COMPACT_AT_MIN, isCompactAt, readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
-import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type RouteMark, type Step } from "./trajectory.ts";
+import {
+	argSummary,
+	MEMORY_ROW,
+	shortTool,
+	signals,
+	SUBAGENT_ENTRY,
+	Trajectory,
+	type RouteMark,
+	type Step,
+	type SubagentResultDetails,
+} from "./trajectory.ts";
 import { toolGate } from "./gate.ts";
 import { registerHandoff } from "./handoff.ts";
 import { createExitPlanTool, PLAN_ENTRY, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
+import type { AgentTypeProblem } from "./agent-types.ts";
+import { summaryLine, type AgentType, type SubagentHost } from "./subagent.ts";
 import {
 	confidenceFloor,
 	DIFFICULTY_QUESTION,
@@ -98,6 +110,10 @@ export interface HarnessDeps {
 	now?: () => number;
 	/** This session's pi settings, so `/compact-at` can move the compaction reserve in memory. */
 	settingsManager?: SettingsManager;
+	/** Background subagents still running, disposed when the session ends. */
+	subagents?: SubagentHost;
+	/** The subagent types and the files that did not load, for `/subagents`; absent, the built-ins only. */
+	agentTypes?: () => { types: Record<string, AgentType>; problems: AgentTypeProblem[] };
 }
 
 const ROUTE_ENTRY = "orqi-route";
@@ -1180,6 +1196,27 @@ export function orqHarness(deps: HarnessDeps) {
 		// This handle dies with its session: stop everything that would outlive it.
 		pi.on("session_shutdown", (event, ctx) => {
 			sessionEnded = true;
+			// A background subagent dies with its session (quit, /new, /resume, and /reload, which keeps it):
+			// its result would land in the next one. The model was promised a result, so it is told, in the
+			// session file and without starting a run.
+			for (const child of deps.subagents?.running ?? []) {
+				try {
+					pi.sendMessage({
+						customType: SUBAGENT_ENTRY,
+						content: `subagent "${child.agent}" stopped (#${child.toolCallId}): the session ended before it finished`,
+						display: true,
+						details: { agent: child.agent, toolCallId: child.toolCallId, isError: true } satisfies SubagentResultDetails,
+					});
+				} catch {
+					// A session that cannot take it any more: the row reads interrupted on resume instead.
+				}
+				try {
+					child.dispose();
+				} catch {
+					// Already gone.
+				}
+			}
+			deps.subagents?.running.clear();
 			// On quit pi has left the alternate screen by now and prints "To resume" next,
 			// so these lines land just above it. Never studio() here: it fetches.
 			if (event.reason === "quit" && ctx.mode === "tui" && trajectory.turn > 0) {
@@ -1207,13 +1244,13 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.on("turn_start", (_event, ctx) => ctx.ui.setWorkingMessage(isAgentModel(ctx.model?.id) ? `${ctx.model!.id.slice(6)}` : "thinking"));
 		pi.on("tool_execution_start", (event, ctx) => {
 			if (event.toolName === "read" && typeof event.args?.path === "string") readPaths.set(event.toolCallId, event.args.path);
-			if (event.parentToolCallId) return;
+			if (event.parentToolCallId) return trajectory.childStart(event.parentToolCallId, event.toolCallId, event.toolName, event.args ?? {});
 			trajectory.toolStart(event.toolCallId, event.toolName, event.args ?? {});
 			ctx.ui.setWorkingMessage(event.toolName === "subagent" ? `subagent ${event.args?.agent ?? ""}` : shortTool(event.toolName));
 		});
 		pi.on("tool_execution_end", (event, ctx) => {
 			countNoteRead(event.toolCallId, event.isError, ctx.cwd);
-			if (event.parentToolCallId) return;
+			if (event.parentToolCallId) return trajectory.childEnd(event.toolCallId, event.isError, event.durationMs);
 			trajectory.toolEnd(event.toolCallId, event.isError, event.durationMs);
 			syncWidgets(ctx);
 			if (!trajectory.steps.some((step) => step.status === "running")) ctx.ui.setWorkingMessage("thinking");
@@ -1341,6 +1378,27 @@ export function orqHarness(deps: HarnessDeps) {
 			try {
 				if (!isLearned(entry.data)) return undefined;
 				return new Text(theme.fg("dim", learnLine(entry.data)), 1, 0);
+			} catch {
+				return undefined;
+			}
+		});
+		// A background subagent's result: one line, the full answer on expand (the model reads the content either way).
+		pi.registerMessageRenderer<SubagentResultDetails>(SUBAGENT_ENTRY, (message, options, theme) => {
+			try {
+				const details = message.details;
+				if (!details) return undefined;
+				if (options.expanded) return new Text(theme.fg("toolOutput", typeof message.content === "string" ? message.content : ""), 1, 0);
+				// `stopped: the session ended…`, `failed: <why>`: the message's own words, without its name and call id.
+				const said =
+					typeof message.content === "string"
+						? message.content
+								.split("\n")[0]!
+								.replace(/^subagent "[^"]*" /, "")
+								.replace(/ \(#[^)]*\)/, "")
+						: "failed";
+				const summary = summaryLine(details.model, details.usage);
+				const line = `⇢ ${details.agent} ${details.isError ? said : "finished"}${summary ? ` · ${summary}` : ""}`;
+				return new Text(theme.fg(details.isError ? "error" : "dim", line), 1, 0);
 			} catch {
 				return undefined;
 			}
@@ -1905,6 +1963,9 @@ function branchMessages(ctx: ExtensionContext): any[] {
 					timestamp: Date.parse(entry.timestamp ?? "") || undefined,
 				},
 			];
+		}
+		if (entry.type === "custom_message" && entry.customType === SUBAGENT_ENTRY) {
+			return [{ role: "custom", customType: SUBAGENT_ENTRY, content: entry.content, details: entry.details }];
 		}
 		if (entry.type === "custom" && entry.customType === MEMORY_ENTRY && isLearned(entry.data)) {
 			const step = learnStep(entry.data);

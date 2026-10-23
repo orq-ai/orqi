@@ -24,31 +24,43 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { dollars, shortModel, tokens } from "./footer.ts";
 import { TOOL_PREFIX } from "./mcp.ts";
-import { stepsOf, sumUsage, type SubagentDetails } from "./trajectory.ts";
+import { stepsOf, SUBAGENT_ENTRY, sumUsage, type StepUsage, type SubagentDetails, type SubagentResultDetails } from "./trajectory.ts";
+
+export { SUBAGENT_ENTRY };
 
 export interface AgentType {
+	/** One line: what the model reads to pick it. */
+	description: string;
 	prompt: string;
 	/** Unprefixed orq tool names this agent may use. */
 	tools: string[];
 	/** Which routing rung it runs on under `orq/auto`: easy work goes cheap. */
 	rung: "easy" | "medium" | "hard";
+	/** `built-in`, or the file a user type was read from. */
+	source: string;
 }
 
 /** Agent types mirror the capability pillars in the orqi design plan. */
 export const AGENT_TYPES: Record<string, AgentType> = {
 	investigator: {
+		description: "finds the root cause of a failing trace",
+		source: "built-in",
 		prompt:
 			"You investigate failing orq.ai traces. Walk the span tree to the first upstream failure, classify it (specification / generalization / tool-retrieval / data-eval), and report the root cause with evidence: trace ids, span names, and the failing arguments. Lead with the finding, not the process.",
 		tools: ["list_traces", "list_spans", "get_span", "get_agent", "search_entities"],
 		rung: "easy",
 	},
 	analyst: {
+		description: "cost, latency, error rates and model mix, with the numbers",
+		source: "built-in",
 		prompt:
 			"You analyse orq.ai workspace analytics: cost, latency, error rates and model mix. Always show the numbers you based a claim on, and quantify any recommendation (e.g. estimated cost delta).",
 		tools: ["get_analytics_overview", "query_analytics", "list_traces", "list_models"],
 		rung: "medium",
 	},
 	docs: {
+		description: "answers platform questions from the orq.ai docs only",
+		source: "built-in",
 		prompt:
 			"You answer questions about the orq.ai platform strictly from the documentation. Ground every claim in a doc search result and never invent features. If the docs are silent, say so.",
 		tools: ["search_docs"],
@@ -65,6 +77,44 @@ export interface SubagentDeps {
 	 * Under `orq/auto` that is the agent type's rung; otherwise the parent's own.
 	 */
 	modelFor?: (agent: AgentType, parent: Model<any> | undefined) => Model<any> | undefined;
+	/** The types the model may pick: the built-ins plus the user's files, reread on each call. */
+	types: () => Record<string, AgentType>;
+	/** Where a background run delivers its result, and the children still running. */
+	host: SubagentHost;
+	/** pi's `createAgentSession`; tests hand in a child they settle by hand. */
+	createSession?: typeof createAgentSession;
+}
+
+/**
+ * The live session's `pi` handle (set by an extension factory on each session load, so it follows
+ * /new and /resume) and the background children still running, which session_shutdown disposes.
+ */
+export interface SubagentHost {
+	pi?: Pick<ExtensionAPI, "sendMessage">;
+	running: Set<RunningSubagent>;
+}
+
+/** A background child still running: enough to stop it and to tell the model it stopped. */
+export interface RunningSubagent {
+	agent: string;
+	toolCallId: string;
+	dispose(): void;
+}
+
+/** Whether a call that asked for the background gets it: one-shot has no session left to deliver to. */
+export function runsInBackground(wanted: boolean | undefined, hasUI: boolean, host: SubagentHost): boolean {
+	return wanted === true && hasUI && host.pi !== undefined;
+}
+
+export const FOREGROUND_NOTE = "(ran in the foreground: this run has no session to deliver a background result to)";
+
+export const startedText = (agent: string, toolCallId: string) =>
+	`subagent "${agent}" started in the background (#${toolCallId}). Keep working; its result arrives as a message.`;
+
+/** `gpt-5 · ↑12k ↓800 · $0.004`: the line under a subagent's result, foreground or background. */
+export function summaryLine(model: string | undefined, usage: StepUsage | undefined): string {
+	const spend = usage ? `↑${tokens(usage.input + usage.cacheRead)} ↓${tokens(usage.output)} · ${dollars(usage.cost)}` : "";
+	return [model ? shortModel(model) : "", spend].filter(Boolean).join(" · ");
 }
 
 const AGENT_PREFIX = "agent/";
@@ -105,24 +155,48 @@ function usageOf(messages: any[]): Usage {
 }
 
 export function createSubagentTool(deps: SubagentDeps) {
+	// The description is fixed when the tool is built; a type added later still runs, it is just not advertised until restart.
+	const types = deps.types();
 	return defineTool({
 		name: "subagent",
 		label: "Subagent",
 		description:
 			"Delegate a focused task to a specialist subagent with its own context window and a narrow orq tool set. " +
-			`Agents: ${Object.keys(AGENT_TYPES).join(", ")}. ` +
+			`Agents: ${Object.entries(types)
+				.map(([name, type]) => `${name} (${type.description})`)
+				.join(", ")}. ` +
 			'Or delegate to one of the workspace\'s managed orq agents by passing "agent/<key>" (it runs with its own instructions and tools).',
 		parameters: Type.Object({
-			agent: Type.String({ description: `One of ${Object.keys(AGENT_TYPES).join(", ")}, or "agent/<key>" for a managed orq agent.` }),
+			agent: Type.String({ description: `One of ${Object.keys(types).join(", ")}, or "agent/<key>" for a managed orq agent.` }),
 			task: Type.String({ description: "Self-contained task description; the subagent sees nothing else." }),
+			background: Type.Optional(
+				Type.Boolean({
+					description:
+						"Return at once; the result arrives as a message when the subagent finishes. Use for long investigations so you can keep working.",
+				}),
+			),
 		}),
-		execute: async (_id, { agent, task }, signal, _onUpdate, ctx) => {
+		execute: async (toolCallId, { agent, task, background }, signal, _onUpdate, ctx) => {
 			const managed = agent.startsWith(AGENT_PREFIX);
-			const def = Object.hasOwn(AGENT_TYPES, agent) ? AGENT_TYPES[agent] : undefined;
+			const types = deps.types();
+			const def = Object.hasOwn(types, agent) ? types[agent] : undefined;
 			if (!managed && !def) {
 				return {
+					content: [{ type: "text" as const, text: `unknown subagent "${agent}": use ${Object.keys(types).join(", ")} or agent/<key>` }],
+					details: { agent } satisfies SubagentDetails,
+					isError: true,
+				};
+			}
+			// A user's type that names a tool this workspace lacks is refused, never run with a smaller set.
+			const present = new Set(((ctx as { tools?: readonly { name: string }[] } | undefined)?.tools ?? []).map((tool) => tool.name));
+			const missing = def && def.source !== "built-in" ? def.tools.filter((name) => !present.has(`${TOOL_PREFIX}${name}`)) : [];
+			if (missing.length) {
+				return {
 					content: [
-						{ type: "text" as const, text: `unknown subagent "${agent}": use ${Object.keys(AGENT_TYPES).join(", ")} or agent/<key>` },
+						{
+							type: "text" as const,
+							text: `subagent "${agent}" asks for tools not in this workspace: ${missing.join(", ")}. Fix ${def!.source} or pick another subagent.`,
+						},
 					],
 					details: { agent } satisfies SubagentDetails,
 					isError: true,
@@ -139,6 +213,9 @@ export function createSubagentTool(deps: SubagentDeps) {
 					isError: true,
 				};
 			}
+			const inBackground = runsInBackground(background, (ctx as { hasUI?: boolean } | undefined)?.hasUI === true, deps.host);
+			// A background child outlives the turn, so the turn's Esc must not reach its calls either.
+			const callerSignal = inBackground ? undefined : signal;
 			const allowed = new Set((def?.tools ?? []).map((name) => `${TOOL_PREFIX}${name}`));
 			// The orq tools live on the parent session (pi's MCP connected them there),
 			// so the child gets proxies that run each call through the parent's
@@ -161,7 +238,7 @@ export function createSubagentTool(deps: SubagentDeps) {
 									description: tool.description,
 									parameters: tool.parameters,
 									execute: async (_callId, args, callSignal) => {
-										const outcome = await parent.executeTool!(tool.name, args, { signal: callSignal ?? signal });
+										const outcome = await parent.executeTool!(tool.name, args, { signal: callSignal ?? callerSignal });
 										return { ...outcome.result, isError: outcome.isError };
 									},
 								}),
@@ -179,7 +256,7 @@ export function createSubagentTool(deps: SubagentDeps) {
 				extensionFactories: [tagged(agent)],
 			});
 			await resourceLoader.reload();
-			const { session } = await createAgentSession({
+			const { session } = await (deps.createSession ?? createAgentSession)({
 				agentDir: deps.agentDir,
 				model,
 				modelRuntime: deps.modelRuntime,
@@ -189,27 +266,84 @@ export function createSubagentTool(deps: SubagentDeps) {
 				sessionManager: SessionManager.inMemory(),
 				settingsManager: SettingsManager.inMemory(),
 			});
-			const abort = () => session.abort();
-			signal?.addEventListener("abort", abort, { once: true });
-			try {
-				await session.prompt(task);
+			/** What the child left: its answer or its error, its steps and its spend. */
+			const outcome = () => {
 				const messages = session.state.messages as any[];
 				const details: SubagentDetails = { agent, model: model.id, steps: stepsOf(messages) };
 				const usage = usageOf(messages);
 				const last = [...messages].reverse().find((msg) => msg.role === "assistant");
-				if (last?.stopReason === "error") {
-					return {
-						content: [{ type: "text" as const, text: `subagent "${agent}" failed: ${last.errorMessage ?? "model call failed"}` }],
-						details,
-						usage,
-						isError: true,
-					};
-				}
+				const error = last?.stopReason === "error" ? (last.errorMessage ?? "model call failed") : undefined;
 				const text = ((last?.content ?? []) as any[])
 					.filter((block: any) => block.type === "text")
 					.map((block: any) => block.text)
 					.join("\n");
-				return { content: [{ type: "text" as const, text: text || "(subagent returned no text)" }], details, usage };
+				return { text: text || "(subagent returned no text)", error, details, usage };
+			};
+			if (inBackground) {
+				// Not awaited, and deaf to the turn's signal: Esc ends the turn, not the investigation.
+				const started = Date.now();
+				const { host } = deps;
+				const running: RunningSubagent = { agent, toolCallId, dispose: () => session.dispose() };
+				host.running.add(running);
+				const settle = (failure?: unknown) => {
+					// Gone from the set means session_shutdown disposed it and told the model: nothing more to say.
+					if (!host.running.delete(running)) return;
+					let content: string;
+					let details: SubagentResultDetails;
+					// Never throws: this runs from a promise nobody awaits, and an unhandled rejection ends orqi.
+					try {
+						const done = outcome();
+						const error = failure === undefined ? done.error : String(failure);
+						details = {
+							...done.details,
+							toolCallId,
+							isError: error !== undefined,
+							durationMs: Date.now() - started,
+							usage: { input: done.usage.input, output: done.usage.output, cacheRead: done.usage.cacheRead, cost: done.usage.cost.total },
+						};
+						content =
+							error === undefined
+								? `subagent "${agent}" finished (#${toolCallId}):\n${done.text}`
+								: `subagent "${agent}" failed (#${toolCallId}): ${error}`;
+					} catch (unreadable) {
+						details = { agent, model: model.id, toolCallId, isError: true, durationMs: Date.now() - started };
+						content = `subagent "${agent}" failed (#${toolCallId}): ${String(failure ?? unreadable)}`;
+					}
+					try {
+						session.dispose();
+					} catch {
+						// Already torn down.
+					}
+					try {
+						host.pi?.sendMessage(
+							{ customType: SUBAGENT_ENTRY, content, display: true, details },
+							{ deliverAs: "steer", triggerTurn: true },
+						);
+					} catch {
+						// A handle that died with its session: the result has nowhere to go.
+					}
+				};
+				// Through a resolved promise, so even a prompt that throws before returning one settles.
+				Promise.resolve()
+					.then(() => session.prompt(task))
+					.then(
+						() => settle(),
+						(failure) => settle(failure ?? "unknown error"),
+					);
+				return {
+					content: [{ type: "text" as const, text: startedText(agent, toolCallId) }],
+					details: { agent, model: model.id, background: true } satisfies SubagentDetails,
+				};
+			}
+			const abort = () => session.abort();
+			signal?.addEventListener("abort", abort, { once: true });
+			try {
+				await session.prompt(task);
+				const { text, error, details, usage } = outcome();
+				if (error !== undefined) {
+					return { content: [{ type: "text" as const, text: `subagent "${agent}" failed: ${error}` }], details, usage, isError: true };
+				}
+				return { content: [{ type: "text" as const, text: background ? `${text}\n\n${FOREGROUND_NOTE}` : text }], details, usage };
 			} finally {
 				signal?.removeEventListener("abort", abort);
 				session.dispose();
@@ -232,13 +366,12 @@ export function createSubagentTool(deps: SubagentDeps) {
 			const details = result.details as SubagentDetails | undefined;
 			const usage = (result as { usage?: Usage }).usage;
 			const spend = usage
-				? `↑${tokens(usage.input + usage.cacheRead)} ↓${tokens(usage.output)} · ${dollars(usage.cost.total)}`
+				? { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cost: usage.cost.total }
 				: details?.steps
-					? dollars(sumUsage(details.steps).cost)
-					: "";
+					? sumUsage(details.steps)
+					: undefined;
 			const head = text.replace(/\s+/g, " ").slice(0, 110);
-			const model = details?.model ? `${shortModel(details.model)} · ` : "";
-			return new Text(`${theme.fg("muted", head)}\n${theme.fg("dim", `${model}${spend}`)}`, 0, 0);
+			return new Text(`${theme.fg("muted", head)}\n${theme.fg("dim", summaryLine(details?.model, spend))}`, 0, 0);
 		},
 	});
 }
