@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { minimapRow } from "./inspector-rows.ts";
 import {
+	isActivity,
 	isLearned,
 	isMemorqState,
 	isNoteRead,
@@ -13,6 +14,7 @@ import {
 	learnPhrase,
 	memoryLines,
 	printable,
+	type MemorqActivity,
 	type MemorqHost,
 	type MemorqState,
 	type Trigger,
@@ -343,4 +345,195 @@ test("a read counts when it opens a note, rule or skill wherever memorq keeps it
 	expect(isNoteRead(`${repo}/.memorq/notes/../../src/x.md`, inRepo, roots, repo)).toBe(false);
 	// Outside a repo the stores are empty strings, which must not match the working directory.
 	expect(isNoteRead("src/main.ts", { notes: "", rules: "", skills: "" }, roots, repo)).toBe(false);
+});
+
+// The activity view: this session's recalls and saves (memorq's `activity`), drawn in at most four lines.
+
+const activity = (over: Partial<MemorqActivity> = {}): MemorqActivity => ({ recalls: 2, remembers: 1, recent: [], ...over });
+/** The wireframe's "Proposed" frame: a recall 10 s ago, a save 3 minutes ago, a learn an hour ago. */
+const proposed = (over: Partial<MemorqState> = {}) =>
+	state({
+		notes: 21,
+		activity: activity({
+			recent: [
+				{ kind: "recall", text: "golden test clock", at: NOW - 10_000, hits: 2 },
+				{ kind: "remember", text: "Golden test depends on the clock", at: NOW - 3 * MIN, saved: true },
+				{ kind: "recall", text: "older, never drawn", at: NOW - 9 * MIN, hits: 1 },
+			],
+		}),
+		learned: { count: 2, trigger: "session_end", at: NOW - 60 * MIN },
+		...over,
+	});
+
+test("no activity draws exactly today's lines, whatever else memorq sent", () => {
+	// A snapshot of the section before the activity view existed.
+	const full = state({ usedThisTurn: 3, learned: { count: 2, trigger: "ship", at: NOW - 3 * MIN }, review: { dueInSessions: 2 } });
+	expect(memoryLines(full, 1, 36, NOW)).toEqual([
+		rule,
+		"  47 notes for this repo            ",
+		"  using 3 this turn · read 1        ",
+		"  learned 2 after git push · 3m     ",
+		"  next memory review in 2 sessions  ",
+	]);
+	expect(memoryLines(full, 1, 36, NOW)).toEqual(memoryLines({ ...full, activity: undefined }, 1, 36, NOW));
+	// An activity that is nothing yet (no calls, no entries) is no activity.
+	expect(memoryLines({ ...full, activity: activity({ recalls: 0, remembers: 0 }) }, 1, 36, NOW)).toEqual(memoryLines(full, 1, 36, NOW));
+	expect(body(memoryLines(state({ activity: activity({ recalls: 0, remembers: 0 }) }), 2, 36, NOW))).toEqual([
+		"  47 notes for this repo",
+		"  read 2 this session",
+	]);
+});
+
+test("with activity: totals, the newest two entries with their ages, then the learned line", () => {
+	const lines = memoryLines(proposed(), 3, 60, NOW);
+	expect(lines[0]).toBe(` ─ memory ${"─".repeat(60 - 10)}`);
+	expect(body(lines)).toEqual([
+		"  21 notes · 3 opened · 2 recalled · 1 saved",
+		'  ↳ recalled "golden test clock" → 2 · now',
+		'  + saved "Golden test depends on the clock" · 3m',
+		"  learned 2 at session end · 1h",
+	]);
+	for (const line of lines) expect(visibleWidth(line)).toBe(60);
+	// Four lines at most, the title rule included in none of them.
+	expect(lines).toHaveLength(5);
+});
+
+test("a zero part is left out of the totals, except the notes", () => {
+	const line1 = (a: Partial<MemorqActivity>, reads: number, notes = 21) =>
+		body(memoryLines(state({ notes, activity: activity(a) }), reads, 60, NOW))[0];
+	expect(line1({ recalls: 1, remembers: 0 }, 0)).toBe("  21 notes · 1 recalled");
+	expect(line1({ recalls: 0, remembers: 2 }, 1, 22)).toBe("  22 notes · 1 opened · 2 saved");
+	expect(line1({ recalls: 0, remembers: 1 }, 0, 1)).toBe("  1 note · 1 saved");
+});
+
+test("a recall that found nothing says nothing", () => {
+	const a = activity({ recalls: 1, remembers: 0, recent: [{ kind: "recall", text: "k8s rollout", at: NOW, hits: 0 }] });
+	expect(body(memoryLines(state({ notes: 21, activity: a, review: { dueInSessions: 2 } }), 0, 60, NOW))).toEqual([
+		"  21 notes · 1 recalled",
+		'  ↳ recalled "k8s rollout" → nothing · now',
+		"  next memory review in 2 sessions",
+	]);
+	// A recall memorq sent without a count draws without an arrow.
+	const bare1 = activity({ recent: [{ kind: "recall", text: "q", at: NOW }] });
+	expect(body(memoryLines(state({ activity: bare1 }), 0, 60, NOW))[1]).toBe('  ↳ recalled "q" · now');
+});
+
+test("a save that was already saved is drawn as such, and a review running is line 4", () => {
+	const a = activity({
+		recalls: 0,
+		remembers: 2,
+		recent: [
+			{ kind: "remember", text: "Use uv for tests", at: NOW, saved: false },
+			{ kind: "remember", text: "Pin the clock", at: NOW - 4 * MIN, saved: true },
+		],
+	});
+	expect(body(memoryLines(state({ notes: 22, activity: a, review: { running: true, notes: 22 } }), 1, 60, NOW))).toEqual([
+		"  22 notes · 1 opened · 2 saved",
+		'  = already saved "Use uv for tests" · now',
+		'  + saved "Pin the clock" · 4m',
+		"  reviewing 22 notes…",
+	]);
+});
+
+test("paused and read-only still draw the recall, with the reason on line 4", () => {
+	const a = activity({ recalls: 1, remembers: 0, recent: [{ kind: "recall", text: "release steps", at: NOW - 2 * MIN, hits: 1 }] });
+	expect(body(memoryLines(state({ notes: 21, activity: a, paused: true }), 2, 60, NOW))).toEqual([
+		"  21 notes · 2 opened · 1 recalled",
+		'  ↳ recalled "release steps" → 1 · 2m',
+		"  learning paused · /memory",
+	]);
+	expect(body(memoryLines(state({ activity: a, enabled: "readonly" }), 0, 60, NOW))[2]).toBe("  read-only · learns nothing");
+});
+
+test("four lines at most: the learned line wins line 4 when a review is also due, and both show when there is room", () => {
+	const two = proposed({ review: { dueInSessions: 2 } });
+	expect(body(memoryLines(two, 3, 60, NOW))).toHaveLength(4);
+	expect(body(memoryLines(two, 3, 60, NOW))[3]).toBe("  learned 2 at session end · 1h");
+	const one = state({
+		notes: 21,
+		learned: { count: 2, trigger: "ship", at: NOW },
+		review: { dueInSessions: 2 },
+		activity: activity({ recent: [] }),
+	});
+	expect(body(memoryLines(one, 0, 60, NOW))).toEqual([
+		"  21 notes · 2 recalled · 1 saved",
+		"  learned 2 after git push · now",
+		"  next memory review in 2 sessions",
+	]);
+});
+
+test("text from memorq is drawn without its escapes, in the quoted text too", () => {
+	const a = activity({
+		recalls: 1,
+		remembers: 0,
+		recent: [{ kind: "recall", text: "fix \x1b]52;c;ZXZpbA==\x07now \x1b[2Jdone\n", at: NOW, hits: 0 }],
+	});
+	const lines = memoryLines(state({ activity: a }), 0, 60, NOW);
+	for (const line of lines) expect(line).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f]/);
+	expect(bare(lines[2]!).trimEnd()).toBe('  ↳ recalled "fix now done" → nothing · now');
+});
+
+test("a narrow sidebar shrinks the verbs and the quoted text, never the age", () => {
+	const long = proposed();
+	const at = (width: number) => memoryLines(long, 3, width, NOW).map((line) => bare(line).trimEnd());
+	const wide = at(40);
+	expect(wide[1]).toBe("  21 · 3 opened · 2 recalled · 1 saved");
+	expect(wide[2]).toBe('  ↳ recalled "golden test cl…" → 2 · now');
+	expect(wide[3]).toBe('  + saved "Golden test depends on…" · 3m');
+	const narrow = at(26);
+	expect(narrow[1]).toBe("  21 · 3 opened · 2 recal…");
+	expect(narrow[2]).toBe('  ↳ "golden te…" → 2 · now');
+	expect(narrow[3]).toBe('  + "Golden test de…" · 3m');
+	expect(narrow[4]).toBe("  learned 2 at sessi… · 1h");
+	// From a roomy panel down to a cramped one, every row is exactly the width and every age survives.
+	for (let width = 60; width >= 22; width--) {
+		const rows = memoryLines(long, 3, width, NOW);
+		for (const row of rows) expect(visibleWidth(row)).toBe(width);
+		expect(bare(rows[2]!).trimEnd()).toEndWith(" · now");
+		expect(bare(rows[3]!).trimEnd()).toEndWith(" · 3m");
+		expect(bare(rows[4]!).trimEnd()).toEndWith(" · 1h");
+	}
+});
+
+test("a malformed activity is dropped, never the state", () => {
+	const good = state({ activity: activity() });
+	expect(isActivity(good.activity)).toBe(true);
+	for (const bad of [
+		null,
+		"busy",
+		[],
+		{ recalls: 1, remembers: 1 },
+		{ recalls: "1", remembers: 1, recent: [] },
+		{ recalls: -1, remembers: 1, recent: [] },
+		{ recalls: 1, remembers: 1.5, recent: [] },
+		{ recalls: Number.NaN, remembers: 1, recent: [] },
+		{ recalls: 1, remembers: 1, recent: "x" },
+		{ recalls: 1, remembers: 1, recent: { length: 1 } },
+	]) {
+		expect(isActivity(bad)).toBe(false);
+		expect(isMemorqState({ ...good, activity: bad })).toBe(true);
+		// Drawn as if memorq had sent none.
+		expect(memoryLines({ ...good, activity: bad as never }, 1, 36, NOW)).toEqual(memoryLines(state(), 1, 36, NOW));
+	}
+});
+
+test("a malformed entry is skipped, the rest still draw", () => {
+	const a = activity({
+		recent: [
+			null,
+			{ kind: "recall", text: 5, at: NOW, hits: 1 },
+			{ kind: "forget", text: "x", at: NOW },
+			{ kind: "recall", text: "bad time", at: "now", hits: 1 },
+			{ kind: "recall", text: "bad hits", at: NOW, hits: -2 },
+			{ kind: "remember", text: "bad saved", at: NOW, saved: "yes" },
+			{ kind: "recall", text: "first good", at: NOW, hits: 3 },
+			{ kind: "remember", text: "second good", at: NOW - 5 * MIN, saved: true },
+			{ kind: "recall", text: "third good", at: NOW - 6 * MIN, hits: 1 },
+		] as never,
+	});
+	expect(isActivity(a)).toBe(true);
+	expect(body(memoryLines(state({ activity: a }), 0, 60, NOW)).slice(1)).toEqual([
+		'  ↳ recalled "first good" → 3 · now',
+		'  + saved "second good" · 5m',
+	]);
 });

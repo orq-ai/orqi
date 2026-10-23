@@ -110,7 +110,7 @@ arguments in one turn, errors, irreversible calls), the context split (system pr
 skills index, messages, as characters over four, measured after each run and never in a render),
 routing (while `orq/auto` routes: picks per slot, model switches and the cache they lost, the
 decider's calls, and an estimated saving against the default model, `src/routing-section.ts`),
-memory (what memorq last published, below) and process (orqi's resident memory, sampled every 5 s
+memory (what memorq last published, below; once the agent recalls or saves a note, its totals and the two latest calls take the place of the "used this turn" line) and process (orqi's resident memory, sampled every 5 s
 off the render path: now, the last minute, the peak). Each section is an `InspectorSection` in `src/harness.ts`; bare `/sidebar` lists them with a
 checkbox each, and the choice lives in `<agentDir>/orqi.json` (`src/prefs.ts`). Process starts off;
 the rest start on. A section that cannot show (an installed memorq that is silent or too old, routing while another

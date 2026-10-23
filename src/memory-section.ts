@@ -17,6 +17,22 @@ import { sectionLines } from "./inspector-rows.ts";
 /** A learn record's event, as memorq exports it. Another value (a newer memorq's) still draws, as `on <event>`. */
 export type Trigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
 
+/** One recall or save this session, as memorq reports it. `hits`: notes a recall returned; `saved`: false when the note already existed. */
+export interface MemorqRecent {
+	kind: "recall" | "remember";
+	text: string;
+	at: number;
+	hits?: number;
+	saved?: boolean;
+}
+
+/** This session's `recall` and `remember` calls: totals, and the newest few (newest first, at most five). */
+export interface MemorqActivity {
+	recalls: number;
+	remembers: number;
+	recent: MemorqRecent[];
+}
+
 export interface MemorqState {
 	/** memorq's own version, so orqi can tell "old memorq" from "none". */
 	version: string;
@@ -37,6 +53,8 @@ export interface MemorqState {
 	paused: boolean;
 	/** `on`, `readonly` or `off`; a value orqi does not know reads as on. */
 	enabled: "on" | "readonly" | "off";
+	/** Absent until the first recall or save. A malformed one is dropped by readers (`isActivity`), never the state. */
+	activity?: MemorqActivity;
 }
 
 /** What orqi offers memorq: the memory row of /sidebar, the workspace's model picker and the user's decider. */
@@ -100,6 +118,18 @@ export function isLearned(data: unknown): data is NonNullable<MemorqState["learn
 	return isObject(data) && isCount(data.count) && isInstant(data.at) && typeof data.trigger === "string";
 }
 
+/** An activity as memorq reports it: two counts and a list. Its entries are checked one by one (`isRecent`), not here. */
+export function isActivity(data: unknown): data is MemorqActivity {
+	return isObject(data) && isCount(data.recalls) && isCount(data.remembers) && Array.isArray(data.recent);
+}
+
+/** An entry of `activity.recent` the section can draw: a known kind, text, a time, and `hits` / `saved` only when well formed. */
+function isRecent(data: unknown): data is MemorqRecent {
+	if (!isObject(data) || typeof data.text !== "string" || !isInstant(data.at)) return false;
+	if (data.kind !== "recall" && data.kind !== "remember") return false;
+	return (absent(data.hits) || isCount(data.hits)) && (absent(data.saved) || typeof data.saved === "boolean");
+}
+
 /**
  * The trigger as words: `after git push`, `while idle`, `at 80% context` for a checkpoint whose threshold
  * memorq sent, `on <event>` for an event orqi has no words for. Shared by the panel line, the trajectory
@@ -149,12 +179,66 @@ function age(ms: number): string {
 	return `${Math.floor(ms / 86_400_000)}d`;
 }
 
+/** The cells the quoted text keeps before its verb gives way to a short one (or the whole text, when it is shorter). */
+const MIN_TEXT = 12;
+
 /**
- * The memory section, each line only when it has something to say:
+ * One activity entry in `width` cells: `<verb> "<text>"<result> · <age>`. The quoted text gives way first
+ * (`…` inside the quotes), never the age; and when the full verb would leave the text under `MIN_TEXT`
+ * cells, the verb shrinks to its mark (`↳`, `+`, `=`) so the text keeps its room.
+ */
+function recentLine(entry: MemorqRecent, width: number, now: number): string {
+	const [verb, mark] = entry.kind === "recall" ? ["↳ recalled", "↳"] : entry.saved === false ? ["= already saved", "="] : ["+ saved", "+"];
+	const text = printable(entry.text);
+	const result = entry.kind === "recall" && entry.hits !== undefined ? ` → ${entry.hits === 0 ? "nothing" : entry.hits}` : "";
+	const tail = `${result} · ${age(Math.max(0, now - entry.at))}`;
+	const room = (head: string) => width - visibleWidth(head) - visibleWidth(tail) - 2;
+	const head = room(`${verb} `) >= Math.min(visibleWidth(text), MIN_TEXT) ? `${verb} ` : `${mark} `;
+	return `${head}"${truncateToWidth(text, Math.max(1, room(head)), "…")}"${tail}`;
+}
+
+/**
+ * The activity view's first line: `21 notes · 3 opened · 2 recalled · 1 saved`, a zero part left out
+ * except the notes. When it does not fit, the word `notes` goes first; anything still over is cut by the caller.
+ */
+function totalsLine(state: MemorqState, activity: MemorqActivity, reads: number, width: number): string {
+	const parts = [
+		reads > 0 ? `${reads} opened` : "",
+		activity.recalls > 0 ? `${activity.recalls} recalled` : "",
+		activity.remembers > 0 ? `${activity.remembers} saved` : "",
+	].filter(Boolean);
+	const full = [plural(state.notes, "note"), ...parts].join(" · ");
+	return visibleWidth(full) <= width ? full : [String(state.notes), ...parts].join(" · ");
+}
+
+/** The status line: why nothing is learned, the review running, failed or due. At most one, in this order. */
+function statusLine(state: MemorqState): string | undefined {
+	if (state.paused) return "learning paused · /memory";
+	if (state.enabled === "readonly") return "read-only · learns nothing";
+	if (state.review?.running === true) return `reviewing ${state.review.notes} notes…`;
+	if (typeof state.review?.failed === "string") return "last review failed";
+	if (typeof state.review?.dueInSessions === "number")
+		return state.review.dueInSessions > 0
+			? `next memory review in ${plural(state.review.dueInSessions, "session")}`
+			: "next memory review at next start";
+	return undefined;
+}
+
+/** Whether there is anything to draw in the activity view: a call counted, or an entry kept. */
+const hasActivity = (activity: unknown): activity is MemorqActivity =>
+	isActivity(activity) && (activity.recalls > 0 || activity.remembers > 0 || activity.recent.some(isRecent));
+
+/**
+ * The memory section, each line only when it has something to say. Before memorq reports any activity:
  *   47 notes for this repo
  *   using 3 this turn · read 1
  *   learned 2 after last git push · 3m
  *   next memory review in 2 sessions
+ * Once the agent has recalled or saved something it is the session's activity, still at most four lines:
+ *   47 notes · 3 opened · 2 recalled · 1 saved
+ *   ↳ recalled "golden test clock" → 2 · now
+ *   + saved "Golden test depends on the clock" · 3m
+ *   learned 2 after last git push · 1h          (else the status line: paused, review, ...)
  * Nothing at all when memorq has not spoken or memory is off.
  */
 export function memoryLines(state: MemorqState | undefined, reads: number, width: number, now = Date.now()): string[] {
@@ -162,22 +246,21 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 	const why = state.paused ? "learning paused" : state.enabled === "readonly" ? "read-only" : undefined;
 	if (!state.stores.notes && !state.notes) return sectionLines("memory", ["not a git repo · nothing to learn"], width);
 	if (!state.notes) return sectionLines("memory", [`no notes yet · ${why ?? "learns as you work"}`], width);
+	// The body is indented two cells by sectionLines.
+	const inner = width - 2;
+	// The last learn and the status are today's closing lines; the activity view has room for one of them.
+	const closing = [isLearned(state.learned) ? learnedLine(state.learned, inner, now) : undefined, statusLine(state)].filter(
+		(line): line is string => line !== undefined,
+	);
+	if (hasActivity(state.activity)) {
+		const recent = state.activity.recent.filter(isRecent).slice(0, 2);
+		const body = [totalsLine(state, state.activity, reads, inner), ...recent.map((entry) => recentLine(entry, inner, now))];
+		return sectionLines("memory", [...body, ...closing.slice(0, 4 - body.length)], width);
+	}
 	const body = [`${plural(state.notes, "note")} for this repo`];
 	if (state.usedThisTurn > 0) body.push(`using ${state.usedThisTurn} this turn${reads > 0 ? ` · read ${reads}` : ""}`);
 	else if (reads > 0) body.push(`read ${reads} this session`);
-	// The body is indented two cells by sectionLines.
-	if (isLearned(state.learned)) body.push(learnedLine(state.learned, width - 2, now));
-	if (state.paused) body.push("learning paused · /memory");
-	else if (state.enabled === "readonly") body.push("read-only · learns nothing");
-	else if (state.review?.running === true) body.push(`reviewing ${state.review.notes} notes…`);
-	else if (typeof state.review?.failed === "string") body.push("last review failed");
-	else if (typeof state.review?.dueInSessions === "number")
-		body.push(
-			state.review.dueInSessions > 0
-				? `next memory review in ${plural(state.review.dueInSessions, "session")}`
-				: "next memory review at next start",
-		);
-	return sectionLines("memory", body, width);
+	return sectionLines("memory", [...body, ...closing], width);
 }
 
 /** `inner` lies inside `dir` (not the folder itself). */
