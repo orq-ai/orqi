@@ -461,6 +461,12 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   off, so the RAM readout an upgrade used to show is gone until `/sidebar` turns it on. The file is
   read forgivingly (missing, unreadable or odd means the defaults; unknown ids are ignored) and each
   toggle rereads it and changes only its own id, so two orqi windows keep each other's choices.
+  The frame draws every header (` ─ title · summary ─`, the summary from the section's `summary()`),
+  so a section is read by its header; `lines()` is only the body, and an empty body folds the section
+  to its header (signals with nothing firing, process unless expanded). A body line is a string,
+  painted in one role as before, or segments (`Seg[]`, `{ role, text }`), cut to width on their plain
+  text and only then painted, so a cut never splits an escape code. `alt+c` and `alt+m` toggle context
+  and memory between compact and expanded, saved as `sidebarDepth` in the same file and the same way.
 - **`/compact-at` moves pi's reserve, it does not compact.** pi compacts once the context passes
   `window - compaction.reserveTokens` (16384 by default, about 92% of 200k), and its SettingsManager
   has no setter for the reserve, nor pi's `/settings` a slot for an extension. So the percent lives in

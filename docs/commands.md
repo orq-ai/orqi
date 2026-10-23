@@ -66,6 +66,7 @@ The orq plugin adds its own commands too: `/quickstart`, `/traces`, `/analytics`
 | `!` | Runs a shell command |
 | `ctrl+o` | Expands a tool result to pretty-printed JSON |
 | `alt+s` | Shows or hides the sidebar |
+| `alt+c`, `alt+m` | Opens the sidebar's context or memory section to its expanded view, and back |
 | `alt+p` | Toggles plan mode |
 | mouse wheel | Scrolls the sidebar's trajectory |
 
@@ -76,13 +77,15 @@ It sits beside the transcript from 140 columns wide. `alt+s` forces it on or off
 | Section | Shows |
 |---|---|
 | trajectory | Every step: messages, tool calls, routing, memory. Its title counts steps and turns |
-| signals | Warnings such as a tool called three times with the same arguments, errors, calls that cannot be undone |
+| signals | Warnings such as a tool called three times with the same arguments, errors, calls that cannot be undone. Just `signals · ok` while there are none |
 | context | Where the context window goes, and the cache hit rate |
 | routing | Under `orq/auto`: picks per model, switches, the decider's cost, an estimated saving |
 | memory | With memorq installed: notes for this repository, notes in use, the last thing learned |
-| process | orqi's own memory use. Off until you turn it on |
+| process | orqi's own memory use in its title; expanded, the last minute and the peak. Off until you turn it on |
 
-`/sidebar` switches sections on and off, and the choice is saved.
+`/sidebar` switches sections on and off, and the choice is saved. Each title answers its section's
+question (`signals · ok`, `process · 174 MB`), and a section with nothing to say shows its title alone.
+`alt+c` and `alt+m` expand context and memory; which sections are expanded is saved too.
 
 ## Routing
 

@@ -5,7 +5,8 @@
  * is never in a project's `.orqi/`, which is read only when the project is
  * trusted. It holds which sidebar sections show, the decider saved with
  * `/decider` (ctrl+s or `--save`), the models `/route models` saved for
- * `orq/auto`'s slots and where auto-compaction starts.
+ * `orq/auto`'s slots, where auto-compaction starts and which sections are
+ * expanded (`alt+c`, `alt+m`).
  *
  * Read forgivingly (a missing, unreadable or odd file is the defaults; an id
  * orqi does not know is ignored) and written whole, so the next write drops
@@ -32,6 +33,9 @@ export const DEFAULT_SECTIONS: Readonly<Record<SectionId, boolean>> = Object.fre
 	process: false,
 });
 
+/** How much a sidebar section says: compact (the default, a few lines) or expanded (`alt+c` context, `alt+m` memory). */
+export type Depth = "compact" | "expanded";
+
 /** `/compact-at`'s range, in percent of the context window. Below 30, the kept recent turns plus the summary can sit over the trigger. */
 export const COMPACT_AT_MIN = 30;
 export const COMPACT_AT_MAX = 95;
@@ -48,6 +52,8 @@ export interface Prefs {
 	compactAt?: number;
 	/** The model saved for each `orq/auto` slot with `/route models`, by rung; a rung left out is automatic. */
 	routeModels?: Partial<Record<Rung, string>>;
+	/** The sections opened to expanded; a section left out is compact. */
+	sidebarDepth?: Partial<Record<SectionId, Depth>>;
 }
 
 /** `orq/auto`'s rungs as orqi.json keys them (the slots fast, default and frontier). */
@@ -65,11 +71,19 @@ function routeModelsOf(value: unknown): Partial<Record<Rung, string>> | undefine
 	return Object.keys(out).length ? out : undefined;
 }
 
+/** Only known sections set to `expanded`: compact is the default, so it is never kept, and anything else is no choice. */
+function depthsOf(value: unknown): Partial<Record<SectionId, Depth>> | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const out: Partial<Record<SectionId, Depth>> = {};
+	for (const id of SECTIONS) if ((value as Record<string, unknown>)[id] === "expanded") out[id] = "expanded";
+	return Object.keys(out).length ? out : undefined;
+}
+
 const FILE = "orqi.json";
 
 export function readPrefs(agentDir: string): Prefs {
 	const sections = { ...DEFAULT_SECTIONS };
-	let file: { sections?: unknown; decider?: unknown; compactAt?: unknown; routeModels?: unknown } | null = null;
+	let file: { sections?: unknown; decider?: unknown; compactAt?: unknown; routeModels?: unknown; sidebarDepth?: unknown } | null = null;
 	try {
 		file = JSON.parse(readFileSync(join(agentDir, FILE), "utf8"));
 	} catch {
@@ -85,11 +99,13 @@ export function readPrefs(agentDir: string): Prefs {
 	}
 	const compactAt = file?.compactAt;
 	const routeModels = routeModelsOf(file?.routeModels);
+	const sidebarDepth = depthsOf(file?.sidebarDepth);
 	return {
 		sections,
 		...(decider ? { decider } : {}),
 		...(isCompactAt(compactAt) ? { compactAt } : {}),
 		...(routeModels ? { routeModels } : {}),
+		...(sidebarDepth ? { sidebarDepth } : {}),
 	};
 }
 
@@ -102,9 +118,12 @@ export function writePrefs(agentDir: string, prefs: Prefs): void {
 	try {
 		const compactAt = isCompactAt(prefs.compactAt) ? prefs.compactAt : undefined;
 		const routeModels = routeModelsOf(prefs.routeModels);
-		writeFileSync(tmp, `${JSON.stringify({ sections, decider: prefs.decider || undefined, compactAt, routeModels }, null, 2)}\n`, {
-			mode: 0o600,
-		});
+		const sidebarDepth = depthsOf(prefs.sidebarDepth);
+		writeFileSync(
+			tmp,
+			`${JSON.stringify({ sections, decider: prefs.decider || undefined, compactAt, routeModels, sidebarDepth }, null, 2)}\n`,
+			{ mode: 0o600 },
+		);
 		renameSync(tmp, join(agentDir, FILE));
 	} finally {
 		rmSync(staging, { recursive: true, force: true });

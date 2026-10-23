@@ -23,17 +23,7 @@ import {
 } from "./harness.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
-import {
-	contextLines,
-	minimapRow,
-	minimapRows,
-	trajectoryTitle,
-	peekLines,
-	processLines,
-	sectionLines,
-	signalLines,
-	type ContextSplit,
-} from "./inspector-rows.ts";
+import { contextLines, minimapRow, minimapRows, trajectoryTitle, peekLines, sectionLines, type ContextSplit } from "./inspector-rows.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines, cells, filterRows, fit, oneLine, Panel, plainPanel } from "./panel.ts";
 import { hintsSection, schemaLines } from "./mcp.ts";
@@ -42,7 +32,7 @@ import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step 
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 import { createDecider } from "./decider.ts";
 import { registerRouting } from "./router.ts";
-import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
+import { DEFAULT_SECTIONS, readPrefs, SECTIONS, writePrefs } from "./prefs.ts";
 import { ALLOW_ONCE, ALLOW_TURN, DENY, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import { APPROVED, FRESH, NOT_PLANNING, PLAN_OFF, PLAN_ON, planPath } from "./plan.ts";
@@ -685,6 +675,8 @@ function harnessOn(
 	const widgets = new Map<string, unknown>();
 	const opened: { panel?: Panel; sidebar?: { render(width: number): string[] } } = {};
 	let footer: { render(width: number): string[] } | undefined;
+	/** How many redraws the harness asked the TUI for. */
+	let renders = 0;
 	let branchChanged: (() => void) | undefined;
 	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
 	const ctx = {
@@ -702,7 +694,7 @@ function harnessOn(
 			setWorkingMessage: () => {},
 			onTerminalInput: () => () => {},
 			setFooter: (factory: any) => {
-				footer = factory({ requestRender: () => {} }, plainTheme, {
+				footer = factory({ requestRender: () => renders++ }, plainTheme, {
 					onBranchChange: (callback: () => void) => {
 						branchChanged = callback;
 						return () => {};
@@ -765,6 +757,7 @@ function harnessOn(
 		branchChanged: () => branchChanged!(),
 		tools,
 		shortcuts,
+		renders: () => renders,
 	};
 }
 
@@ -814,6 +807,57 @@ test("/sidebar lists the sections with their state and space toggles and persist
 		const next = harnessOn(dir);
 		await next.commands.get("sidebar")!("", next.ctx);
 		expect(panelRows(next.opened.panel!)[2]).toBe("[ ] context");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("alt+c and alt+m open context and memory to expanded and back, saved beside another window's choice, and redraw", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-depth-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		const before = h.renders();
+		await h.shortcuts.get("alt+c")!(h.ctx);
+		expect(readPrefs(dir).sidebarDepth).toEqual({ context: "expanded" });
+		expect(h.renders()).toBeGreaterThan(before);
+		// Another window opens memory meanwhile: the next toggle here rereads the file and keeps it.
+		writePrefs(dir, { ...readPrefs(dir), sidebarDepth: { context: "expanded", memory: "expanded" } });
+		await h.shortcuts.get("alt+c")!(h.ctx);
+		expect(readPrefs(dir).sidebarDepth).toEqual({ memory: "expanded" });
+		// This window took memory's depth from the file, so alt+m closes it.
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(readPrefs(dir).sidebarDepth).toBeUndefined();
+		expect(readPrefs(dir).sections).toEqual(DEFAULT_SECTIONS);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("quiet sections fold to their headers: signals say ok, process its memory; expanded, process shows the last minute", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-fold-"));
+	const drawn = (h: ReturnType<typeof harnessOn>) => h.opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1));
+	try {
+		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { process: true } }));
+		const h = harnessOn(dir);
+		await h.start();
+		let lines = drawn(h);
+		const signals = lines.indexOf(` ─ signals · ok ${"─".repeat(20)}`);
+		expect(signals).toBeGreaterThan(-1);
+		expect(lines[signals + 1]!.trim()).toBe(""); // header alone, then the gap before the next section
+		const process = lines.findIndex((line) => /^ ─ process · \d+ MB ─+$/.test(line));
+		expect(process).toBeGreaterThan(-1);
+		expect(lines[process + 1]).toContain("alt+s"); // folded: the hint follows the header
+		await h.stop();
+
+		writePrefs(dir, { ...readPrefs(dir), sidebarDepth: { process: "expanded" } });
+		const open = harnessOn(dir);
+		await open.start();
+		lines = drawn(open);
+		const at = lines.findIndex((line) => /^ ─ process · \d+ MB ─+$/.test(line));
+		expect(lines[at + 1]).toMatch(/^ {2}\d+ MB +[▁▂▃▄▅▆▇█]+ +peak \d+ MB *$/);
+		await open.stop();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -2030,30 +2074,7 @@ test("panel sections: a rule, an indented body, one calm line when empty", () =>
 		"  tools  ▇▇▇▇▇▇▁▁ 17.8k msgs    2.4k",
 		"  cache 94% · 27.3k/1.1M · /context ",
 	]);
-	expect(
-		signalLines({ errors: 0, tools: 6, oneWay: 0, pending: 0 }, 36)
-			.slice(1)
-			.map((line) => line.trimEnd()),
-	).toEqual(["  no warnings · 0 irreversible calls"]);
-	expect(
-		signalLines({ loop: { tool: "get_span", count: 4 }, errors: 1, tools: 6, oneWay: 0, pending: 0 }, 40)
-			.slice(1)
-			.map((line) => line.trimEnd()),
-	).toEqual(["  ⚠ tool loop  get_span ×4 same args", "  errors 1/6 · irreversible calls 0"]);
-	expect(signalLines({ errors: 0, tools: 2, oneWay: 0, pending: 1 }, 36)[1]!.trimEnd()).toBe("  irreversible calls 0 · pending 1");
-});
-
-test("the process section: resident memory now, the last minute scaled to the peak, and the peak", () => {
-	const MB = 1_048_576;
-	const rule = ` ─ process ${"─".repeat(25)}`;
-	expect(processLines([], 0, 36)).toEqual([rule, "  measuring…".padEnd(36)]);
-	const rising = [100, 120, 140, 160, 180, 200, 212, 205, 190, 184, 184, 184, 184].map((mb) => mb * MB);
-	const [head, line] = processLines(rising, 212 * MB, 36);
-	expect(head).toBe(rule);
-	// Twelve bars: the oldest sample has scrolled out; the peak is a full block.
-	expect(line!.trimEnd()).toBe("  184 MB  ▅▆▇▇████▇▇▇▇  peak 212 MB");
-	expect(visibleWidth(line!)).toBe(36);
-	expect(processLines([1.2 * 1024 * MB], 1.2 * 1024 * MB, 36)[1]!.trimEnd()).toBe("  1.2 GB  █             peak 1.2 GB");
+	// Signals and process: inspector-rows.test.ts, with their folding.
 });
 
 test("minimap rows mark a call waiting on the gate", () => {

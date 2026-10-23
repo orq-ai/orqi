@@ -12,6 +12,7 @@
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { contextBar, dollars, tokens } from "./footer.ts";
+import type { Depth } from "./prefs.ts";
 import type { Signals, Step } from "./trajectory.ts";
 
 export const MINIMAP_WIDTH = 38;
@@ -119,12 +120,108 @@ export function trajectoryTitle(steps: number, turn: number, width: number): str
 	return fit(sectionLines(fits ? title : `trajectory · ${steps} · turn ${turn}`, [], width)[0]!, width);
 }
 
+/** A section's title rule: ` ─ title ───`, as wide as the panel. */
+const rule = (title: string, width: number) => {
+	const head = ` ─ ${title} `;
+	return head + "─".repeat(Math.max(0, width - visibleWidth(head)));
+};
+
 /** A panel section under the minimap: a ` ─ title ───` rule, then the body indented. */
 export function sectionLines(title: string, body: string[], width: number, empty = "nothing yet"): string[] {
-	const rule = ` ─ ${title} `;
+	return [rule(title, width), ...(body.length ? body : [empty]).map((line) => fit(`  ${line}`, width))];
+}
+
+/** The theme roles a sidebar line is painted in: the ones all thirteen themes keep readable as text. */
+export type Role =
+	| "accent"
+	| "success"
+	| "warning"
+	| "error"
+	| "muted"
+	| "dim"
+	| "text"
+	| "syntaxFunction"
+	| "syntaxKeyword"
+	| "syntaxType";
+
+/** A run of plain text in one role. Never carries escape codes: the frame paints it. */
+export type Seg = { role: Role; text: string };
+
+/**
+ * One sidebar line: a plain string, painted in one role as before, or segments, each in its own role. A
+ * section moves from strings to segments on its own; the frame paints both.
+ */
+export type Line = string | Seg[];
+
+const graphemes = new Intl.Segmenter();
+
+/**
+ * Plain text cut to at most `cells`, by whole graphemes. pi-tui's `truncateToWidth` adds a reset code
+ * where it cuts, which a segment, painted afterwards, must not carry.
+ */
+function cutPlain(text: string, cells: number): string {
+	let out = "";
+	let used = 0;
+	for (const { segment } of graphemes.segment(text)) {
+		const width = visibleWidth(segment);
+		if (used + width > cells) break;
+		out += segment;
+		used += width;
+	}
+	return out;
+}
+
+export const lineText = (line: Line) => (typeof line === "string" ? line : line.map((seg) => seg.text).join(""));
+
+/**
+ * Segments cut to exactly `width` cells, measured on their plain text, so a cut never lands inside an escape
+ * code (the paint comes after). Too long, the last cell is `…` in the role of the segment it cut; short, the
+ * line is padded.
+ */
+export function fitSegs(segs: Seg[], width: number): Seg[] {
+	const out: Seg[] = [];
+	let used = 0;
+	if (visibleWidth(lineText(segs)) <= width) {
+		out.push(...segs);
+		used = visibleWidth(lineText(segs));
+	} else {
+		let room = Math.max(0, width - 1);
+		for (const seg of segs) {
+			const cells = visibleWidth(seg.text);
+			if (cells <= room) {
+				out.push(seg);
+				room -= cells;
+				continue;
+			}
+			out.push({ role: seg.role, text: `${cutPlain(seg.text, room)}…` });
+			break;
+		}
+		used = visibleWidth(lineText(out));
+	}
+	if (used < width) out.push({ role: out.at(-1)?.role ?? "text", text: " ".repeat(width - used) });
+	return out;
+}
+
+/**
+ * Paint a line already cut to width. A string keeps one role over the whole line (`roleOf` reads it), exactly
+ * as the frame painted strings before segments; segments are painted each in its own role, and blank ones
+ * (indent, padding) are left unpainted.
+ */
+export function paintLine(line: Line, fg: (role: string, text: string) => string, roleOf: (text: string) => string): string {
+	if (typeof line === "string") return fg(roleOf(line), line);
+	return line.map((seg) => (seg.text.trim() ? fg(seg.role, seg.text) : seg.text)).join("");
+}
+
+/**
+ * One section as the frame draws it: the header ` ─ title · summary ───`, where the summary is the section's
+ * answer (`signals · ok`), then the body indented two cells and cut to `width`. An empty body folds the
+ * section to its header: a quiet section says so in one line.
+ */
+export function sectionBlock(title: string, summary: string | undefined, body: Line[], width: number): [string, ...Line[]] {
+	const header = rule(summary ? `${title} · ${summary}` : title, width);
 	return [
-		rule + "─".repeat(Math.max(0, width - visibleWidth(rule))),
-		...(body.length ? body : [empty]).map((line) => fit(`  ${line}`, width)),
+		visibleWidth(header) > width ? `${cutPlain(header, width - 1)}…` : header,
+		...body.map((line) => (typeof line === "string" ? fit(`  ${line}`, width) : fitSegs([{ role: "text", text: "  " }, ...line], width))),
 	];
 }
 
@@ -160,44 +257,48 @@ export const contextUsed = (split: ContextSplit) =>
  *   cache 94% · 27.3k/1.1M · /context
  */
 export function contextLines(split: ContextSplit, width: number): string[] {
-	const used = contextUsed(split);
-	if (split.agent)
-		return sectionLines(
-			"context",
-			[`agent ${split.agent}: its prompt`, "and tools run on orq.ai", `msgs ${k(split.messages)}/${tokens(split.window)} · /context`],
-			width,
-		);
-	const bar = (n: number) => contextBar(used ? n / used : 0);
-	const prompt = split.prompt + split.hints + split.project;
-	return sectionLines(
-		"context",
-		[
-			`prompt ${bar(prompt)}${k(prompt).padStart(6)} skills${k(split.skills).padStart(6)}`,
-			`tools  ${bar(split.tools)}${k(split.tools).padStart(6)} msgs  ${k(split.messages).padStart(6)}`,
-			[split.cache !== undefined ? `cache ${Math.round(split.cache * 100)}%` : "", `${k(used)}/${tokens(split.window)}`, "/context"]
-				.filter(Boolean)
-				.join(" · "),
-		],
-		width,
-	);
+	return sectionLines("context", contextBody(split), width);
 }
 
-/** `⚠ tool loop  get_span ×4 same args`, then the counts; one calm line when nothing fires. */
-export function signalLines(signals: Signals, width: number): string[] {
+/** The context section's body, under its header. */
+export function contextBody(split: ContextSplit): string[] {
+	const used = contextUsed(split);
+	if (split.agent)
+		return [`agent ${split.agent}: its prompt`, "and tools run on orq.ai", `msgs ${k(split.messages)}/${tokens(split.window)} · /context`];
+	const bar = (n: number) => contextBar(used ? n / used : 0);
+	const prompt = split.prompt + split.hints + split.project;
+	return [
+		`prompt ${bar(prompt)}${k(prompt).padStart(6)} skills${k(split.skills).padStart(6)}`,
+		`tools  ${bar(split.tools)}${k(split.tools).padStart(6)} msgs  ${k(split.messages).padStart(6)}`,
+		[split.cache !== undefined ? `cache ${Math.round(split.cache * 100)}%` : "", `${k(used)}/${tokens(split.window)}`, "/context"]
+			.filter(Boolean)
+			.join(" · "),
+	];
+}
+
+/** Nothing to look at: no loop, no failed call, nothing waiting on the gate. */
+const quiet = (signals: Signals) => !signals.loop && !signals.errors && !signals.pending;
+
+/** The signals header's answer: `ok` while nothing fires, so the section folds to `─ signals · ok`. */
+export function signalSummary(signals: Signals): string | undefined {
+	return quiet(signals) ? "ok" : undefined;
+}
+
+/** `⚠ tool loop  get_span ×4 same args`, then the counts; nothing while nothing fires. */
+export function signalBody(signals: Signals): string[] {
+	if (quiet(signals)) return [];
 	const body: string[] = [];
 	if (signals.loop) body.push(`⚠ tool loop  ${signals.loop.tool} ×${signals.loop.count} same args`);
-	if (!signals.loop && !signals.errors && !signals.pending) body.push(`no warnings · ${signals.oneWay} irreversible calls`);
-	else
-		body.push(
-			[
-				signals.errors ? `errors ${signals.errors}/${signals.tools}` : "",
-				`irreversible calls ${signals.oneWay}`,
-				signals.pending ? `pending ${signals.pending}` : "",
-			]
-				.filter(Boolean)
-				.join(" · "),
-		);
-	return sectionLines("signals", body, width);
+	body.push(
+		[
+			signals.errors ? `errors ${signals.errors}/${signals.tools}` : "",
+			`irreversible calls ${signals.oneWay}`,
+			signals.pending ? `pending ${signals.pending}` : "",
+		]
+			.filter(Boolean)
+			.join(" · "),
+	);
+	return body;
 }
 
 const SPARK = "▁▂▃▄▅▆▇█";
@@ -208,20 +309,25 @@ const megabytes = (bytes: number) => {
 	return mb < 1024 ? `${Math.round(mb)} MB` : `${(mb / 1024).toFixed(1)} GB`;
 };
 
+/** The process header's answer: orqi's resident memory now, `174 MB`. */
+export function processSummary(samples: number[]): string {
+	const now = samples.at(-1);
+	return now === undefined ? "measuring…" : megabytes(now);
+}
+
 /**
  *   184 MB  ▅▆▇▇████▇▇▇▇  peak 212 MB
- * The process section: orqi's resident memory now, the last twelve samples
- * scaled to the peak (a leak reads as a climb), and the peak since the session
- * started.
+ * The process section expanded: the resident memory now, the last twelve samples scaled to the peak (a
+ * leak reads as a climb), and the peak since the session started. Compact, the header says it all.
  */
-export function processLines(samples: number[], peak: number, width: number): string[] {
+export function processBody(samples: number[], peak: number, depth: Depth): string[] {
 	const now = samples.at(-1);
-	if (now === undefined) return sectionLines("process", [], width, "measuring…");
+	if (now === undefined || depth === "compact") return [];
 	const bars = samples
 		.slice(-12)
 		.map((rss) => SPARK[Math.min(SPARK.length - 1, Math.floor((rss / Math.max(1, peak)) * SPARK.length))])
 		.join("");
-	return sectionLines("process", [`${megabytes(now).padEnd(7)} ${bars.padEnd(12)}  peak ${megabytes(peak)}`], width);
+	return [`${megabytes(now).padEnd(7)} ${bars.padEnd(12)}  peak ${megabytes(peak)}`];
 }
 
 /** The peek view for one step: its header line and full content, wrapped by the caller. */

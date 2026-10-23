@@ -118,7 +118,17 @@ export function routingStats(steps: Step[], priceOf: (id: string) => Price | und
 }
 
 export function routingLines(stats: RoutingStats, width: number): string[] {
-	if (!stats.routed) return sectionLines(stats.dry ? "routing · dry run" : "routing", [], width, "no routed messages yet");
+	return sectionLines(routingSummary(stats) ? `routing · ${routingSummary(stats)}` : "routing", routingBody(stats), width);
+}
+
+/** The routing header's answer: `dry run` while the picks are only what it would have done. */
+export function routingSummary(stats: Pick<RoutingStats, "dry">): string | undefined {
+	return stats.dry ? "dry run" : undefined;
+}
+
+/** The routing section's body, under its header. */
+export function routingBody(stats: RoutingStats): string[] {
+	if (!stats.routed) return ["no routed messages yet"];
 	// In a dry run the picks are what it would have done; the title says so, the panel has no width to spare.
 	const body = [RUNGS.map((rung) => `${SLOT[rung]} ${stats.picks[rung]}`).join(" · ")];
 	const churn = [
@@ -147,5 +157,5 @@ export function routingLines(stats: RoutingStats, width: number): string[] {
 					: `costs ~${amount} more than ${base}`,
 		);
 	}
-	return sectionLines(stats.dry ? "routing · dry run" : "routing", body, width);
+	return body;
 }

@@ -43,13 +43,13 @@ orqi
 | `src/frontmatter.ts` | `normalizeCommand`: quotes plugin command frontmatter that strict YAML would reject |
 | `src/update.ts` | `orqi update`: the release check, the launch notice text, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
-| `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the sidebar, working indicator, agent mode, exit summary, `alt+s`, and the commands that own state: `/route /sidebar /compact-at` |
+| `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the sidebar, working indicator, agent mode, exit summary, `alt+s` `alt+c` `alt+m`, and the commands that own state: `/route /sidebar /compact-at` |
 | `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /traces /analytics /overview /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
 | `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, the dialog before a call that cannot be undone, and plan mode's read-only allowlist |
 | `src/plan.ts` | Plan mode: what the model is told, the `exit_plan` tool and its approval dialog, where plans are saved |
 | `src/handoff.ts` | `/handoff <goal>`: pi's handoff example, adapted. Drafts a fresh session's first message from this branch on a plain chat model, points at the plan, keeps plan mode |
-| `src/prefs.ts` | `<agentDir>/orqi.json`: which sidebar sections show, the saved decider, `orq/auto`'s saved models and `/compact-at`'s percent, read forgivingly and written whole |
+| `src/prefs.ts` | `<agentDir>/orqi.json`: which sidebar sections show and which are expanded, the saved decider, `orq/auto`'s saved models and `/compact-at`'s percent, read forgivingly and written whole |
 | `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
 | `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
 | `src/model-picker.ts` | pi's `/model` selector over one kind of workspace model: chat models for memorq and `/route models`, classifiers for `/decider` |

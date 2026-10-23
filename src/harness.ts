@@ -18,16 +18,20 @@ import {
 	type Paint,
 } from "./footer.ts";
 import {
-	contextLines,
+	contextBody,
 	contextUsed,
-	sectionLines,
+	type Line,
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
 	minimapRows,
+	paintLine,
 	peekLines,
-	processLines,
-	signalLines,
+	processBody,
+	processSummary,
 	SPINNER,
+	sectionBlock,
+	signalBody,
+	signalSummary,
 	trajectoryTitle,
 	type ContextSplit,
 } from "./inspector-rows.ts";
@@ -38,18 +42,18 @@ import {
 	isNoteRead,
 	learnHead,
 	learnPhrase,
+	memoryBody,
 	memoryLineRole,
-	memoryLines,
 	noteRoots,
 	readPath,
 	type MemorqHost,
 	type MemorqState,
 } from "./memory-section.ts";
-import { routingLines, routingStats } from "./routing-section.ts";
+import { routingBody, routingStats, routingSummary } from "./routing-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
-import { COMPACT_AT_MAX, COMPACT_AT_MIN, isCompactAt, readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
+import { COMPACT_AT_MAX, COMPACT_AT_MIN, type Depth, isCompactAt, readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import { argSummary, MEMORY_ROW, shortTool, signals, Trajectory, type RouteMark, type Step } from "./trajectory.ts";
@@ -204,17 +208,23 @@ const WORKSPACE_STATUS = "orq-workspace";
 /** What one sidebar frame has already worked out, handed to every section it draws. */
 export interface SectionFrame {
 	signals: ReturnType<typeof signals>;
+	/** How much this section says: compact by default, expanded once `alt+c`/`alt+m` (or orqi.json) opens it. */
+	depth: Depth;
 }
 
 /**
- * One section of the sidebar under the trajectory. `lines` is a pure renderer
- * over state already measured; `unavailable` names why it cannot show (memorq
- * not installed), which greys its row in /sidebar.
+ * One section of the sidebar under the trajectory. The frame draws every header the same way,
+ * ` ─ title · summary ───`, so a section is read by its header; `lines` is the body under it, a pure
+ * renderer over state already measured. An empty body folds the section to its header (a quiet
+ * section), and undefined leaves it out of the frame (context before its first measure). `unavailable`
+ * names why it cannot show (memorq not installed), which greys its row in /sidebar.
  */
 export interface InspectorSection {
 	id: SectionId;
 	title: string;
-	lines(width: number, frame: SectionFrame): string[];
+	/** The header's answer to the section's one question: `ok` in `─ signals · ok`, `174 MB` in `─ process · 174 MB`. */
+	summary?(frame: SectionFrame): string | undefined;
+	lines(width: number, frame: SectionFrame): Line[] | undefined;
 	unavailable?(): string | undefined;
 	/** A word for /sidebar's row while the section is still on: `loading…`. */
 	note?(): string | undefined;
@@ -575,6 +585,33 @@ export function orqHarness(deps: HarnessDeps) {
 				}
 			}
 		};
+		/**
+		 * Open one section to expanded, or back to compact, and save it as setSection does: the file is read
+		 * again and only this id changes, and this window takes up the other depths the file holds. Never
+		 * from a render.
+		 */
+		const toggleDepth = (ctx: ExtensionContext | undefined, id: SectionId) => {
+			const depth: Depth = prefs.sidebarDepth?.[id] === "expanded" ? "compact" : "expanded";
+			const set = (into: Prefs) => {
+				const depths = { ...into.sidebarDepth, [id]: depth };
+				if (depth === "compact") delete depths[id];
+				into.sidebarDepth = Object.keys(depths).length ? depths : undefined;
+			};
+			set(prefs);
+			try {
+				const fresh = readPrefs(deps.agentDir);
+				set(fresh);
+				writePrefs(deps.agentDir, fresh);
+				prefs.sidebarDepth = fresh.sidebarDepth;
+			} catch (error) {
+				try {
+					ctx?.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
+				} catch {
+					// The depth still applies in memory; only the notice is lost.
+				}
+			}
+			render();
+		};
 		// ── memory: what memorq last published on the bus, and the notes the model opened ──
 		// Subscribed at load, not at session_start: memorq, a path extension, loads first and may publish
 		// before orqi's session_start runs; pi drops these subscriptions with this instance.
@@ -874,13 +911,20 @@ export function orqHarness(deps: HarnessDeps) {
 		const sections: InspectorSection[] = [
 			// Drawn by the frame itself (it fills the height the others leave); listed here so /sidebar offers it.
 			{ id: "trajectory", title: "trajectory", lines: () => [] },
-			{ id: "signals", title: "signals", lines: (w, frame) => signalLines(frame.signals, w) },
-			// Empty until the first measure: an empty section is skipped.
-			{ id: "context", title: "context", lines: (w) => (split ? contextLines(split, w) : []) },
+			{
+				id: "signals",
+				title: "signals",
+				summary: (frame) => signalSummary(frame.signals),
+				lines: (_w, frame) => signalBody(frame.signals),
+			},
+			// Left out until the first measure.
+			// ponytail: expanded is compact until the context section's expanded rows land.
+			{ id: "context", title: "context", lines: () => (split ? contextBody(split) : undefined) },
 			{
 				id: "memory",
 				title: "memory",
-				lines: (w) => (waitingForMemorq() ? sectionLines("memory", ["loading…"], w) : memoryLines(memorqState, noteReads, w)),
+				// ponytail: expanded is compact until the memory section's event list lands.
+				lines: (w) => (waitingForMemorq() ? ["loading…"] : memoryBody(memorqState, noteReads, w)),
 				unavailable: memoryUnavailable,
 				note: () => (waitingForMemorq() ? "loading…" : undefined),
 				hidden: memorqAbsent,
@@ -888,8 +932,8 @@ export function orqHarness(deps: HarnessDeps) {
 			{
 				id: "routing",
 				title: "routing",
-				lines: (w) =>
-					routingLines(routingStats(trajectory.steps, priceOf, deps.routing?.pool.medium ?? "", deps.routing?.dryRun ?? false), w),
+				summary: () => routingSummary({ dry: deps.routing?.dryRun ?? false }),
+				lines: () => routingBody(routingStats(trajectory.steps, priceOf, deps.routing?.pool.medium ?? "", deps.routing?.dryRun ?? false)),
 				// Drawn only while orq/auto picks the model, or once it has routed this session. Otherwise
 				// greyed in /sidebar with the way in, rather than left out where nobody would find it.
 				unavailable: () =>
@@ -899,7 +943,7 @@ export function orqHarness(deps: HarnessDeps) {
 						: ROUTING_OFF,
 				hidden: () => !deps.routing,
 			},
-			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
+			{ id: "process", title: "process", summary: () => processSummary(rss), lines: (_w, frame) => processBody(rss, rssPeak, frame.depth) },
 		];
 		/**
 		 * The sidebar: a box as tall as its
@@ -945,8 +989,9 @@ export function orqHarness(deps: HarnessDeps) {
 				const showTrajectory = prefs.sections.trajectory;
 				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
 					if (section.id === "trajectory") return [];
-					const lines = section.lines(inner, { signals: found });
-					return lines.length ? [{ id: section.id, lines }] : [];
+					const view: SectionFrame = { signals: found, depth: prefs.sidebarDepth?.[section.id] ?? "compact" };
+					const body = section.lines(inner, view);
+					return body ? [{ id: section.id, lines: sectionBlock(section.title, section.summary?.(view), body, inner) }] : [];
 				});
 				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				// The slot is the screen less what composeLayout keeps above and below it, or the overlay's
@@ -956,10 +1001,10 @@ export function orqHarness(deps: HarnessDeps) {
 				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
-				const paintSection = ({ id, lines }: { id: SectionId; lines: string[] }) => [
+				const paintSection = ({ id, lines: [header, ...body] }: { id: SectionId; lines: [string, ...Line[]] }) => [
 					blank,
-					side(theme.fg("dim", lines[0]!)),
-					...lines.slice(1).map((line) => side(theme.fg(sectionLineRole(id, line), line))),
+					side(theme.fg("dim", header)),
+					...body.map((line) => side(paintLine(line, theme.fg, (text) => sectionLineRole(id, text)))),
 				];
 				const title = " sidebar ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
@@ -1743,6 +1788,15 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		pi.registerShortcut("alt+s", { description: "toggle the orqi sidebar", handler: () => toggleMinimap() });
+		// pi binds neither (a test checks every orqi shortcut against pi's key table).
+		pi.registerShortcut("alt+c", {
+			description: "the sidebar's context section: more or less",
+			handler: (ctx) => toggleDepth(ctx, "context"),
+		});
+		pi.registerShortcut("alt+m", {
+			description: "the sidebar's memory section: more or less",
+			handler: (ctx) => toggleDepth(ctx, "memory"),
+		});
 
 		// ── plan mode ─────────────────────────────────────────────────────────
 		pi.registerTool(

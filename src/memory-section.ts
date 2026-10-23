@@ -289,11 +289,17 @@ function readActivity(data: unknown): { recalls: number; remembers: number; rece
  * Nothing at all when memorq has not spoken or memory is off.
  */
 export function memoryLines(state: MemorqState | undefined, reads: number, width: number, now = Date.now()): string[] {
-	if (!state || state.enabled === "off") return [];
+	const body = memoryBody(state, reads, width, now);
+	return body ? sectionLines("memory", body, width) : [];
+}
+
+/** The memory section's body, under its header (`memoryLines` above); undefined when there is no section to draw. */
+export function memoryBody(state: MemorqState | undefined, reads: number, width: number, now = Date.now()): string[] | undefined {
+	if (!state || state.enabled === "off") return undefined;
 	const why = state.paused ? "learning paused" : state.enabled === "readonly" ? "read-only" : undefined;
-	if (!state.stores.notes && !state.notes) return sectionLines("memory", ["not a git repo · nothing to learn"], width);
-	if (!state.notes) return sectionLines("memory", [`no notes yet · ${why ?? "learns as you work"}`], width);
-	// The body is indented two cells by sectionLines.
+	if (!state.stores.notes && !state.notes) return ["not a git repo · nothing to learn"];
+	if (!state.notes) return [`no notes yet · ${why ?? "learns as you work"}`];
+	// The frame indents the body two cells.
 	const inner = width - 2;
 	// The last learn and the status are today's closing lines, in today's order; `urgency` (lowest first) says
 	// which one stays when the activity view has room for only one.
@@ -307,16 +313,12 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 		const room = 4 - body.length;
 		const kept = closing.length <= room ? closing : [...closing].sort((a, b) => a.urgency - b.urgency).slice(0, room);
 		const lines = [...body, ...closing.filter((closer) => kept.includes(closer)).map((closer) => closer.line)];
-		return sectionLines(
-			"memory",
-			lines.map((line) => cut(line, inner)),
-			width,
-		);
+		return lines.map((line) => cut(line, inner));
 	}
 	const body = [`${plural(state.notes, "note")} for this repo`];
 	if (state.usedThisTurn > 0) body.push(`using ${state.usedThisTurn} this turn${reads > 0 ? ` · read ${reads}` : ""}`);
 	else if (reads > 0) body.push(`read ${reads} this session`);
-	return sectionLines("memory", [...body, ...closing.map((closer) => closer.line)], width);
+	return [...body, ...closing.map((closer) => closer.line)];
 }
 
 /**
