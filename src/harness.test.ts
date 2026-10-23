@@ -2096,6 +2096,34 @@ test("signals: a loop is the same tool with the same arguments three times in th
 	expect(signals(trajectory.steps).oneWay).toBe(1);
 });
 
+test("signals count a loop and errors inside a subagent", () => {
+	const child = (id: number, status: "ok" | "error" = "ok") =>
+		({
+			id,
+			turn: 7,
+			role: "tool",
+			label: "get_span",
+			toolName: "mcp__orq__get_span",
+			args: { span_id: "x" },
+			detail: "",
+			status,
+			ts: 0,
+		}) as Step;
+	const steps = [
+		{
+			id: 1,
+			turn: 1,
+			role: "subagent",
+			label: "investigator",
+			detail: "",
+			status: "running",
+			ts: 0,
+			children: [child(2), child(3), child(4, "error")],
+		},
+	] as Step[];
+	expect(signals(steps)).toMatchObject({ loop: { tool: "get_span", count: 3 }, errors: 1, tools: 3 });
+});
+
 test("panel sections: a rule, an indented body, one calm line when empty", () => {
 	expect(sectionLines("memory", [], 36)).toEqual([" ─ memory ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
 	const split: ContextSplit = {

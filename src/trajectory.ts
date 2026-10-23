@@ -459,7 +459,14 @@ export interface Signals {
 
 /** What the signals section warns about, from the steps alone. */
 export function signals(steps: Step[], turn = steps.at(-1)?.turn ?? 0): Signals {
-	const tools = steps.filter((step) => step.role === "tool");
+	// A subagent's calls count as its turn's: replayed children carry the child session's own turns.
+	const tools = steps.flatMap((step) =>
+		step.role === "tool"
+			? [step]
+			: step.role === "subagent"
+				? (step.children ?? []).filter((child) => child.role === "tool").map((child) => ({ ...child, turn: step.turn }))
+				: [],
+	);
 	const counts = new Map<string, { tool: string; count: number }>();
 	for (const step of tools) {
 		if (step.turn !== turn) continue;
