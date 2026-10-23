@@ -387,7 +387,9 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   run if idle (pi never injects mid-stream). It is a `custom_message` entry, so it is in the model's
   context, `/resume` replays it into the trajectory, and its renderer draws one line. The `pi` handle
   comes from a one-line extension factory, rebuilt per session, and `session_shutdown` disposes the
-  children still running, so a result never lands in the next session. The turn's `signal` is not
+  children still running, so a result never lands in the next session. It first sends each one a
+  `stopped` message with no `triggerTurn`: the model was promised a result, and `/reload` (also run by
+  `/plugin update`) shuts down and keeps the same session, so without it the model would wait forever. The turn's `signal` is not
   handed to a background child or its calls: Esc ends the turn, not the investigation. One-shot runs
   it in the foreground and says so in the result, because the process would exit before the result
   arrived. There is no concurrency cap: each child shows its own cost in the sidebar; add one when

@@ -1196,8 +1196,20 @@ export function orqHarness(deps: HarnessDeps) {
 		// This handle dies with its session: stop everything that would outlive it.
 		pi.on("session_shutdown", (event, ctx) => {
 			sessionEnded = true;
-			// A background subagent dies with its session: its result would land in the next one.
+			// A background subagent dies with its session (quit, /new, /resume, and /reload, which keeps it):
+			// its result would land in the next one. The model was promised a result, so it is told, in the
+			// session file and without starting a run.
 			for (const child of deps.subagents?.running ?? []) {
+				try {
+					pi.sendMessage({
+						customType: SUBAGENT_ENTRY,
+						content: `subagent "${child.agent}" stopped (#${child.toolCallId}): the session ended before it finished`,
+						display: true,
+						details: { agent: child.agent, toolCallId: child.toolCallId, isError: true } satisfies SubagentResultDetails,
+					});
+				} catch {
+					// A session that cannot take it any more: the row reads interrupted on resume instead.
+				}
 				try {
 					child.dispose();
 				} catch {
@@ -1376,7 +1388,16 @@ export function orqHarness(deps: HarnessDeps) {
 				const details = message.details;
 				if (!details) return undefined;
 				if (options.expanded) return new Text(theme.fg("toolOutput", typeof message.content === "string" ? message.content : ""), 1, 0);
-				const line = `⇢ ${details.agent} ${details.isError ? "failed" : "finished"} · ${summaryLine(details.model, details.usage)}`;
+				// `stopped: the session ended…`, `failed: <why>`: the message's own words, without its name and call id.
+				const said =
+					typeof message.content === "string"
+						? message.content
+								.split("\n")[0]!
+								.replace(/^subagent "[^"]*" /, "")
+								.replace(/ \(#[^)]*\)/, "")
+						: "failed";
+				const summary = summaryLine(details.model, details.usage);
+				const line = `⇢ ${details.agent} ${details.isError ? said : "finished"}${summary ? ` · ${summary}` : ""}`;
 				return new Text(theme.fg(details.isError ? "error" : "dim", line), 1, 0);
 			} catch {
 				return undefined;

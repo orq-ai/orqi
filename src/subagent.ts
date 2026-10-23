@@ -81,6 +81,8 @@ export interface SubagentDeps {
 	types: () => Record<string, AgentType>;
 	/** Where a background run delivers its result, and the children still running. */
 	host: SubagentHost;
+	/** pi's `createAgentSession`; tests hand in a child they settle by hand. */
+	createSession?: typeof createAgentSession;
 }
 
 /**
@@ -89,7 +91,14 @@ export interface SubagentDeps {
  */
 export interface SubagentHost {
 	pi?: Pick<ExtensionAPI, "sendMessage">;
-	running: Set<{ dispose(): void }>;
+	running: Set<RunningSubagent>;
+}
+
+/** A background child still running: enough to stop it and to tell the model it stopped. */
+export interface RunningSubagent {
+	agent: string;
+	toolCallId: string;
+	dispose(): void;
 }
 
 /** Whether a call that asked for the background gets it: one-shot has no session left to deliver to. */
@@ -247,7 +256,7 @@ export function createSubagentTool(deps: SubagentDeps) {
 				extensionFactories: [tagged(agent)],
 			});
 			await resourceLoader.reload();
-			const { session } = await createAgentSession({
+			const { session } = await (deps.createSession ?? createAgentSession)({
 				agentDir: deps.agentDir,
 				model,
 				modelRuntime: deps.modelRuntime,
@@ -274,24 +283,37 @@ export function createSubagentTool(deps: SubagentDeps) {
 				// Not awaited, and deaf to the turn's signal: Esc ends the turn, not the investigation.
 				const started = Date.now();
 				const { host } = deps;
-				host.running.add(session);
+				const running: RunningSubagent = { agent, toolCallId, dispose: () => session.dispose() };
+				host.running.add(running);
 				const settle = (failure?: unknown) => {
-					// Gone from the set means session_shutdown disposed it: there is no session to tell.
-					if (!host.running.delete(session)) return;
-					const done = outcome();
-					session.dispose();
-					const error = failure === undefined ? done.error : String(failure);
-					const details: SubagentResultDetails = {
-						...done.details,
-						toolCallId,
-						isError: error !== undefined,
-						durationMs: Date.now() - started,
-						usage: { input: done.usage.input, output: done.usage.output, cacheRead: done.usage.cacheRead, cost: done.usage.cost.total },
-					};
-					const content =
-						error === undefined
-							? `subagent "${agent}" finished (#${toolCallId}):\n${done.text}`
-							: `subagent "${agent}" failed (#${toolCallId}): ${error}`;
+					// Gone from the set means session_shutdown disposed it and told the model: nothing more to say.
+					if (!host.running.delete(running)) return;
+					let content: string;
+					let details: SubagentResultDetails;
+					// Never throws: this runs from a promise nobody awaits, and an unhandled rejection ends orqi.
+					try {
+						const done = outcome();
+						const error = failure === undefined ? done.error : String(failure);
+						details = {
+							...done.details,
+							toolCallId,
+							isError: error !== undefined,
+							durationMs: Date.now() - started,
+							usage: { input: done.usage.input, output: done.usage.output, cacheRead: done.usage.cacheRead, cost: done.usage.cost.total },
+						};
+						content =
+							error === undefined
+								? `subagent "${agent}" finished (#${toolCallId}):\n${done.text}`
+								: `subagent "${agent}" failed (#${toolCallId}): ${error}`;
+					} catch (unreadable) {
+						details = { agent, model: model.id, toolCallId, isError: true, durationMs: Date.now() - started };
+						content = `subagent "${agent}" failed (#${toolCallId}): ${String(failure ?? unreadable)}`;
+					}
+					try {
+						session.dispose();
+					} catch {
+						// Already torn down.
+					}
 					try {
 						host.pi?.sendMessage(
 							{ customType: SUBAGENT_ENTRY, content, display: true, details },

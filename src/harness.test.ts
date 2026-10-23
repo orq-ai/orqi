@@ -764,6 +764,8 @@ function harnessOn(
 	const renderers = new Map<string, (entry: any, options: any, theme: any) => any>();
 	/** Session entries the harness appended; they join the branch, as pi's session file does. */
 	const entries: { customType: string; data: any }[] = [];
+	/** Custom messages the harness sent (pi.sendMessage), with their delivery options. */
+	const sent: { message: any; options: any }[] = [];
 	const branch = options.branch ?? [];
 	const bus = options.bus ?? fakeBus();
 	// pi drops an instance's bus subscriptions with it: stop() does the same.
@@ -781,6 +783,7 @@ function harnessOn(
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
 		registerMessageRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
+		sendMessage: (message: any, options?: any) => sent.push({ message, options }),
 		appendEntry: (customType: string, data: any) => {
 			entries.push({ customType, data });
 			branch.push({ type: "custom", customType, data, timestamp: new Date().toISOString() });
@@ -886,6 +889,7 @@ function harnessOn(
 		memory,
 		read,
 		entries,
+		sent,
 		renderers,
 		branch,
 		rows,
@@ -2751,7 +2755,7 @@ test("a resumed background subagent is drawn finished from its orqi-subagent ent
 		},
 	];
 	let disposed = 0;
-	const subagents = { running: new Set([{ dispose: () => disposed++ }]) };
+	const subagents = { running: new Set([{ agent: "analyst", toolCallId: "s2", dispose: () => disposed++ }]) };
 	const h = harnessOn(dir, { branch, subagents });
 	try {
 		await h.start();
@@ -2763,12 +2767,45 @@ test("a resumed background subagent is drawn finished from its orqi-subagent ent
 			{ fg: (_t: string, text: string) => text },
 		);
 		expect(drawn.render(80).join("\n").trim()).toBe("⇢ docs finished · m · ↑10 ↓5 · $0.002");
+		const draw = (content: string, details: object) =>
+			h.renderers.get("orqi-subagent")!(
+				{ role: "custom", customType: "orqi-subagent", content, display: true, details },
+				{ expanded: false },
+				{ fg: (_t: string, text: string) => text },
+			)
+				.render(80)
+				.join("\n")
+				.trim();
+		expect(
+			draw('subagent "analyst" stopped (#s2): the session ended before it finished', { agent: "analyst", toolCallId: "s2", isError: true }),
+		).toBe("⇢ analyst stopped: the session ended before it finished");
+		expect(
+			draw('subagent "docs" failed (#s1): rate limited', {
+				agent: "docs",
+				toolCallId: "s1",
+				isError: true,
+				model: "m",
+				usage: { input: 1, output: 0, cacheRead: 0, cost: 0 },
+			}),
+		).toBe("⇢ docs failed: rate limited · m · ↑1 ↓0 · $0");
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 	expect(disposed).toBe(1);
 	expect(subagents.running.size).toBe(0);
+	// The model was told it is coming: it is told it is not, in the session file, without starting a run.
+	expect(h.sent).toEqual([
+		{
+			message: {
+				customType: "orqi-subagent",
+				content: 'subagent "analyst" stopped (#s2): the session ended before it finished',
+				display: true,
+				details: { agent: "analyst", toolCallId: "s2", isError: true },
+			},
+			options: undefined,
+		},
+	]);
 });
 
 test("plan mode blocks a subagent's one-way call: a user-defined type cannot act while planning", async () => {
