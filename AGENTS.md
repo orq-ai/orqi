@@ -393,9 +393,11 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   arrived. There is no concurrency cap: each child shows its own cost in the sidebar; add one when
   someone fans out past what the server tolerates. A background run's cost reaches the trajectory
   (sidebar, `/cost`) but not pi's `/session` totals, which count tool-result usage only.
-- **`.orqi/agents` is read only when `projectTrusted` says so, though pi's trust list does not know
-  the folder.** A project with only `.orqi/agents/` is not "trust-requiring" to pi, so it alone never
-  asks; but a cloned repo's prompt and tool list are not run unasked either. A file whose name is a
+- **`.orqi/agents` needs a stored yes, not `projectTrusted`.** pi's trust list does not know the
+  folder, so to `projectTrusted` a project holding only `.orqi/agents/` has nothing to trust and reads
+  as trusted, and a cloned repo's prompt and tool list would run unasked. `agentTypeDirs` reads it only
+  on a `/trust` yes in `trust.json` or `ORQI_TRUST_PROJECT=1`, and `/subagents` lists a skipped folder
+  with that hint, because pi's untrusted-project warning does not fire for it. A file whose name is a
   built-in's is refused, not merged: `docs` means the same thing in every project. A type naming a
   tool the workspace lacks is refused at call time with the file to fix, never run with fewer tools;
   the built-ins are exempt, their sets being reviewed against the server's list.

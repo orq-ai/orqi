@@ -6,10 +6,9 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { parseFrontmatter, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { TOOL_PREFIX } from "./mcp.ts";
 import { AGENT_TYPES, type AgentType } from "./subagent.ts";
-import { projectTrusted } from "./trust.ts";
 
 export interface AgentTypeProblem {
 	file: string;
@@ -71,12 +70,25 @@ export function loadAgentTypes(
 }
 
 /**
- * Where types are read from: the agent dir always, the project's `.orqi/agents` only when the
- * project is trusted. pi's trust list does not know that folder, so it alone never asks for trust,
- * but a cloned repo's prompt is still not run unasked.
+ * Where types are read from: the agent dir always, the project's `.orqi/agents` only on a stored yes
+ * (`/trust`) or `ORQI_TRUST_PROJECT=1`. Not `projectTrusted`: pi's trust list does not know the folder,
+ * so a project holding only `.orqi/agents` reads as having nothing to trust, and a cloned repo's
+ * prompt and tool list would run unasked.
  */
 export function agentTypeDirs(cwd: string, agentDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
 	const dirs = [join(agentDir, "agents")];
-	if (projectTrusted(cwd, agentDir, env)) dirs.push(join(cwd, ".orqi", "agents"));
+	if (env.ORQI_TRUST_PROJECT === "1" || new ProjectTrustStore(agentDir).get(cwd) === true) dirs.push(join(cwd, ".orqi", "agents"));
 	return dirs;
+}
+
+/** The types for a session in `cwd`, and a note when the project's own were skipped as untrusted. */
+export function agentTypesFor(cwd: string, agentDir: string, env: NodeJS.ProcessEnv = process.env) {
+	const dirs = agentTypeDirs(cwd, agentDir, env);
+	const loaded = loadAgentTypes(dirs);
+	const project = join(cwd, ".orqi", "agents");
+	// pi's untrusted-project warning does not know this folder, so /subagents says it.
+	if (!dirs.includes(project) && existsSync(project)) {
+		loaded.problems.push({ file: project, reason: "not loaded: this project is not trusted. /trust, then restart orqi" });
+	}
+	return loaded;
 }

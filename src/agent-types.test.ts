@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentTypeDirs, loadAgentTypes } from "./agent-types.ts";
+import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import { agentTypeDirs, agentTypesFor, loadAgentTypes } from "./agent-types.ts";
 import { AGENT_TYPES } from "./subagent.ts";
 
 const VALID = "---\ndescription: Audits evaluators\ntools: [list_evaluators, get_experiment_run]\nrung: hard\n---\nYou audit evaluators.\n";
@@ -80,4 +81,32 @@ test("agentTypeDirs omits the project dir when untrusted", () => {
 	const agentDir = mkdtempSync(join(tmpdir(), "orqi-agentdir-"));
 	expect(agentTypeDirs(cwd, agentDir, {})).toEqual([join(agentDir, "agents")]);
 	expect(agentTypeDirs(cwd, agentDir, { ORQI_TRUST_PROJECT: "1" })).toEqual([join(agentDir, "agents"), join(cwd, ".orqi", "agents")]);
+});
+
+test("a project whose only resource is .orqi/agents still needs a yes", () => {
+	const cwd = mkdtempSync(join(tmpdir(), "orqi-project-"));
+	mkdirSync(join(cwd, ".orqi", "agents"), { recursive: true });
+	writeFileSync(join(cwd, ".orqi", "agents", "helper.md"), VALID);
+	const agentDir = mkdtempSync(join(tmpdir(), "orqi-agentdir-"));
+	// pi's trust list does not know the folder, so pi would call this project trusted: orqi does not.
+	expect(agentTypeDirs(cwd, agentDir, {})).toEqual([join(agentDir, "agents")]);
+	new ProjectTrustStore(agentDir).set(cwd, false);
+	expect(agentTypeDirs(cwd, agentDir, {})).toEqual([join(agentDir, "agents")]);
+	new ProjectTrustStore(agentDir).set(cwd, true);
+	expect(agentTypeDirs(cwd, agentDir, {})).toEqual([join(agentDir, "agents"), join(cwd, ".orqi", "agents")]);
+});
+
+test("an untrusted project's types are reported as ignored, not silently dropped", () => {
+	const cwd = mkdtempSync(join(tmpdir(), "orqi-project-"));
+	mkdirSync(join(cwd, ".orqi", "agents"), { recursive: true });
+	writeFileSync(join(cwd, ".orqi", "agents", "helper.md"), VALID);
+	const agentDir = mkdtempSync(join(tmpdir(), "orqi-agentdir-"));
+	const untrusted = agentTypesFor(cwd, agentDir, {});
+	expect(untrusted.types.helper).toBeUndefined();
+	expect(untrusted.problems).toEqual([
+		{ file: join(cwd, ".orqi", "agents"), reason: "not loaded: this project is not trusted. /trust, then restart orqi" },
+	]);
+	const trusted = agentTypesFor(cwd, agentDir, { ORQI_TRUST_PROJECT: "1" });
+	expect(trusted.types.helper?.description).toBe("Audits evaluators");
+	expect(trusted.problems).toEqual([]);
 });

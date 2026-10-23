@@ -72,7 +72,7 @@ import { createLocalTools, EXCLUDED_TOOLS } from "./local-tools.ts";
 import { takePermissionModeFlag } from "./permission-mode.ts";
 import { createAskUserTool } from "./ask-user.ts";
 import { createSubagentTool, type SubagentHost } from "./subagent.ts";
-import { agentTypeDirs, loadAgentTypes } from "./agent-types.ts";
+import { agentTypesFor } from "./agent-types.ts";
 import { extensionsUpdate, runUpdate } from "./update.ts";
 import { resolveSession } from "./resume.ts";
 import { projectTrusted, rebrandTrustWarning } from "./trust.ts";
@@ -554,7 +554,7 @@ const model = pickModel(models);
 // edits are inspectable.
 const localTools = createLocalTools(process.cwd());
 /** Built-in subagent types plus `<agentDir>/agents` and a trusted project's `.orqi/agents`, read fresh each time. */
-const loadedAgentTypes = () => loadAgentTypes(agentTypeDirs(process.cwd(), AGENT_DIR));
+const loadedAgentTypes = () => agentTypesFor(process.cwd(), AGENT_DIR);
 /** Background subagents: the live session's `pi` to deliver to, and the children still running. */
 const subagentHost: SubagentHost = { running: new Set() };
 const customTools = [
