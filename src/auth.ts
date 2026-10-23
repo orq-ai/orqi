@@ -91,7 +91,8 @@ function envServer(name: string, value: string | undefined, fallback: string): s
 	if ("server" in checked) return checked.server;
 	if (!refusedServers.has(value)) {
 		refusedServers.add(value);
-		console.error(`orqi: ignoring ${name} (${checked.error}); using ${fallback}.`);
+		// Not checked.error: it echoes the value, and a userinfo URL would print its password.
+		console.error(`orqi: ignoring ${name}: not an https orq host (http only on localhost); using ${fallback}.`);
 	}
 	return fallback;
 }
