@@ -22,6 +22,7 @@ import {
 	asItem,
 	contextUsed,
 	BODY_INDENT,
+	cutPlain,
 	drawSections,
 	type FrameRow,
 	type Line,
@@ -30,6 +31,7 @@ import {
 	minimapRows,
 	paintLine,
 	peekLines,
+	printable,
 	processBody,
 	processSummary,
 	SPINNER,
@@ -552,8 +554,10 @@ export function orqHarness(deps: HarnessDeps) {
 		let compaction: CompactionMark | undefined;
 		/** What memorq said it injected when the split was last measured, raw: the split holds it clamped to the prompt. */
 		let measuredInjected: number | undefined;
+		/** Whether pi compacts at all, read with the reserve in `applyCompactAt`: the trajectory path never calls pi. */
+		let compactionOn = true;
 		/** Whether pi compacts at all: a reserve to measure the compaction point from. */
-		const compactReserve = () => (pi.getSettings().compaction?.enabled === false ? undefined : reserveTokens);
+		const compactReserve = () => (compactionOn ? reserveTokens : undefined);
 		const refreshEstimates = () => {
 			estimates = split
 				? contextEstimates({
@@ -600,7 +604,9 @@ export function orqHarness(deps: HarnessDeps) {
 				deps.settingsManager.applyOverrides({ compaction: { reserveTokens: wanted ?? projectReserve() ?? reserve ?? 16_384 } });
 				overriding = wanted !== undefined;
 			}
-			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
+			const settings = pi.getSettings();
+			reserveTokens = settings.compaction?.reserveTokens ?? 16_384;
+			compactionOn = settings.compaction?.enabled !== false;
 			refreshEstimates();
 		};
 		/**
@@ -1042,6 +1048,15 @@ export function orqHarness(deps: HarnessDeps) {
 			// Rendering must never throw: an exception here takes the whole TUI down.
 			// A frame that fails keeps the last good one, as the footer does.
 			let lastFrame: FrameRow[] = [];
+			const failedFrame = (error: unknown, width: number) => {
+				const text = cutPlain(`sidebar error · ${printable(error instanceof Error ? error.message : String(error))}`, width);
+				try {
+					return theme.fg("error", text);
+				} catch {
+					// The theme is what failed: plain text still says it.
+					return text;
+				}
+			};
 			return {
 				invalidate() {},
 				/** The item each row of the last frame shows, row for row: what `/sidebar focus` will move between. */
@@ -1060,8 +1075,10 @@ export function orqHarness(deps: HarnessDeps) {
 					try {
 						lastFrame = inspectorFrame(width);
 						frameItems = lastFrame.map((row) => row.item);
-					} catch {
-						// Keep the last good frame.
+					} catch (error) {
+						// Keep the last good frame. With none, say so in one line: a sidebar that fails on its first render
+						// would otherwise stay blank for the whole session with no trace of why.
+						if (lastFrame.length === 0) return [failedFrame(error, width)];
 					}
 					return lastFrame.map((row) => row.text);
 				},
@@ -1300,7 +1317,8 @@ export function orqHarness(deps: HarnessDeps) {
 						if (!command) {
 							const message = "$EDITOR is not set (nor $VISUAL, nor pi's externalEditor): set one to open notes from here";
 							ctx.ui.notify(message, "warning");
-							live?.update(spec(message));
+							// The hint keeps its keys: the long message is the notice's, the hint says the short form.
+							live?.update(spec("no $EDITOR set · esc close · ↑↓ other events"));
 							return;
 						}
 						try {

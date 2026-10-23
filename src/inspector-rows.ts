@@ -179,7 +179,6 @@ export function minimapRows(
 		.map((step, i) => minimapRow(step, width, marked && start + i === current, frame, paint, titleOf));
 }
 
-/** The panel's own footer: `15 steps · turn 3 · $0.113`, and `· ⚠ N` while a warning fires. */
 /**
  * The trajectory's title rule, with its counts: ` ─ trajectory · 9 steps · turn 3 ───`. Cost is the
  * footer's and warnings are the signals section's, so neither is repeated here. A long session

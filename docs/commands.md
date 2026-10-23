@@ -80,8 +80,8 @@ It sits beside the transcript from 140 columns wide. `alt+s` forces it on or off
 | signals | Warnings such as a tool called three times with the same arguments, errors, calls that cannot be undone. Just `signals · ok` while there are none |
 | context | Where the context window goes, and the cache hit rate |
 | routing | Under `orq/auto`: picks per model, switches, the decider's cost, an estimated saving. Its title names the slot answering now |
-| memory | With memorq installed: notes for this repository, notes in use, the last thing learned |
-| process | orqi's own memory use in its title; expanded, the last minute and the peak. Off until you turn it on |
+| memory | With memorq installed: a bar of the notes read against the notes kept, recall and save counts, and the newest event. `alt+m` lists the events |
+| process | orqi's own memory use in its title; set `"process": "expanded"` under `sidebarDepth` in `orqi.json` for the last minute and the peak (no key does it). Off until you turn it on |
 
 `/sidebar` switches sections on and off, and the choice is saved. Each title answers its section's
 question (`signals · ok`, `process · 174 MB`), and a section with nothing to say shows its title alone.

@@ -494,7 +494,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   switch, on a compaction), on every trajectory change (a route, a message) and when `/compact-at` moves the
   reserve, so a render only reads them, plus the clock for a compaction's age (which is why the
   "compacted … ago" line expires at render time). Growth is the mean change of the last 5 samples taken since the last
-  compaction (the drop is not a trend); with none, turns left says `~?`. pi gives no usage until a response
+  compaction (the drop is not a trend); with none, the cache line ends `flat`. pi gives no usage until a response
   follows a compaction, so `session_compact` records pi's `tokensBefore` and estimates the size after
   (what is fixed plus pi's `estimateTokens` over the messages it kept) and `measure` uses it until pi can say.
   memorq's `context` (tokens it injected) is taken out of `prompt` into `memory`, never more than the prompt
@@ -537,7 +537,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   and once orqi's session has ended its host opens nothing.
 - **A note read counts wherever memorq keeps it.** memorq's state names only the folder each kind is
   written to, and a kind written to the repository is still read from the machine store, so
-  `isNoteRead` also knows memorq's machine roots (`ORQ_NOTES_HOME`, else `~/.memorq`, plus the
+  `noteKind` also knows memorq's machine roots (`ORQ_NOTES_HOME`, else `~/.memorq`, plus the
   legacy `~/.orq/knowledge`). Store folders are resolved through symlinks when a state arrives, the
   read file after the read finishes, never in a render. A subagent's read counts too.
 - **Memory's reads are events, titled once from the note file.** `noteReads` is a list of `{ path, at }`

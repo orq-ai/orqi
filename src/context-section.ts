@@ -105,7 +105,8 @@ export function contextEstimates(input: {
 	const measured = recent.length >= 2;
 	const mean = measured ? (recent.at(-1)!.used - recent[0]!.used) / (recent.length - 1) : 0;
 	const growth = mean > 0 ? Math.round(mean) : undefined;
-	const [prev, last] = lastRequests(steps).length === 2 ? lastRequests(steps) : [undefined, lastRequests(steps)[0]];
+	const requests = lastRequests(steps);
+	const [prev, last] = requests.length === 2 ? requests : [undefined, requests[0]];
 	let drop: CacheDrop | undefined;
 	if (prev && last && hitOf(last) < 0.5 && hitOf(prev) > 0.8) {
 		const price = last.model ? priceOf(last.model) : undefined;

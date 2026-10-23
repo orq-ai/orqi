@@ -22,7 +22,7 @@ import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step 
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 import { createDecider } from "./decider.ts";
 import { registerRouting } from "./router.ts";
-import { DEFAULT_SECTIONS, readPrefs, SECTIONS, writePrefs } from "./prefs.ts";
+import { DEFAULT_SECTIONS, readPrefs, writePrefs } from "./prefs.ts";
 import { ALLOW_ONCE, ALLOW_TURN, DENY, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import { APPROVED, FRESH, NOT_PLANNING, PLAN_OFF, PLAN_ON, planPath } from "./plan.ts";
@@ -678,9 +678,12 @@ function harnessOn(
 	let closedPanels = 0;
 	let branchChanged: (() => void) | undefined;
 	// Like pi's Theme, `fg` reads its own fields: handed around unbound it throws, which a render swallows into a blank sidebar.
+	// Also like pi's, an unknown colour role throws; the roles are the ones orqi's own theme defines.
+	const roleNames = new Set(Object.keys(JSON.parse(readFileSync(join(import.meta.dir, "..", "themes", "orq-dark.json"), "utf8")).colors));
 	const plainTheme = {
-		fg(this: { bold?: unknown } | undefined, _token: string, text: string) {
+		fg(this: { bold?: unknown } | undefined, token: string, text: string) {
 			if (!this?.bold) throw new TypeError("undefined is not an object (evaluating 'this.tokenAnsi')");
+			if (!roleNames.has(token)) throw new Error(`Unknown theme color: ${token}`);
 			return text;
 		},
 		bold: (text: string) => text,
@@ -864,6 +867,35 @@ test("alt+c and alt+m open context and memory to expanded and back, saved beside
 		expect(readPrefs(dir).sections).toEqual(DEFAULT_SECTIONS);
 	} finally {
 		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a sidebar whose first render throws draws one error line; one that fails later keeps its last good frame", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-render-error-"));
+	try {
+		const h = harnessOn(dir);
+		await h.start();
+		const theme = h.ctx.ui.theme as unknown as { fg(role: string, text: string): string };
+		const fg = theme.fg;
+		// Every role but `error` fails, with a message carrying an escape code that must not reach the screen.
+		theme.fg = function (this: unknown, role: string, text: string) {
+			if (role !== "error") throw new Error("Unknown theme color: accent\x1b[31m");
+			return `<${role}>${text}</${role}>`;
+		};
+		const broken = h.opened.sidebar!.render(60);
+		expect(broken).toEqual(["<error>sidebar error · Unknown theme color: accent</error>"]);
+		expect(h.opened.sidebar!.render(20)).toEqual(["<error>sidebar error · Unkn</error>"]);
+		// Once a frame has drawn, a later failure shows that frame rather than an error.
+		theme.fg = fg;
+		const good = h.opened.sidebar!.render(40);
+		expect(good.length).toBeGreaterThan(1);
+		theme.fg = () => {
+			throw new Error("boom");
+		};
+		expect(h.opened.sidebar!.render(40)).toEqual(good);
+		await h.stop();
+	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -3538,7 +3570,9 @@ test("o opens the note's file in $EDITOR with the path as an argument; unset, it
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(calls).toHaveLength(1);
 		expect(h.notices.at(-1)).toContain("$EDITOR is not set");
-		expect(bare(panel.render(84).at(-2)!)).toContain("$EDITOR is not set");
+		const hint = bare(panel.render(84).at(-2)!);
+		expect(hint).toContain("no $EDITOR set · esc close · ↑↓ other events");
+		expect(hint).not.toContain("…");
 		// A recall with no note to open has nothing for `o`.
 		(h.opened.panel as Panel).handleInput(ESC);
 		await new Promise((resolve) => setTimeout(resolve, 0));

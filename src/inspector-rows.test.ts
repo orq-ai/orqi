@@ -316,7 +316,7 @@ const titleOf = (path: string) => TITLES[path] ?? path;
 test("a user row is a muted `›` and its text; an assistant row a syntaxFunction `▌` and its text", () => {
 	const user = trajectoryRow(stepOf({ role: "user", label: "user", detail: "what can you remember" }), 36, false, 0, titleOf);
 	expect(plain(user.segs)).toBe(" › what can you remember".padEnd(36));
-	expect(roles(user)).toBe(" <muted>›</muted> <text>what can you remember</text>" + " ".repeat(12));
+	expect(roles(user)).toBe(` <muted>›</muted> <text>what can you remember</text>${" ".repeat(12)}`);
 	const reply = trajectoryRow(stepOf({ role: "assistant", label: "assist", detail: "From this workshop" }), 36, false, 0, titleOf);
 	expect(plain(reply.segs).trimEnd()).toBe(" ▌ From this workshop");
 	expect(roles(reply)).toStartWith(" <syntaxFunction>▌</syntaxFunction> <text>From this workshop</text>");
