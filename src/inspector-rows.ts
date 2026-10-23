@@ -11,7 +11,7 @@
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { contextBar, dollars, tokens } from "./footer.ts";
+import { dollars } from "./footer.ts";
 import type { Depth, SectionId } from "./prefs.ts";
 import type { Signals, Step } from "./trajectory.ts";
 
@@ -348,6 +348,10 @@ export interface ContextSplit {
 	tools: number;
 	hidden: number;
 	skills: number;
+	/** memorq's injected tokens, taken out of `prompt`; absent without memorq (or one that does not say). */
+	memory?: number;
+	/** The notes memorq holds, for the expanded row's lever note. */
+	memoryNotes?: number;
 	messages: number;
 	window: number;
 	/** Share of the last request's input that came from the cache, 0..1. */
@@ -357,36 +361,8 @@ export interface ContextSplit {
 	counts: { orq: number; builtin: number; hidden: string[]; skills: number; hinted: number; turns: number; results: number };
 }
 
-/** `5.1k`, one decimal up to a million: the section is narrow and 17.8k reads better than 18k. */
-const k = (n: number) => (n < 1000 ? `${n}` : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : tokens(n));
-
 export const contextUsed = (split: ContextSplit) =>
-	split.prompt + split.hints + split.project + split.tools + split.skills + split.messages;
-
-/**
- *   prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k
- *   tools  ▇▇▇▇▇▇▁▁ 17.8k msgs    2.4k
- *   cache 94% · 27.3k/1.1M · /context
- */
-export function contextLines(split: ContextSplit, width: number): string[] {
-	return sectionLines("context", contextBody(split), width);
-}
-
-/** The context section's body, under its header. */
-export function contextBody(split: ContextSplit): string[] {
-	const used = contextUsed(split);
-	if (split.agent)
-		return [`agent ${split.agent}: its prompt`, "and tools run on orq.ai", `msgs ${k(split.messages)}/${tokens(split.window)} · /context`];
-	const bar = (n: number) => contextBar(used ? n / used : 0);
-	const prompt = split.prompt + split.hints + split.project;
-	return [
-		`prompt ${bar(prompt)}${k(prompt).padStart(6)} skills${k(split.skills).padStart(6)}`,
-		`tools  ${bar(split.tools)}${k(split.tools).padStart(6)} msgs  ${k(split.messages).padStart(6)}`,
-		[split.cache !== undefined ? `cache ${Math.round(split.cache * 100)}%` : "", `${k(used)}/${tokens(split.window)}`, "/context"]
-			.filter(Boolean)
-			.join(" · "),
-	];
-}
+	split.prompt + split.hints + split.project + (split.memory ?? 0) + split.tools + split.skills + split.messages;
 
 /** Nothing to look at: no loop, no failed call, nothing waiting on the gate. */
 const quiet = (signals: Signals) => !signals.loop && !signals.errors && !signals.pending;

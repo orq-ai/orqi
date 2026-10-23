@@ -23,7 +23,7 @@ import {
 } from "./harness.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
-import { contextLines, minimapRow, minimapRows, trajectoryTitle, peekLines, sectionLines, type ContextSplit } from "./inspector-rows.ts";
+import { minimapRow, minimapRows, trajectoryTitle, peekLines, sectionLines, type ContextSplit } from "./inspector-rows.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines, cells, filterRows, fit, oneLine, Panel, plainPanel } from "./panel.ts";
 import { hintsSection, schemaLines } from "./mcp.ts";
@@ -863,6 +863,67 @@ test("quiet sections fold to their headers: signals say ok, process its memory; 
 		expect(lines[at + 1]).toMatch(/^ {2}\d+ MB +[▁▂▃▄▅▆▇█]+ +peak \d+ MB *$/);
 		await open.stop();
 	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the context section is measured when state changes: a run, then a compaction, never a render", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-context-"));
+	let clock = 1_800_000_000_000;
+	const h = harnessOn(dir, { now: () => clock });
+	const section = () => {
+		const lines = h.opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1).trimEnd());
+		const at = lines.findIndex((line) => line.startsWith(" ─ context "));
+		const end = lines.findIndex((line, i) => i > at && (line.startsWith(" ─ ") || line.includes("alt+s")));
+		return lines.slice(at, end < 0 ? undefined : end);
+	};
+	try {
+		let usage: { tokens: number | null; contextWindow: number; percent: number | null } = {
+			tokens: 30_000,
+			contextWindow: 1_100_000,
+			percent: 3,
+		};
+		h.ctx.getContextUsage = () => usage as never;
+		(h.ctx.sessionManager as any).buildSessionProjection = () => ({
+			messages: [{ role: "user", content: "x".repeat(4_000), timestamp: 0 }],
+		});
+		await h.start();
+		expect(section()[0]).toStartWith(" ─ context · 30k · 3% ");
+		expect(section()[1]).toMatch(/^ {2}█+$/);
+		expect(section()[3]).toBe("  cache — · first turn writes it");
+		// alt+c: the same measurements, expanded.
+		await h.shortcuts.get("alt+c")!(h.ctx);
+		expect(section()[0]).toStartWith(" ─ context · 30k · 3% of 1.1M ");
+		expect(
+			section()
+				.filter((line) => line.trim())
+				.at(-1),
+		).toBe("  enter: /context table · alt+c less");
+		await h.shortcuts.get("alt+c")!(h.ctx);
+		// pi compacts: nothing to read until the next response, so what it kept stands in for the size.
+		usage = { tokens: null, contextWindow: 1_100_000, percent: null };
+		await h.handlers.get("session_compact")!({ compactionEntry: { tokensBefore: 812_000 }, reason: "threshold" }, h.ctx);
+		expect(section()[3]).toMatch(/^ {2}✓ compacted 812k → \d+(k)? · just now$/);
+		// Time passing is read at the render: ten minutes on, the line is gone, with no new measurement.
+		clock += 11 * 60_000;
+		expect(section()[3]).toBe("  cache — · first turn writes it");
+		// memorq says how much it injected: a part of its own, measured again at once, never before it speaks.
+		usage = { tokens: 30_000, contextWindow: 1_100_000, percent: 3 };
+		h.ctx.getSystemPrompt = () => `You are orqi.\n${"p".repeat(8_000)}`;
+		await h.handlers.get("agent_end")!({}, h.ctx);
+		expect(section()[2]).toBe("  ■ msgs 28k ■ prompt 2k");
+		h.bus.emit("memorq:state", {
+			version: "0.14.0",
+			notes: 22,
+			usedThisTurn: 3,
+			context: 900,
+			stores: { notes: "", rules: "", skills: "" },
+			paused: false,
+			enabled: "on",
+		});
+		expect(section()[2]).toBe("  ■msgs 28k ■prompt 1k ■memory 900");
+	} finally {
+		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -2060,24 +2121,6 @@ test("signals: a loop is the same tool with the same arguments three times in th
 
 test("panel sections: a rule, an indented body, one calm line when empty", () => {
 	expect(sectionLines("memory", [], 36)).toEqual([" ─ memory ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
-	const split: ContextSplit = {
-		prompt: 4_440,
-		hints: 680,
-		project: 0,
-		tools: 17_810,
-		hidden: 1_540,
-		skills: 1_930,
-		messages: 2_410,
-		window: 1_050_000,
-		cache: 0.94,
-		counts: { orq: 44, builtin: 4, hidden: [], skills: 24, hinted: 1, turns: 2, results: 2 },
-	};
-	expect(contextLines(split, 36)).toEqual([
-		" ─ context ".padEnd(36, "─"),
-		"  prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k",
-		"  tools  ▇▇▇▇▇▇▁▁ 17.8k msgs    2.4k",
-		"  cache 94% · 27.3k/1.1M · /context ",
-	]);
 	// Signals and process: inspector-rows.test.ts, with their folding.
 });
 
@@ -2238,11 +2281,6 @@ test("/context: a row per part with tokens, share and cache, one bar, then the l
 	expect(withProject.length).toBe(rows[0]!.length);
 	// Agent mode: the agent's own prompt and tools are not ours to count; say so, and the way back.
 	expect(contextRows({ ...split, agent: "qa-val-agent" })[0]).toStartWith("agent mode: qa-val-agent's instructions");
-	expect(
-		contextLines({ ...split, agent: "qa-val-agent" }, 36)
-			.slice(1)
-			.map((line) => line.trim()),
-	).toEqual(["agent qa-val-agent: its prompt", "and tools run on orq.ai", "msgs 2.4k/1.1M · /context"]);
 	// Nothing hidden, nothing measured from the cache: those levers are not offered.
 	const bare = contextRows({ ...split, cache: undefined, hidden: 0, counts: { ...split.counts, hidden: [] } });
 	expect(bare.some((row) => row.includes("ORQI_ALL_TOOLS") || row.includes("hidden:") || row.includes("cache hit"))).toBe(false);

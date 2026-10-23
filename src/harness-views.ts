@@ -103,6 +103,8 @@ export function contextSplit(input: {
 	steps: Step[];
 	turns: number;
 	agent?: string;
+	/** memorq's injected tokens (`memorq:state.context`) and its notes: taken out of the prompt into a part of their own. */
+	memory?: { tokens?: number; notes?: number };
 }): ContextSplit {
 	const tok = (text: string) => Math.ceil(text.length / 4);
 	const schema = (tool: (typeof input.tools)[number]) => tok(`${tool.description ?? ""}${JSON.stringify(tool.parameters ?? {})}`);
@@ -113,8 +115,10 @@ export function contextSplit(input: {
 	const active = new Set(input.active);
 	const live = input.tools.filter((tool) => active.has(tool.name) && tool.exposure !== "hidden");
 	const hidden = input.tools.filter((tool) => tool.exposure === "hidden" && tool.name.startsWith(TOOL_PREFIX));
+	// What memorq injected is in the prompt; it cannot be more than the prompt, or the parts would sum past the whole.
+	const memory = Math.min(Math.max(0, input.memory?.tokens ?? 0), tok(base) - tok(hinted));
 	const fixed = {
-		prompt: tok(base) - tok(hinted),
+		prompt: tok(base) - tok(hinted) - memory,
 		hints: tok(hinted),
 		project: tok(project),
 		tools: live.reduce((n, tool) => n + schema(tool), 0),
@@ -124,7 +128,9 @@ export function contextSplit(input: {
 	return {
 		...fixed,
 		hidden: hidden.reduce((n, tool) => n + schema(tool), 0),
-		messages: Math.max(0, input.used - fixed.prompt - fixed.hints - fixed.project - fixed.tools - fixed.skills),
+		messages: Math.max(0, input.used - fixed.prompt - fixed.hints - fixed.project - fixed.tools - fixed.skills - memory),
+		...(memory ? { memory } : {}),
+		...(input.memory?.notes === undefined ? {} : { memoryNotes: input.memory.notes }),
 		window: input.window,
 		...(input.agent ? { agent: input.agent } : {}),
 		...(cache === undefined ? {} : { cache }),
@@ -154,6 +160,7 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 		`${name.padEnd(16)}${what.padEnd(36)}${num(n).padStart(8)}${share(n).padStart(7)}${(cached ? "✓" : "✗").padStart(6)}`;
 	const parts = [
 		{ label: "prompt", n: split.prompt + split.hints + split.project, cached: true },
+		...(split.memory ? [{ label: "memory", n: split.memory, cached: true }] : []),
 		{ label: "tools", n: split.tools, cached: true },
 		{ label: "skills", n: split.skills, cached: true },
 		{ label: "msgs", n: split.messages, cached: false },
@@ -181,6 +188,7 @@ export function contextRows(split: ContextSplit, barWidth = 60): string[] {
 		row("system prompt", "src/system-prompt.txt", split.prompt, true),
 		...(split.hints ? [row("  tool hints", `TOOL_HINTS, ${c.hinted} tool${c.hinted === 1 ? "" : "s"}`, split.hints, true)] : []),
 		...(split.project ? [row("  project files", "AGENTS.md, CLAUDE.md in the cwd", split.project, true)] : []),
+		...(split.memory ? [row("  memorq notes", "injected by memorq", split.memory, true)] : []),
 		row("tool schemas", `${c.orq} orq tools · ${c.builtin} built-in`, split.tools, true),
 		...(c.hidden.length ? [`  hidden: ${c.hidden.join(", ")}  saves ${num(split.hidden)}`] : []),
 		row("skills index", `${c.skills} skills, name + description`, split.skills, true),

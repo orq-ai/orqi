@@ -472,6 +472,17 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   drawn row (`drawSections`, the component's `items()`), so `/sidebar focus` can map rows to items.
   `alt+c` and `alt+m` toggle context and memory between compact and expanded, saved as `sidebarDepth`
   in the same file and the same way (`savePrefs`).
+- **The context section's estimates are worked out when state changes, and its lines are fitted to a 34-cell body.**
+  `contextEstimates` (`src/context-section.ts`) runs from `measure` (session start, after a run, on a model
+  switch, on a compaction), on every trajectory change (a route, a message) and when `/compact-at` moves the
+  reserve, so a render only reads them, plus the clock for a compaction's age (which is why the
+  "compacted … ago" line expires at render time). Growth is the mean change of the last 5 samples taken since the last
+  compaction (the drop is not a trend); with none, turns left says `~?`. pi gives no usage until a response
+  follows a compaction, so `session_compact` records pi's `tokensBefore` and estimates the size after
+  (what is fixed plus pi's `estimateTokens` over the messages it kept) and `measure` uses it until pi can say.
+  memorq's `context` (tokens it injected) is taken out of `prompt` into `memory`, never more than the prompt
+  holds; without it there is no memory part. The wireframe's frames are 38 cells wide, the real body 34, so
+  a few lines have a tighter form (`■tools 21k`, `· ` closed up to a space, `+4.1k/turn`).
 - **`/compact-at` moves pi's reserve, it does not compact.** pi compacts once the context passes
   `window - compaction.reserveTokens` (16384 by default, about 92% of 200k), and its SettingsManager
   has no setter for the reserve, nor pi's `/settings` a slot for an extension. So the percent lives in

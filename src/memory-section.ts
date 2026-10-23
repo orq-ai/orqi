@@ -43,6 +43,8 @@ export interface MemorqState {
 	notes: number;
 	/** Index lines and ranked notes in this turn's prompt. */
 	usedThisTurn: number;
+	/** The tokens memorq injected into the prompt, when it says: the context section's memory part. A value orqi cannot read is ignored. */
+	context?: number;
 	/** `pct`: the context threshold a checkpoint learn fired at. */
 	learned?: { count: number; trigger: Trigger; at: number; costUsd?: number; pct?: number };
 	/**
@@ -115,6 +117,9 @@ export function isMemorqState(data: unknown): data is MemorqState {
 	// A malformed `learned` does not lose the state: readers check it with `isLearned` and drop it.
 	return true;
 }
+
+/** The tokens memorq says it injected, when it says it in a form orqi can read: a count, else nothing, and the state still draws. */
+export const injectedTokens = (state: MemorqState | undefined): number | undefined => (isCount(state?.context) ? state.context : undefined);
 
 /** A learn as memorq reports it and as an `orqi-memory` entry stores it: a count, a trigger, when, and maybe its cost. */
 export function isLearned(data: unknown): data is NonNullable<MemorqState["learned"]> {

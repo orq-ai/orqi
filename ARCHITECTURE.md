@@ -50,6 +50,7 @@ orqi
 | `src/plan.ts` | Plan mode: what the model is told, the `exit_plan` tool and its approval dialog, where plans are saved |
 | `src/handoff.ts` | `/handoff <goal>`: pi's handoff example, adapted. Drafts a fresh session's first message from this branch on a plain chat model, points at the plan, keeps plan mode |
 | `src/prefs.ts` | `<agentDir>/orqi.json`: which sidebar sections show and which are expanded, the saved decider, `orq/auto`'s saved models and `/compact-at`'s percent, read forgivingly and written whole |
+| `src/context-section.ts` | The context section: its compact and expanded lines, the header summary and `contextEstimates` (growth, turns left, the cache's last move, a compaction), all worked out when state changes |
 | `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
 | `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
 | `src/model-picker.ts` | pi's `/model` selector over one kind of workspace model: chat models for memorq and `/route models`, classifiers for `/decider` |

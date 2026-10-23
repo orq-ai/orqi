@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
-import { ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { isAgentModel } from "./agents.ts";
 import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
 import {
@@ -18,7 +18,6 @@ import {
 	type Paint,
 } from "./footer.ts";
 import {
-	contextBody,
 	contextUsed,
 	BODY_INDENT,
 	drawSections,
@@ -41,6 +40,7 @@ import {
 import type { ModelInfo } from "./model.ts";
 import {
 	isLearned,
+	injectedTokens,
 	isMemorqState,
 	isNoteRead,
 	learnHead,
@@ -79,6 +79,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { registerViewCommands } from "./harness-commands.ts";
 import { cacheRate, selectionName, contextSplit } from "./harness-views.ts";
+import { contextBody, contextEstimates, contextSummary, type CompactionMark, type ContextEstimates } from "./context-section.ts";
 
 export interface HarnessDeps {
 	agentDir: string;
@@ -532,6 +533,17 @@ export function orqHarness(deps: HarnessDeps) {
 			render();
 		};
 		let split: ContextSplit | undefined;
+		/** What the context section estimates, worked out when state changes (a run, a route, a compaction), never in a render. */
+		let estimates: ContextEstimates | undefined;
+		/** The last compaction pi did this session, from `session_compact`. */
+		let compaction: CompactionMark | undefined;
+		/** Whether pi compacts at all: a reserve to measure the compaction point from. */
+		const compactReserve = () => (pi.getSettings().compaction?.enabled === false ? undefined : reserveTokens);
+		const refreshEstimates = () => {
+			estimates = split
+				? contextEstimates({ split, samples: trajectory.samples, steps: trajectory.steps, priceOf, reserve: compactReserve(), compaction })
+				: undefined;
+		};
 		// Which sidebar sections show: orqi.json in the agent dir, read once per session (makeServices builds
 		// this extension again for /new, /resume and /fork) and written whole on every toggle.
 		const prefs = readPrefs(deps.agentDir);
@@ -566,6 +578,7 @@ export function orqHarness(deps: HarnessDeps) {
 				overriding = wanted !== undefined;
 			}
 			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
+			refreshEstimates();
 		};
 		/**
 		 * Change the sidebar's choices and save them. The file is read again and only this change is made to
@@ -684,6 +697,8 @@ export function orqHarness(deps: HarnessDeps) {
 			memorqState = isLearned(data.learned) ? data : { ...data, learned: undefined };
 			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
 			recordLearn(memorqState.learned);
+			// What memorq injected is a part of the context of its own: measure again when it moves.
+			if (ctxRef && split && (split.memory ?? 0) !== (injectedTokens(memorqState) ?? 0)) measure(ctxRef);
 			render();
 		});
 		/**
@@ -747,12 +762,15 @@ export function orqHarness(deps: HarnessDeps) {
 					systemPrompt: agent ? "" : ctx.getSystemPrompt(),
 					tools: pi.getAllTools(),
 					active: agent ? [] : pi.getActiveTools(),
-					used: usage?.tokens ?? 0,
+					// pi cannot say what is in use until a response follows a compaction; what the compaction left stands in.
+					used: usage?.tokens ?? compaction?.after ?? 0,
 					window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
 					steps: trajectory.steps,
 					turns: trajectory.turn,
 					agent: agent ? ctx.model!.id.slice(6) : undefined,
+					memory: { tokens: injectedTokens(memorqState), notes: memorqState?.notes },
 				});
+				refreshEstimates();
 			} catch {
 				// A stale handle: keep the last split.
 			}
@@ -911,6 +929,8 @@ export function orqHarness(deps: HarnessDeps) {
 		let routed: { stats: RoutingStats; dry: boolean; baseline: string } | undefined;
 		trajectory.onChange(() => {
 			routed = undefined;
+			// A route, a message, a rebuilt branch: the estimates read the trajectory, so they move with it.
+			refreshEstimates();
 		});
 		const routingNow = () => {
 			const dry = deps.routing?.dryRun ?? false;
@@ -929,9 +949,14 @@ export function orqHarness(deps: HarnessDeps) {
 				summary: (frame) => signalSummary(frame.signals),
 				lines: (_w, frame) => signalBody(frame.signals),
 			},
-			// Left out until the first measure.
-			// ponytail: expanded is compact until the context section's expanded rows land.
-			{ id: "context", title: "context", lines: () => (split ? contextBody(split) : undefined) },
+			// Left out until the first measure. The estimates were worked out when state changed; the clock is
+			// read only for a compaction's age.
+			{
+				id: "context",
+				title: "context",
+				summary: (frame) => (split ? contextSummary(split, frame.depth) : undefined),
+				lines: (w, frame) => (split && estimates ? contextBody(split, estimates, frame.depth, w, now()) : undefined),
+			},
 			{
 				id: "memory",
 				title: "memory",
@@ -1262,7 +1287,25 @@ export function orqHarness(deps: HarnessDeps) {
 			stopDeciderCalls?.();
 		});
 		pi.on("session_tree", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
-		pi.on("session_compact", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
+		/**
+		 * What the context holds right after a compaction: what is fixed (prompt, tools, skills; the last split's
+		 * parts bar the messages) plus pi's own estimate of the messages it kept and the summary. pi has no usage
+		 * to read until the next response. Undefined when the branch cannot be read.
+		 */
+		const sizeAfterCompaction = (ctx: ExtensionContext) => {
+			try {
+				const kept = ctx.sessionManager.buildSessionProjection().messages.reduce((n, message) => n + estimateTokens(message), 0);
+				return kept + (split ? contextUsed(split) - split.messages : 0);
+			} catch {
+				return undefined;
+			}
+		};
+		pi.on("session_compact", (event, ctx) => {
+			trajectory.fromMessages(branchMessages(ctx));
+			compaction = { before: event.compactionEntry.tokensBefore, after: sizeAfterCompaction(ctx), at: now(), turn: trajectory.turn };
+			measure(ctx);
+			render();
+		});
 		pi.on("message_end", (event) => trajectory.message(event.message as any));
 		pi.on("turn_start", (_event, ctx) => ctx.ui.setWorkingMessage(isAgentModel(ctx.model?.id) ? `${ctx.model!.id.slice(6)}` : "thinking"));
 		pi.on("tool_execution_start", (event, ctx) => {

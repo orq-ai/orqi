@@ -66,7 +66,7 @@ The orq plugin adds its own commands too: `/quickstart`, `/traces`, `/analytics`
 | `!` | Runs a shell command |
 | `ctrl+o` | Expands a tool result to pretty-printed JSON |
 | `alt+s` | Shows or hides the sidebar |
-| `alt+c`, `alt+m` | Opens the sidebar's context or memory section to its expanded view, and back |
+| `alt+c`, `alt+m` | Opens the sidebar's context or memory section to its expanded view, and back. Context expanded: a row per part with the lever that shrinks it, growth, cache and the compaction point |
 | `alt+p` | Toggles plan mode |
 | mouse wheel | Scrolls the sidebar's trajectory |
 

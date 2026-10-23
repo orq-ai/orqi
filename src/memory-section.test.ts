@@ -8,6 +8,7 @@ import { minimapRow } from "./inspector-rows.ts";
 import {
 	isActivity,
 	isLearned,
+	injectedTokens,
 	isMemorqState,
 	isNoteRead,
 	learnHead,
@@ -126,6 +127,8 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 		version: string;
 		notes: number;
 		usedThisTurn: number;
+		/** Tokens memorq injected into the prompt: the context section's memory part. */
+		context?: number;
 		learned?: { count: number; trigger: ProducerTrigger; at: number; costUsd?: number; pct?: number };
 		review?: ({ dueInSessions: number } | { running: true; notes: number }) & { failed?: string };
 		stores: { notes: string; rules: string; skills: string };
@@ -142,6 +145,7 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 		pickModel(current: string): Promise<string | undefined>;
 	}
 	const produced: ProducerState[] = [
+		{ ...state(), context: 900, review: { dueInSessions: 3 } },
 		{ ...state(), learned: { count: 1, trigger: "manual", at: NOW, pct: 80 }, review: { dueInSessions: 0, failed: "boom" } },
 		{ ...state(), learned: { count: 3, trigger: "sweep", at: NOW, costUsd: 0.2 }, review: { running: true, notes: 47 } },
 		{
@@ -161,6 +165,14 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 		const accepted: MemorqState = p; // a compile error here means the shapes drifted
 		expect(isMemorqState(accepted)).toBe(true);
 	}
+	// The context part is read when it is a count and ignored otherwise; the state still draws.
+	expect(injectedTokens(state({ context: 900 }))).toBe(900);
+	for (const bad of ["900", -1, 1.5, Number.NaN, null]) {
+		const odd = { ...state(), context: bad } as unknown;
+		expect(isMemorqState(odd)).toBe(true);
+		expect(injectedTokens(odd as MemorqState)).toBeUndefined();
+	}
+	expect(injectedTokens(undefined)).toBeUndefined();
 	// Both directions: what orqi offers is what memorq calls, and the reverse.
 	const offered: ProducerHost = {} as MemorqHost;
 	const called: MemorqHost = {} as ProducerHost;
