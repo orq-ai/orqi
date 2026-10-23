@@ -75,6 +75,8 @@ export interface SubagentDeps {
 	 * Under `orq/auto` that is the agent type's rung; otherwise the parent's own.
 	 */
 	modelFor?: (agent: AgentType, parent: Model<any> | undefined) => Model<any> | undefined;
+	/** The types the model may pick: the built-ins plus the user's files, reread on each call. */
+	types: () => Record<string, AgentType>;
 }
 
 const AGENT_PREFIX = "agent/";
@@ -115,24 +117,42 @@ function usageOf(messages: any[]): Usage {
 }
 
 export function createSubagentTool(deps: SubagentDeps) {
+	// The description is fixed when the tool is built; a type added later still runs, it is just not advertised until restart.
+	const types = deps.types();
 	return defineTool({
 		name: "subagent",
 		label: "Subagent",
 		description:
 			"Delegate a focused task to a specialist subagent with its own context window and a narrow orq tool set. " +
-			`Agents: ${Object.keys(AGENT_TYPES).join(", ")}. ` +
+			`Agents: ${Object.entries(types)
+				.map(([name, type]) => `${name} (${type.description})`)
+				.join(", ")}. ` +
 			'Or delegate to one of the workspace\'s managed orq agents by passing "agent/<key>" (it runs with its own instructions and tools).',
 		parameters: Type.Object({
-			agent: Type.String({ description: `One of ${Object.keys(AGENT_TYPES).join(", ")}, or "agent/<key>" for a managed orq agent.` }),
+			agent: Type.String({ description: `One of ${Object.keys(types).join(", ")}, or "agent/<key>" for a managed orq agent.` }),
 			task: Type.String({ description: "Self-contained task description; the subagent sees nothing else." }),
 		}),
 		execute: async (_id, { agent, task }, signal, _onUpdate, ctx) => {
 			const managed = agent.startsWith(AGENT_PREFIX);
-			const def = Object.hasOwn(AGENT_TYPES, agent) ? AGENT_TYPES[agent] : undefined;
+			const types = deps.types();
+			const def = Object.hasOwn(types, agent) ? types[agent] : undefined;
 			if (!managed && !def) {
 				return {
+					content: [{ type: "text" as const, text: `unknown subagent "${agent}": use ${Object.keys(types).join(", ")} or agent/<key>` }],
+					details: { agent } satisfies SubagentDetails,
+					isError: true,
+				};
+			}
+			// A user's type that names a tool this workspace lacks is refused, never run with a smaller set.
+			const present = new Set(((ctx as { tools?: readonly { name: string }[] } | undefined)?.tools ?? []).map((tool) => tool.name));
+			const missing = def && def.source !== "built-in" ? def.tools.filter((name) => !present.has(`${TOOL_PREFIX}${name}`)) : [];
+			if (missing.length) {
+				return {
 					content: [
-						{ type: "text" as const, text: `unknown subagent "${agent}": use ${Object.keys(AGENT_TYPES).join(", ")} or agent/<key>` },
+						{
+							type: "text" as const,
+							text: `subagent "${agent}" asks for tools not in this workspace: ${missing.join(", ")}. Fix ${def!.source} or pick another subagent.`,
+						},
 					],
 					details: { agent } satisfies SubagentDetails,
 					isError: true,

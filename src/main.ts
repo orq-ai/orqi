@@ -72,6 +72,7 @@ import { createLocalTools, EXCLUDED_TOOLS } from "./local-tools.ts";
 import { takePermissionModeFlag } from "./permission-mode.ts";
 import { createAskUserTool } from "./ask-user.ts";
 import { createSubagentTool } from "./subagent.ts";
+import { agentTypeDirs, loadAgentTypes } from "./agent-types.ts";
 import { extensionsUpdate, runUpdate } from "./update.ts";
 import { resolveSession } from "./resume.ts";
 import { projectTrusted, rebrandTrustWarning } from "./trust.ts";
@@ -552,6 +553,8 @@ const model = pickModel(models);
 // the permission gate; whole-file replacement (`EXCLUDED_TOOLS`) stays off because targeted
 // edits are inspectable.
 const localTools = createLocalTools(process.cwd());
+/** Built-in subagent types plus `<agentDir>/agents` and a trusted project's `.orqi/agents`, read fresh each time. */
+const loadedAgentTypes = () => loadAgentTypes(agentTypeDirs(process.cwd(), AGENT_DIR));
 const customTools = [
 	...localTools,
 	createAskUserTool(),
@@ -559,6 +562,7 @@ const customTools = [
 		model,
 		modelRuntime,
 		agentDir: AGENT_DIR,
+		types: () => loadedAgentTypes().types,
 		// Under orq/auto a subagent runs on its type's rung (investigator and
 		// docs easy, analyst medium); otherwise on whatever the parent runs.
 		modelFor: (agent, parent) =>

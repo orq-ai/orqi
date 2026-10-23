@@ -2591,6 +2591,29 @@ test("plan mode lets reads through, asks for every Bash command and blocks the r
 	expect(await gate.onToolCall({ toolCallId: "e2", toolName: "edit", input: {} }, ui)).toBeUndefined();
 });
 
+test("plan mode blocks a subagent's one-way call: a user-defined type cannot act while planning", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-nested-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		await h.commands.get("plan")!("", h.ctx);
+		await h.handlers.get("tool_execution_start")!({ toolCallId: "s1", toolName: "subagent", args: { agent: "auditor", task: "t" } }, h.ctx);
+		await h.handlers.get("tool_execution_start")!(
+			{ toolCallId: "s1/1", toolName: "mcp__orq__delete_dataset", args: { dataset_id: "d" }, parentToolCallId: "s1" },
+			h.ctx,
+		);
+		const verdict = (await h.handlers.get("tool_call")!(
+			{ toolCallId: "s1/1", toolName: "mcp__orq__delete_dataset", input: { dataset_id: "d" }, parentToolCallId: "s1" },
+			{ ...h.ctx, hasUI: true },
+		)) as any;
+		expect(verdict?.block).toBe(true);
+		expect(verdict?.reason).toContain("Plan mode is read-only");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("/plan switches read-only on and off, tells the model once each way, and persists", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-"));
 	try {
