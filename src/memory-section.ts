@@ -12,7 +12,10 @@ import type { ClassifierContext, ClassifierResult } from "@earendil-works/pi-ai"
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { sectionLines } from "./inspector-rows.ts";
+import { BODY_INDENT, printable, sectionLines } from "./inspector-rows.ts";
+
+/** Text that came from memorq, safe to draw: inspector-rows.ts owns it now that every segment goes through it. */
+export { printable };
 
 /** A learn record's event, as memorq exports it. Another value (a newer memorq's) still draws, as `on <event>`. */
 export type Trigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
@@ -161,22 +164,6 @@ function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number
 	return `${head}${truncateToWidth(trigger, room, "…")}${tail}`;
 }
 
-/**
- * Text that came from memorq, safe to draw: escape sequences (CSI, OSC, DCS, SOS, PM, APC, and any other
- * ESC pair) removed whole, a tab made a space (it would break a one-line row's width), then every other
- * control character (C0, DEL, C1) dropped. memorq is a
- * separate package, and a terminal acts on what it is sent: an OSC 52 in a trigger name would write the
- * clipboard.
- */
-export function printable(text: string): string {
-	return text
-		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-		.replace(/\x1b[\]PX^_][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
-		.replace(/\x1b[\s\S]?/g, "")
-		.replace(/\t/g, " ")
-		.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
-}
-
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function age(ms: number): string {
@@ -289,31 +276,29 @@ function readActivity(data: unknown): { recalls: number; remembers: number; rece
  * Nothing at all when memorq has not spoken or memory is off.
  */
 export function memoryLines(state: MemorqState | undefined, reads: number, width: number, now = Date.now()): string[] {
-	const body = memoryBody(state, reads, width, now);
+	const body = memoryBody(state, reads, width - BODY_INDENT, now);
 	return body ? sectionLines("memory", body, width) : [];
 }
 
-/** The memory section's body, under its header (`memoryLines` above); undefined when there is no section to draw. */
+/** The memory section's body for a body `width` (`memoryLines` above draws it under its header); undefined when there is no section to draw. */
 export function memoryBody(state: MemorqState | undefined, reads: number, width: number, now = Date.now()): string[] | undefined {
 	if (!state || state.enabled === "off") return undefined;
 	const why = state.paused ? "learning paused" : state.enabled === "readonly" ? "read-only" : undefined;
 	if (!state.stores.notes && !state.notes) return ["not a git repo · nothing to learn"];
 	if (!state.notes) return [`no notes yet · ${why ?? "learns as you work"}`];
-	// The frame indents the body two cells.
-	const inner = width - 2;
 	// The last learn and the status are today's closing lines, in today's order; `urgency` (lowest first) says
 	// which one stays when the activity view has room for only one.
 	const closing = [
-		isLearned(state.learned) ? { urgency: 3, line: learnedLine(state.learned, inner, now) } : undefined,
+		isLearned(state.learned) ? { urgency: 3, line: learnedLine(state.learned, width, now) } : undefined,
 		statusLine(state),
 	].filter((closer): closer is Closer => closer !== undefined);
 	const activity = readActivity(state.activity);
 	if (activity) {
-		const body = [totalsLine(state, activity, reads, inner), ...activity.recent.slice(0, 2).map((entry) => recentLine(entry, inner, now))];
+		const body = [totalsLine(state, activity, reads, width), ...activity.recent.slice(0, 2).map((entry) => recentLine(entry, width, now))];
 		const room = 4 - body.length;
 		const kept = closing.length <= room ? closing : [...closing].sort((a, b) => a.urgency - b.urgency).slice(0, room);
 		const lines = [...body, ...closing.filter((closer) => kept.includes(closer)).map((closer) => closer.line)];
-		return lines.map((line) => cut(line, inner));
+		return lines.map((line) => cut(line, width));
 	}
 	const body = [`${plural(state.notes, "note")} for this repo`];
 	if (state.usedThisTurn > 0) body.push(`using ${state.usedThisTurn} this turn${reads > 0 ? ` · read ${reads}` : ""}`);

@@ -849,6 +849,10 @@ test("quiet sections fold to their headers: signals say ok, process its memory; 
 		const process = lines.findIndex((line) => /^ ─ process · \d+ MB ─+$/.test(line));
 		expect(process).toBeGreaterThan(-1);
 		expect(lines[process + 1]).toContain("alt+s"); // folded: the hint follows the header
+		// One item slot per drawn row, for /sidebar focus; no section names items yet.
+		const items = (h.opened.sidebar as unknown as { items(): unknown[] }).items();
+		expect(items).toHaveLength(lines.length);
+		expect(items.every((item) => item === undefined)).toBe(true);
 		await h.stop();
 
 		writePrefs(dir, { ...readPrefs(dir), sidebarDepth: { process: "expanded" } });
@@ -2952,6 +2956,8 @@ test("a resumed session's routing section counts the replayed decisions: the mar
 		const lines = h.opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1).trim());
 		const at = lines.findIndex((line) => line.startsWith("─ routing"));
 		expect(at).toBeGreaterThan(-1);
+		// The header names the slot the last route answered on.
+		expect(lines[at]).toMatch(/^─ routing · default ─+$/);
 		expect(lines[at + 1]).toBe("fast 1 · default 1 · frontier 0");
 		expect(lines[at + 2]).toMatch(/^1 switch · lost cache ~\$0\.\d+$/);
 		expect(lines[at + 3]).toBe("1 unsure, kept the last model");

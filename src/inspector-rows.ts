@@ -12,7 +12,7 @@
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { contextBar, dollars, tokens } from "./footer.ts";
-import type { Depth } from "./prefs.ts";
+import type { Depth, SectionId } from "./prefs.ts";
 import type { Signals, Step } from "./trajectory.ts";
 
 export const MINIMAP_WIDTH = 38;
@@ -113,11 +113,15 @@ export function minimapRows(
  * drops the word "steps" before the rule outgrows the panel.
  */
 export function trajectoryTitle(steps: number, turn: number, width: number): string {
-	if (!steps) return sectionLines("trajectory", [], width)[0]!;
-	const title = `trajectory · ${steps} steps · turn ${turn}`;
+	return lineText(trajectoryHeader(steps, turn, width));
+}
+
+/** The trajectory's title rule as the frame paints it: in segments, like every section header. */
+export function trajectoryHeader(steps: number, turn: number, width: number): Row {
+	if (!steps) return sectionHeader("trajectory", undefined, width);
 	// Two columns of rule at least, so it still reads as a rule.
-	const fits = visibleWidth(` ─ ${title} `) + 2 <= width;
-	return fit(sectionLines(fits ? title : `trajectory · ${steps} · turn ${turn}`, [], width)[0]!, width);
+	const fits = visibleWidth(` ─ trajectory · ${steps} steps · turn ${turn} `) + 2 <= width;
+	return sectionHeader("trajectory", fits ? `${steps} steps · turn ${turn}` : `${steps} · turn ${turn}`, width);
 }
 
 /** A section's title rule: ` ─ title ───`, as wide as the panel. */
@@ -128,8 +132,14 @@ const rule = (title: string, width: number) => {
 
 /** A panel section under the minimap: a ` ─ title ───` rule, then the body indented. */
 export function sectionLines(title: string, body: string[], width: number, empty = "nothing yet"): string[] {
-	return [rule(title, width), ...(body.length ? body : [empty]).map((line) => fit(`  ${line}`, width))];
+	return [rule(title, width), ...(body.length ? body : [empty]).map((line) => fit(`${" ".repeat(BODY_INDENT)}${line}`, width))];
 }
+
+/** The cells the frame indents a section's body by: a section renders its body for the panel width less these. */
+export const BODY_INDENT = 2;
+
+/** The most body lines a section shows at compact depth; expanded shows them all. The trajectory is not capped. */
+export const COMPACT_LINES = 4;
 
 /** The theme roles a sidebar line is painted in: the ones all thirteen themes keep readable as text. */
 export type Role =
@@ -144,14 +154,28 @@ export type Role =
 	| "syntaxKeyword"
 	| "syntaxType";
 
-/** A run of plain text in one role. Never carries escape codes: the frame paints it. */
-export type Seg = { role: Role; text: string };
+/**
+ * A run of text in one role. Its text is made printable before it is measured (`fitSegs`), so it can never
+ * carry an escape code of its own: the frame paints it. `flex` marks the segment that gives way first when
+ * the line is too long (a title, a query), so a right-hand age or number survives the cut.
+ */
+export type Seg = { role: Role; text: string; flex?: true };
 
 /**
- * One sidebar line: a plain string, painted in one role as before, or segments, each in its own role. A
- * section moves from strings to segments on its own; the frame paints both.
+ * A line of segments. `item` names what the line shows (a note's path, a part of the context): every line
+ * of a wrapped event carries the same key, and it survives the cut and the compact cap, so `/sidebar focus`
+ * can map a drawn row to the item enter opens.
  */
-export type Line = string | Seg[];
+export interface Row {
+	segs: Seg[];
+	item?: string;
+}
+
+/**
+ * One sidebar body line: a plain string, painted in one role as before, or a row of segments, each in its own
+ * role. A section moves from strings to rows on its own; the frame paints both.
+ */
+export type Line = string | Row;
 
 const graphemes = new Intl.Segmenter();
 
@@ -171,58 +195,146 @@ function cutPlain(text: string, cells: number): string {
 	return out;
 }
 
-export const lineText = (line: Line) => (typeof line === "string" ? line : line.map((seg) => seg.text).join(""));
+const segsText = (segs: Seg[]) => segs.map((seg) => seg.text).join("");
+
+export const lineText = (line: Line) => (typeof line === "string" ? line : segsText(line.segs));
 
 /**
- * Segments cut to exactly `width` cells, measured on their plain text, so a cut never lands inside an escape
- * code (the paint comes after). Too long, the last cell is `…` in the role of the segment it cut; short, the
- * line is padded.
+ * Text safe to draw, from anywhere (memorq sends titles and queries): escape sequences (CSI, OSC, DCS, SOS,
+ * PM, APC, and any other ESC pair) removed whole, a tab made a space (it would break a one-line row's
+ * width), then every other control character (C0, DEL, C1) dropped. A terminal acts on what it is sent:
+ * an OSC 52 in a trigger name would write the clipboard.
+ */
+export function printable(text: string): string {
+	return text
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\x1b[\]PX^_][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
+		.replace(/\x1b[\s\S]?/g, "")
+		.replace(/\t/g, " ")
+		.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+}
+
+/** The flexible segment cut by `over` cells plus one for the `…`, padded back if a wide character did not fit; undefined when it cannot give that much. */
+function shrinkFlex(segs: Seg[], over: number): Seg[] | undefined {
+	const at = segs.findIndex((seg) => seg.flex);
+	const flex = segs[at];
+	if (!flex) return undefined;
+	const keep = visibleWidth(flex.text) - over - 1;
+	if (keep < 0) return undefined;
+	const cut = `${cutPlain(flex.text, keep)}…`;
+	const text = cut + " ".repeat(Math.max(0, keep + 1 - visibleWidth(cut)));
+	return segs.map((seg, i) => (i === at ? { ...seg, text } : seg));
+}
+
+/** Cut from the right: the last cell is `…` in the role of the segment it cut. */
+function cutRight(segs: Seg[], width: number): Seg[] {
+	const out: Seg[] = [];
+	let room = Math.max(0, width - 1);
+	for (const seg of segs) {
+		const cells = visibleWidth(seg.text);
+		if (cells <= room) {
+			out.push(seg);
+			room -= cells;
+			continue;
+		}
+		out.push({ ...seg, text: `${cutPlain(seg.text, room)}…` });
+		break;
+	}
+	return out;
+}
+
+/**
+ * Segments made printable and cut to exactly `width` cells, measured on their plain text, so a cut never
+ * lands inside an escape code (the paint comes after). Too long, the flexible segment gives way first; with
+ * none, or not enough of it, the line is cut from the right. Short, the line is padded.
  */
 export function fitSegs(segs: Seg[], width: number): Seg[] {
-	const out: Seg[] = [];
-	let used = 0;
-	if (visibleWidth(lineText(segs)) <= width) {
-		out.push(...segs);
-		used = visibleWidth(lineText(segs));
-	} else {
-		let room = Math.max(0, width - 1);
-		for (const seg of segs) {
-			const cells = visibleWidth(seg.text);
-			if (cells <= room) {
-				out.push(seg);
-				room -= cells;
-				continue;
-			}
-			out.push({ role: seg.role, text: `${cutPlain(seg.text, room)}…` });
-			break;
-		}
-		used = visibleWidth(lineText(out));
-	}
+	const clean = segs.map((seg) => ({ ...seg, text: printable(seg.text) }));
+	const total = visibleWidth(segsText(clean));
+	const out = total > width ? (shrinkFlex(clean, total - width) ?? cutRight(clean, width)) : clean;
+	const used = visibleWidth(segsText(out));
 	if (used < width) out.push({ role: out.at(-1)?.role ?? "text", text: " ".repeat(width - used) });
 	return out;
 }
 
 /**
  * Paint a line already cut to width. A string keeps one role over the whole line (`roleOf` reads it), exactly
- * as the frame painted strings before segments; segments are painted each in its own role, and blank ones
- * (indent, padding) are left unpainted.
+ * as the frame painted strings before segments; a row's segments are painted each in its own role, and blank
+ * ones (indent, padding) are left unpainted.
  */
 export function paintLine(line: Line, fg: (role: string, text: string) => string, roleOf: (text: string) => string): string {
 	if (typeof line === "string") return fg(roleOf(line), line);
-	return line.map((seg) => (seg.text.trim() ? fg(seg.role, seg.text) : seg.text)).join("");
+	return line.segs.map((seg) => (seg.text.trim() ? fg(seg.role, seg.text) : seg.text)).join("");
+}
+
+/**
+ * A section's header as a row: ` ─ ` and the rule `dim`, the name `accent`, the answer `text` (or its own
+ * segments). The answer gives way first when the header is too long, so the name stays whole.
+ */
+export function sectionHeader(title: string, summary: string | Seg[] | undefined, width: number): Row {
+	let answer: Seg[] = [];
+	if (typeof summary === "string") answer = [{ role: "text", text: summary, flex: true }];
+	else if (summary) answer = summary;
+	const head: Seg[] = [
+		{ role: "dim", text: " ─ " },
+		{ role: "accent", text: title },
+		...(answer.length ? [{ role: "dim", text: " · " } as Seg, ...answer] : []),
+		{ role: "dim", text: " " },
+	];
+	const rest = width - visibleWidth(printable(segsText(head)));
+	return { segs: fitSegs([...head, { role: "dim", text: "─".repeat(Math.max(0, rest)) }], width) };
 }
 
 /**
  * One section as the frame draws it: the header ` ─ title · summary ───`, where the summary is the section's
- * answer (`signals · ok`), then the body indented two cells and cut to `width`. An empty body folds the
- * section to its header: a quiet section says so in one line.
+ * answer (`signals · ok`), then the body indented `BODY_INDENT` cells and cut to `width`, at most
+ * `COMPACT_LINES` of it at compact depth. An empty body folds the section to its header: a quiet section says
+ * so in one line. A row keeps its item through the cut and the cap.
  */
-export function sectionBlock(title: string, summary: string | undefined, body: Line[], width: number): [string, ...Line[]] {
-	const header = rule(summary ? `${title} · ${summary}` : title, width);
+export function sectionBlock(
+	title: string,
+	summary: string | Seg[] | undefined,
+	body: Line[],
+	width: number,
+	depth: Depth = "expanded",
+): [Row, ...Line[]] {
+	const indent = " ".repeat(BODY_INDENT);
+	const shown = depth === "compact" ? body.slice(0, COMPACT_LINES) : body;
 	return [
-		visibleWidth(header) > width ? `${cutPlain(header, width - 1)}…` : header,
-		...body.map((line) => (typeof line === "string" ? fit(`  ${line}`, width) : fitSegs([{ role: "text", text: "  " }, ...line], width))),
+		sectionHeader(title, summary, width),
+		...shown.map((line) =>
+			typeof line === "string"
+				? fit(`${indent}${line}`, width)
+				: { ...line, segs: fitSegs([{ role: "text", text: indent }, ...line.segs], width) },
+		),
 	];
+}
+
+/** A drawn sidebar row, unboxed, and the item it shows, if any: what `/sidebar focus` moves between. */
+export interface FrameRow {
+	text: string;
+	item?: { section: SectionId; key: string };
+}
+
+/**
+ * The sections under the trajectory as painted rows: a blank row, then each section's lines (from
+ * `sectionBlock`). A body string is painted in the role `roleOf` reads; a row in its segments' roles, and its
+ * item is kept beside it, so the frame can map a drawn row back to an item.
+ */
+export function drawSections(
+	sections: { id: SectionId; lines: [Row, ...Line[]] }[],
+	width: number,
+	fg: (role: string, text: string) => string,
+	roleOf: (id: SectionId, text: string) => string,
+): FrameRow[] {
+	return sections.flatMap(({ id, lines: [header, ...body] }) => [
+		{ text: " ".repeat(width) },
+		{ text: paintLine(header, fg, () => "dim") },
+		...body.map((line): FrameRow => {
+			const text = paintLine(line, fg, (plain) => roleOf(id, plain));
+			return typeof line !== "string" && line.item ? { text, item: { section: id, key: line.item } } : { text };
+		}),
+	]);
 }
 
 /** Where the context goes, in tokens (chars / 4). What the context section and /context read. */

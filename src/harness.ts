@@ -20,6 +20,9 @@ import {
 import {
 	contextBody,
 	contextUsed,
+	BODY_INDENT,
+	drawSections,
+	type FrameRow,
 	type Line,
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
@@ -32,7 +35,7 @@ import {
 	sectionBlock,
 	signalBody,
 	signalSummary,
-	trajectoryTitle,
+	trajectoryHeader,
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
@@ -49,7 +52,7 @@ import {
 	type MemorqHost,
 	type MemorqState,
 } from "./memory-section.ts";
-import { routingBody, routingStats, routingSummary } from "./routing-section.ts";
+import { type RoutingStats, routingBody, routingStats, routingSummary } from "./routing-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
@@ -565,17 +568,19 @@ export function orqHarness(deps: HarnessDeps) {
 			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
 		};
 		/**
-		 * Switch one section and save it. The file is read again and only this id changed, so a second
-		 * orqi window's choices since this one started are kept rather than overwritten, and come back
-		 * into this one. Never from a render: it reads and writes the file.
+		 * Change the sidebar's choices and save them. The file is read again and only this change is made to
+		 * it, so a second orqi window's choices since this one started are kept rather than overwritten, and
+		 * come back into this one. Never from a render: it reads and writes the file. A failed save still
+		 * applies in memory and says why.
 		 */
-		const setSection = (ctx: ExtensionContext | undefined, id: SectionId, value: boolean) => {
-			prefs.sections[id] = value;
+		const savePrefs = (ctx: ExtensionContext | undefined, change: (into: Prefs) => void) => {
+			change(prefs);
 			try {
 				const fresh = readPrefs(deps.agentDir);
-				fresh.sections[id] = value;
+				change(fresh);
 				writePrefs(deps.agentDir, fresh);
 				Object.assign(prefs.sections, fresh.sections);
+				prefs.sidebarDepth = fresh.sidebarDepth;
 			} catch (error) {
 				// memorq calls this through panel.set, possibly after this session closed: a stale ctx throws on use.
 				try {
@@ -585,31 +590,23 @@ export function orqHarness(deps: HarnessDeps) {
 				}
 			}
 		};
+		/** Switch one section on or off, and save it. */
+		const setSection = (ctx: ExtensionContext | undefined, id: SectionId, value: boolean) =>
+			savePrefs(ctx, (into) => {
+				into.sections[id] = value;
+			});
 		/**
-		 * Open one section to expanded, or back to compact, and save it as setSection does: the file is read
-		 * again and only this id changes, and this window takes up the other depths the file holds. Never
-		 * from a render.
+		 * Open one section to expanded, or back to compact, save it and redraw.
+		 * ponytail: context and memory draw the same at both depths until their expanded views land, so the key
+		 * changes nothing visible yet; no notice says so.
 		 */
 		const toggleDepth = (ctx: ExtensionContext | undefined, id: SectionId) => {
 			const depth: Depth = prefs.sidebarDepth?.[id] === "expanded" ? "compact" : "expanded";
-			const set = (into: Prefs) => {
+			savePrefs(ctx, (into) => {
 				const depths = { ...into.sidebarDepth, [id]: depth };
 				if (depth === "compact") delete depths[id];
 				into.sidebarDepth = Object.keys(depths).length ? depths : undefined;
-			};
-			set(prefs);
-			try {
-				const fresh = readPrefs(deps.agentDir);
-				set(fresh);
-				writePrefs(deps.agentDir, fresh);
-				prefs.sidebarDepth = fresh.sidebarDepth;
-			} catch (error) {
-				try {
-					ctx?.ui.notify(`Could not save the panel choice: ${(error as Error).message}`, "warning");
-				} catch {
-					// The depth still applies in memory; only the notice is lost.
-				}
-			}
+			});
 			render();
 		};
 		// ── memory: what memorq last published on the bus, and the notes the model opened ──
@@ -907,6 +904,21 @@ export function orqHarness(deps: HarnessDeps) {
 		};
 
 		// ── the sidebar ─────────────────────────────────────────────────────
+		/**
+		 * orq/auto's numbers for the routing section, worked out once per change to the trajectory (or to the
+		 * dry run and the default model it is measured against), not on every frame.
+		 */
+		let routed: { stats: RoutingStats; dry: boolean; baseline: string } | undefined;
+		trajectory.onChange(() => {
+			routed = undefined;
+		});
+		const routingNow = () => {
+			const dry = deps.routing?.dryRun ?? false;
+			const baseline = deps.routing?.pool.medium ?? "";
+			if (routed?.dry !== dry || routed.baseline !== baseline)
+				routed = { stats: routingStats(trajectory.steps, priceOf, baseline, dry), dry, baseline };
+			return routed.stats;
+		};
 		/** The sections under the trajectory, in `SECTIONS` order (src/prefs.ts); orqi.json says which are drawn. */
 		const sections: InspectorSection[] = [
 			// Drawn by the frame itself (it fills the height the others leave); listed here so /sidebar offers it.
@@ -932,8 +944,8 @@ export function orqHarness(deps: HarnessDeps) {
 			{
 				id: "routing",
 				title: "routing",
-				summary: () => routingSummary({ dry: deps.routing?.dryRun ?? false }),
-				lines: () => routingBody(routingStats(trajectory.steps, priceOf, deps.routing?.pool.medium ?? "", deps.routing?.dryRun ?? false)),
+				summary: () => routingSummary(routingNow()),
+				lines: () => routingBody(routingNow()),
 				// Drawn only while orq/auto picks the model, or once it has routed this session. Otherwise
 				// greyed in /sidebar with the way in, rather than left out where nobody would find it.
 				unavailable: () =>
@@ -953,9 +965,11 @@ export function orqHarness(deps: HarnessDeps) {
 		const minimapView = (theme: { fg(token: string, text: string): string }): Component => {
 			// Rendering must never throw: an exception here takes the whole TUI down.
 			// A frame that fails keeps the last good one, as the footer does.
-			let lastFrame: string[] = [];
+			let lastFrame: FrameRow[] = [];
 			return {
 				invalidate() {},
+				/** The item each row of the last frame shows, row for row: what `/sidebar focus` will move between. */
+				items: () => lastFrame.map((row) => row.item),
 				// The wheel scrolls the trajectory (fullscreen routes mouse events to the component under
 				// the pointer). Back at the newest step it follows new steps again.
 				handleMouse(event) {
@@ -972,10 +986,10 @@ export function orqHarness(deps: HarnessDeps) {
 					} catch {
 						// Keep the last good frame.
 					}
-					return lastFrame;
+					return lastFrame.map((row) => row.text);
 				},
-			};
-			function inspectorFrame(width: number): string[] {
+			} as Component;
+			function inspectorFrame(width: number): FrameRow[] {
 				const inner = Math.max(10, width - 2);
 				const rowPaint = {
 					bright: (text: string) => theme.fg("accent", text),
@@ -990,8 +1004,8 @@ export function orqHarness(deps: HarnessDeps) {
 				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
 					if (section.id === "trajectory") return [];
 					const view: SectionFrame = { signals: found, depth: prefs.sidebarDepth?.[section.id] ?? "compact" };
-					const body = section.lines(inner, view);
-					return body ? [{ id: section.id, lines: sectionBlock(section.title, section.summary?.(view), body, inner) }] : [];
+					const body = section.lines(inner - BODY_INDENT, view);
+					return body ? [{ id: section.id, lines: sectionBlock(section.title, section.summary?.(view), body, inner, view.depth) }] : [];
 				});
 				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				// The slot is the screen less what composeLayout keeps above and below it, or the overlay's
@@ -1001,11 +1015,6 @@ export function orqHarness(deps: HarnessDeps) {
 				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
-				const paintSection = ({ id, lines: [header, ...body] }: { id: SectionId; lines: [string, ...Line[]] }) => [
-					blank,
-					side(theme.fg("dim", header)),
-					...body.map((line) => side(paintLine(line, theme.fg, (text) => sectionLineRole(id, text)))),
-				];
 				const title = " sidebar ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
 				const hint = minimapFocused
@@ -1015,20 +1024,24 @@ export function orqHarness(deps: HarnessDeps) {
 						: showTrajectory
 							? "alt+s · /sidebar focus" // focus walks the trajectory
 							: "alt+s · /sidebar";
+				// Without the trajectory above it, the first section needs no blank line to set it apart.
+				const underneath = drawSections(drawn, inner, theme.fg, sectionLineRole).slice(showTrajectory ? 0 : 1);
 				// FRAME_CHROME counts the lines here that are neither trajectory rows nor sections.
-				return [
+				const chrome = [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					...(showTrajectory
 						? [
-								side(theme.fg("dim", trajectoryTitle(trajectory.steps.length, trajectory.turn, inner))),
+								side(paintLine(trajectoryHeader(trajectory.steps.length, trajectory.turn, inner), theme.fg, () => "dim")),
 								...rows.map(side),
 								...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
 							]
 						: []),
-					// Without the trajectory above it, the first section needs no blank line to set it apart.
-					...drawn.flatMap(paintSection).slice(showTrajectory ? 0 : 1),
-					side(theme.fg("dim", fit(hint))),
-					theme.fg("border", `└${"─".repeat(inner)}┘`),
+				].map((text): FrameRow => ({ text }));
+				return [
+					...chrome,
+					...underneath.map((row) => ({ ...row, text: side(row.text) })),
+					{ text: side(theme.fg("dim", fit(hint))) },
+					{ text: theme.fg("border", `└${"─".repeat(inner)}┘`) },
 				];
 			}
 		};

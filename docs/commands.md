@@ -79,7 +79,7 @@ It sits beside the transcript from 140 columns wide. `alt+s` forces it on or off
 | trajectory | Every step: messages, tool calls, routing, memory. Its title counts steps and turns |
 | signals | Warnings such as a tool called three times with the same arguments, errors, calls that cannot be undone. Just `signals · ok` while there are none |
 | context | Where the context window goes, and the cache hit rate |
-| routing | Under `orq/auto`: picks per model, switches, the decider's cost, an estimated saving |
+| routing | Under `orq/auto`: picks per model, switches, the decider's cost, an estimated saving. Its title names the slot answering now |
 | memory | With memorq installed: notes for this repository, notes in use, the last thing learned |
 | process | orqi's own memory use in its title; expanded, the last minute and the peak. Off until you turn it on |
 
