@@ -20,7 +20,7 @@ import { type AskQuestion, type AskUserDetails, askUserView } from "./ask-user.t
 
 /** Sent once, hidden, on the first turn after plan mode turns on. */
 export const PLAN_ON = `Plan mode is on: investigate and propose, change nothing.
-- Reads run: read, orq list_/get_/search_/query_ tools, the investigator, analyst and docs subagents. Bash asks the user every time; use it only to look.
+- Reads run: read, orq list_/get_/search_/query_ tools, the investigator, analyst and docs subagents, and any user-defined subagent (its orq calls are gated the same way). Bash asks the user every time; use it only to look.
 - Edits, writes, orq create_/update_/delete_ calls and managed agents are blocked until the user approves a plan.
 - Ask with ask_user only what the code and the workspace cannot answer: one decision per question, with a recommended option.
 - When the plan is ready, call exit_plan with it in markdown, under exactly these headings: "# <title>", "## Context", "## Decisions", "## Slices", "## Changes", "## Out of scope".

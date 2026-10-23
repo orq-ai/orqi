@@ -103,9 +103,17 @@ function markAndBody(step: Step, titleOf: (path: string) => string, end: string)
 		case "subagent": {
 			const n = descendants(step);
 			const cost = step.usage?.cost ? ` ${dollars(step.usage.cost)}` : "";
+			// While it runs, the call in flight: `investigator get_span +2`.
+			const live = step.status === "running" ? [...(step.children ?? [])].reverse().find((child) => child.status === "running") : undefined;
 			return {
 				mark: seg("text", GLYPH.subagent),
-				body: [seg("text", step.label, true), ...tail, ...(n ? [seg("text", ` +${n}`)] : []), ...(cost ? [seg("dim", cost)] : [])],
+				body: [
+					seg("text", step.label, true),
+					...(live ? [seg("dim", ` ${live.label}`)] : []),
+					...tail,
+					...(n ? [seg("text", ` +${n}`)] : []),
+					...(cost ? [seg("dim", cost)] : []),
+				],
 			};
 		}
 		case "memory":

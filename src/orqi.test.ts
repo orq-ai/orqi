@@ -167,6 +167,7 @@ test("every command orqi registers is in ORQI_COMMANDS, so the plugin never shad
 	const registered: string[] = [];
 	const pi = {
 		registerEntryRenderer: () => {},
+		registerMessageRenderer: () => {},
 		registerCommand: (name: string) => registered.push(name),
 		registerShortcut: () => {},
 		registerTool: () => {},
@@ -320,6 +321,7 @@ test("our commands never collide with a pi built-in", () => {
 	const registered: string[] = [];
 	const pi = {
 		registerEntryRenderer: () => {},
+		registerMessageRenderer: () => {},
 		registerCommand: (name: string) => registered.push(name),
 		on: () => {},
 		events: { on: () => () => {}, emit: () => {} },
@@ -363,6 +365,7 @@ test("our shortcuts never take a key pi binds by default", async () => {
 	const shortcuts: string[] = [];
 	const pi = {
 		registerEntryRenderer: () => {},
+		registerMessageRenderer: () => {},
 		registerCommand: () => {},
 		registerShortcut: (key: string) => shortcuts.push(key),
 		registerTool: () => {},

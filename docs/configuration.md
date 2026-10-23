@@ -7,7 +7,7 @@ orqi works with nothing set. Everything here is optional.
 | Path | Holds |
 |---|---|
 | `~/.orqi/agent` | Credentials, settings, saved plans, and `orqi.json` (which sidebar sections show and which are expanded, the saved decider and routing models, `/compact-at`). Move it with `ORQI_AGENT_DIR` |
-| `.orqi/` in a project | That project's own settings (`.orqi/settings.json`, `.orqi/extensions`). Loaded only once you trust the project with `/trust` |
+| `.orqi/` in a project | That project's own settings (`.orqi/settings.json`, `.orqi/extensions`, `.orqi/agents`). Loaded only once you trust the project with `/trust` |
 
 orqi never touches `~/.pi`, and it ignores a project's `.pi/`.
 
@@ -64,6 +64,35 @@ The full resolution is in [credentials.md](credentials.md).
 | `ORQI_VERSION` | Pins the release tag that `install.sh` and `orqi update` install |
 | `ORQI_INSTALL_DIR` | Read by `install.sh` only: where the binary goes (default `~/.local/bin`) |
 | `CI` | Any value turns off the daily release check, unless `ORQI_REFRESH_UPDATE=1` forces one |
+
+## Subagent types
+
+Beside the built-in `investigator`, `analyst` and `docs`, the model can delegate to types you write.
+Each is one file, `<name>.md`, in `~/.orqi/agent/agents/` (yours, every project) or a trusted
+project's `.orqi/agents/` (that project's; it wins a name both define):
+
+```markdown
+---
+description: Audits evaluators against their experiment runs
+tools: [list_experiment_runs, get_experiment_run, get_llm_eval]
+rung: medium
+---
+You audit orq.ai evaluators. Name each evaluator that disagrees with the run's outcome, with the run id.
+```
+
+| Field | Rule |
+|---|---|
+| file name | The type's name: lowercase letters, digits and dashes. A built-in's name is refused |
+| `description` | Required. The model reads it to pick the type |
+| `tools` | Required. Bare orq tool names (`list_traces`, not `mcp__orq__list_traces`). Never bash or file tools |
+| `rung` | `easy`, `medium` (default) or `hard`: which model answers under `orq/auto` |
+| body | Required. The subagent's whole system prompt |
+
+A file that breaks a rule is skipped and listed in `/subagents` with the reason. A type naming a tool
+the workspace does not have is refused when called, with the file to fix, rather than run with fewer
+tools. Its orq calls go through the same gate as yours: plan mode blocks a `delete_` and the
+confirmation dialog still asks. Files are read on every call; the tool description that lists them
+for the model is refreshed on restart.
 
 ## Launching from the orq CLI
 

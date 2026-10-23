@@ -10,7 +10,18 @@ import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { agentDetail, agentRow, inspectLines, isAgentModel, sortAgents } from "./agents.ts";
 import { contextBar, dollars, footerLine, gitBadges, gitOperation, headerBar, hostLabel, sparkline, statusLine, tokens } from "./footer.ts";
-import { exitSummary, orqHarness, repoOf, reserveFor, routeRow, sectionRows, sectionsToDraw, type InspectorSection } from "./harness.ts";
+import {
+	exitSummary,
+	orqHarness,
+	repoOf,
+	reserveFor,
+	routeRow,
+	sectionRows,
+	sectionsToDraw,
+	type HarnessDeps,
+	type InspectorSection,
+} from "./harness.ts";
+import { AGENT_TYPES } from "./subagent.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import { minimapRow, minimapRows, trajectoryTitle, peekLines, sectionLines, type ContextSplit } from "./inspector-rows.ts";
@@ -160,6 +171,109 @@ test("live events and a rebuild produce the same steps", () => {
 	expect(shape(live.steps)).toEqual(shape(rebuilt.steps));
 });
 
+test("a nested call attaches to its subagent step and the result replaces it", () => {
+	const t = new Trajectory();
+	t.toolStart("s1", "subagent", { agent: "investigator", task: "why" });
+	t.childStart("s1", "s1/1", "mcp__orq__get_span", { span_id: "x" });
+	expect(t.steps.at(-1)!.children).toHaveLength(1);
+	expect(t.steps.at(-1)!.children![0]).toMatchObject({
+		role: "tool",
+		label: "get_span",
+		status: "running",
+		toolCallId: "s1/1",
+		turn: t.steps.at(-1)!.turn,
+	});
+	t.childEnd("s1/1", false, 12);
+	expect(t.steps.at(-1)!.children![0]).toMatchObject({ status: "ok", durationMs: 12 });
+	t.gate("s1/1", "benign");
+	expect(t.steps.at(-1)!.children![0]!.door).toBe("benign");
+	// pi's final result carries the child session's full steps, which win over the live ones.
+	t.message({
+		role: "toolResult",
+		toolCallId: "s1",
+		content: [{ type: "text", text: "done" }],
+		details: {
+			agent: "investigator",
+			model: "m",
+			steps: [{ role: "assistant", label: "a", detail: "", status: "ok", ts: 0, id: 1, turn: 1 }],
+		},
+	} as any);
+	expect(t.steps.at(-1)!.children).toHaveLength(1);
+	expect(t.steps.at(-1)!.children![0]!.role).toBe("assistant");
+});
+
+test("a background subagent stays running until its orqi-subagent message lands", () => {
+	const t = new Trajectory();
+	t.toolStart("s1", "subagent", { agent: "docs", task: "t", background: true });
+	// The tool returns at once, so pi ends its execution: that is not the subagent finishing.
+	t.toolEnd("s1", false, 5);
+	expect(t.steps.at(-1)!.status).toBe("running");
+	t.message({
+		role: "toolResult",
+		toolCallId: "s1",
+		content: [{ type: "text", text: "started" }],
+		details: { agent: "docs", model: "m", background: true },
+	} as any);
+	expect(t.steps.at(-1)!.status).toBe("running");
+	t.message({
+		role: "custom",
+		customType: "orqi-subagent",
+		content: 'subagent "docs" finished',
+		details: {
+			toolCallId: "s1",
+			agent: "docs",
+			model: "m",
+			steps: [],
+			usage: { input: 1, output: 1, cacheRead: 0, cost: 0.01 },
+			isError: false,
+			durationMs: 900,
+		},
+	} as any);
+	expect(t.steps.at(-1)).toMatchObject({ status: "ok", durationMs: 900, usage: { cost: 0.01 } });
+});
+
+test("a background child's calls after the parent's turn reuse ids: each is its own row, and signals see them now", () => {
+	const t = new Trajectory();
+	t.message({ role: "user", content: "go", timestamp: 1 } as any);
+	t.toolStart("s1", "subagent", { agent: "investigator", task: "t", background: true });
+	t.childStart("s1", "s1/1", "mcp__orq__get_span", { span_id: "x" });
+	t.childEnd("s1/1", false, 3);
+	// pi clears its nested-call scopes when the parent's run ends, so the next call is s1/1 again.
+	t.message({ role: "user", content: "and now?", timestamp: 2 } as any);
+	for (let i = 0; i < 3; i++) {
+		t.childStart("s1", "s1/1", "mcp__orq__get_span", { span_id: "x" });
+		t.gate("s1/1", "benign");
+		t.childEnd("s1/1", i === 2, 3);
+	}
+	const sub = t.steps.find((step) => step.role === "subagent")!;
+	expect(sub.children!.map((child) => child.status)).toEqual(["ok", "ok", "ok", "error"]);
+	expect(sub.children!.map((child) => child.door)).toEqual([undefined, "benign", "benign", "benign"]);
+	// The three in this turn loop, though the subagent was started a turn ago.
+	expect(signals(t.steps, t.turn)).toMatchObject({ loop: { tool: "get_span", count: 3 }, errors: 1 });
+});
+
+test("an orqi-subagent message for a call not on the branch is ignored", () => {
+	const t = new Trajectory();
+	expect(() =>
+		t.message({
+			role: "custom",
+			customType: "orqi-subagent",
+			content: "x",
+			details: { toolCallId: "gone", agent: "docs", isError: false },
+		} as any),
+	).not.toThrow();
+	expect(t.steps).toHaveLength(0);
+});
+
+test("a nested call under a non-subagent parent is ignored", () => {
+	const t = new Trajectory();
+	t.toolStart("b1", "bash", { command: "ls" });
+	t.childStart("b1", "b1/1", "read", { path: "x" });
+	t.childStart("nope", "nope/1", "read", { path: "x" });
+	expect(t.steps.at(-1)!.children).toBeUndefined();
+	expect(t.steps).toHaveLength(1);
+});
+
 test("a failed model call is an error step, and route decisions are steps of their own", () => {
 	const trajectory = new Trajectory();
 	trajectory.message({ role: "user", content: "hi", timestamp: 1 });
@@ -307,6 +421,24 @@ test("minimap rows: one glyph per role, +N for a subagent's steps, a gutter on t
 	// A running step spins.
 	const running: Step = { id: 9, turn: 1, role: "tool", label: "orq_get_agent", detail: "", status: "running", ts: 0 };
 	expect(bare(minimapRow(running, 30, false, 2))).toStartWith(" ⠹ tool orq_get_agent");
+});
+
+test("a running subagent row names the child call in flight", () => {
+	const step = {
+		id: 1,
+		turn: 1,
+		role: "subagent",
+		label: "investigator",
+		detail: "",
+		status: "running",
+		ts: 0,
+		toolCallId: "s1",
+		children: [
+			{ id: 2, turn: 1, role: "tool", label: "list_spans", detail: "", status: "ok", ts: 0 },
+			{ id: 3, turn: 1, role: "tool", label: "get_span", detail: "", status: "running", ts: 0 },
+		],
+	} as Step;
+	expect(minimapRow(step, 40, false, 0)).toContain("investigator get_span +2");
 });
 
 test("minimap rows stay pinned to the newest step unless a row is selected", () => {
@@ -466,6 +598,7 @@ test("/refresh reloads the catalogue and re-selects the active model", async () 
 		events: { on: () => () => {}, emit: () => {} },
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: () => {},
+		registerMessageRenderer: () => {},
 		registerShortcut: () => {},
 		registerTool: () => {},
 		setModel: async (model: unknown) => {
@@ -613,6 +746,8 @@ function harnessOn(
 		hold?: boolean;
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
 		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
+		agentTypes?: HarnessDeps["agentTypes"];
+		subagents?: HarnessDeps["subagents"];
 	} = {},
 ) {
 	const tools = new Map<string, any>();
@@ -622,6 +757,8 @@ function harnessOn(
 	const renderers = new Map<string, (entry: any, options: any, theme: any) => any>();
 	/** Session entries the harness appended; they join the branch, as pi's session file does. */
 	const entries: { customType: string; data: any }[] = [];
+	/** Custom messages the harness sent (pi.sendMessage), with their delivery options. */
+	const sent: { message: any; options: any }[] = [];
 	const branch = options.branch ?? [];
 	const bus = options.bus ?? fakeBus();
 	// pi drops an instance's bus subscriptions with it: stop() does the same.
@@ -638,6 +775,8 @@ function harnessOn(
 		},
 		registerCommand: (name: string, command: any) => commands.set(name, command.handler),
 		registerEntryRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
+		registerMessageRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
+		sendMessage: (message: any, options?: any) => sent.push({ message, options }),
 		appendEntry: (customType: string, data: any) => {
 			entries.push({ customType, data });
 			branch.push({ type: "custom", customType, data, timestamp: new Date().toISOString() });
@@ -665,6 +804,8 @@ function harnessOn(
 		routing: options.routing as never,
 		settingsManager: options.settingsManager,
 		openEditor: options.openEditor,
+		agentTypes: options.agentTypes,
+		subagents: options.subagents,
 	})(pi as any);
 	const notices: string[] = [];
 	const widgets = new Map<string, unknown>();
@@ -781,6 +922,7 @@ function harnessOn(
 		drawn,
 		read,
 		entries,
+		sent,
 		renderers,
 		branch,
 		rows,
@@ -1265,6 +1407,34 @@ test("the trajectory row of a note read is `◇ memory <title>`; another read ke
 		await h.read("r1", file);
 		await h.read("r2", join(dir, "src", "main.ts"));
 		expect(h.rows()).toEqual([" ◇ memory Make docs serve", "▌⚙ tool read ✓"]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a subagent's calls draw under its row while it runs, not as rows of their own", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-nested-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		await h.handlers.get("tool_execution_start")!(
+			{ toolCallId: "s1", toolName: "subagent", args: { agent: "investigator", task: "t" } },
+			h.ctx,
+		);
+		await h.handlers.get("tool_execution_start")!(
+			{ toolCallId: "s1/1", toolName: "read", args: { path: "/x" }, parentToolCallId: "s1" },
+			h.ctx,
+		);
+		expect(h.rows()).toEqual([expect.stringMatching(/ investigator read \+1$/)]);
+		await h.handlers.get("tool_execution_end")!(
+			{ toolCallId: "s1/1", toolName: "read", isError: false, durationMs: 1, parentToolCallId: "s1" },
+			h.ctx,
+		);
+		expect(h.rows()).toEqual([expect.stringMatching(/ investigator \+1$/)]);
+		// A nested call with no subagent step to sit under draws nowhere.
+		await h.read("b1/1", "/y", false, "b1");
+		expect(h.rows()).toHaveLength(1);
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
@@ -2390,6 +2560,35 @@ test("signals: a loop is the same tool with the same arguments three times in th
 	expect(signals(trajectory.steps).oneWay).toBe(1);
 });
 
+test("signals count a loop and errors inside a subagent", () => {
+	const child = (id: number, status: "ok" | "error" = "ok") =>
+		({
+			id,
+			turn: 7,
+			role: "tool",
+			label: "get_span",
+			toolName: "mcp__orq__get_span",
+			args: { span_id: "x" },
+			detail: "",
+			status,
+			ts: 0,
+		}) as Step;
+	const steps = [
+		{
+			id: 1,
+			turn: 1,
+			role: "subagent",
+			label: "investigator",
+			detail: "",
+			// Finished: its children are the child session's, numbered by that session's own turns.
+			status: "ok",
+			ts: 0,
+			children: [child(2), child(3), child(4, "error")],
+		},
+	] as Step[];
+	expect(signals(steps)).toMatchObject({ loop: { tool: "get_span", count: 3 }, errors: 1, tools: 3 });
+});
+
 test("panel sections: a rule, an indented body, one calm line when empty", () => {
 	expect(sectionLines("memory", [], 36)).toEqual([" ─ memory ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
 	// Signals and process: inspector-rows.test.ts, with their folding.
@@ -2809,6 +3008,173 @@ test("plan mode lets reads through, asks for every Bash command and blocks the r
 	expect(await gate.onToolCall({ toolCallId: "b2", toolName: "bash", input: { command: "ls" } }, ui)).toBeUndefined();
 	expect(asked).toHaveLength(1);
 	expect(await gate.onToolCall({ toolCallId: "e2", toolName: "edit", input: {} }, ui)).toBeUndefined();
+});
+
+test("/subagents lists built-in, user and project types, then the files that did not load", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-subagents-"));
+	const custom = (description: string, source: string) => ({
+		description,
+		prompt: "You audit.\nCarefully.",
+		tools: ["list_evaluators", "get_span"],
+		rung: "hard" as const,
+		source,
+	});
+	const h = harnessOn(dir, {
+		agentTypes: () => ({
+			types: {
+				...AGENT_TYPES,
+				mine: custom("my own", join(dir, "agents", "mine.md")),
+				// A sibling folder whose name starts the same is not the user's agents dir.
+				near: custom("a neighbour", join(dir, "agents-backup", "near.md")),
+				auditor: custom("audits evaluators", "/work/orqi/.orqi/agents/auditor.md"),
+			},
+			problems: [{ file: "/work/orqi/.orqi/agents/Bad.md", reason: "the file name must be lowercase letters, digits and dashes" }],
+		}),
+	});
+	try {
+		await h.start();
+		await h.commands.get("subagents")!("", h.ctx);
+		const panel = h.opened.panel!;
+		const rows = panelRows(panel);
+		expect(rows[0]).toMatch(/^investigator +built-in +finds the root cause/);
+		expect(rows).toContainEqual(expect.stringMatching(/^mine +user +my own$/));
+		expect(rows).toContainEqual(expect.stringMatching(/^near +project +a neighbour$/));
+		expect(rows).toContainEqual(expect.stringMatching(/^auditor +project +audits evaluators$/));
+		expect(rows.at(-1)).toStartWith("✗ /work/orqi/.orqi/agents/Bad.md: the file name must");
+		// Enter on the project type: its contract and its prompt.
+		for (let i = 0; i < 5; i++) panel.handleInput("\x1b[B");
+		panel.handleInput("\r");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const detail = panelRows(h.opened.panel!);
+		expect(detail).toEqual([
+			"description",
+			"audits evaluators", // panelRows strips the two-space indent
+			"",
+			"tools  list_evaluators, get_span",
+			"rung   hard",
+			"path   /work/orqi/.orqi/agents/auditor.md",
+			"",
+			"prompt",
+			"You audit.",
+			"Carefully.",
+		]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a resumed background subagent is drawn finished from its orqi-subagent entry, and shutdown stops running ones", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-bg-"));
+	const call = {
+		type: "toolCall",
+		id: "s1",
+		name: "subagent",
+		arguments: { agent: "docs", task: "what is a deployment", background: true },
+	};
+	const branch = [
+		{ type: "message", message: { role: "user", content: "go", timestamp: 1 } },
+		{ type: "message", message: { role: "assistant", content: [call], timestamp: 2 } },
+		{
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolCallId: "s1",
+				content: [{ type: "text", text: "started" }],
+				details: { agent: "docs", model: "m", background: true },
+			},
+		},
+		{
+			type: "custom_message",
+			customType: "orqi-subagent",
+			content: 'subagent "docs" finished (#s1):\nA deployment is a prompt config.',
+			display: true,
+			details: {
+				toolCallId: "s1",
+				agent: "docs",
+				model: "m",
+				steps: [],
+				usage: { input: 10, output: 5, cacheRead: 0, cost: 0.002 },
+				isError: false,
+				durationMs: 900,
+			},
+		},
+	];
+	let disposed = 0;
+	const subagents = { running: new Set([{ agent: "analyst", toolCallId: "s2", dispose: () => disposed++ }]) };
+	const h = harnessOn(dir, { branch, subagents });
+	try {
+		await h.start();
+		expect(h.rows()).toContainEqual(expect.stringMatching(/⇢ docs ✓ \$0\.002$/));
+		// The transcript line for the message: who, what model, what it cost.
+		const drawn = h.renderers.get("orqi-subagent")!(
+			{ role: "custom", customType: "orqi-subagent", content: "x", display: true, details: branch[3]!.details },
+			{ expanded: false },
+			{ fg: (_t: string, text: string) => text },
+		);
+		expect(drawn.render(80).join("\n").trim()).toBe("⇢ docs finished · m · ↑10 ↓5 · $0.002");
+		const draw = (content: string, details: object) =>
+			h.renderers.get("orqi-subagent")!(
+				{ role: "custom", customType: "orqi-subagent", content, display: true, details },
+				{ expanded: false },
+				{ fg: (_t: string, text: string) => text },
+			)
+				.render(80)
+				.join("\n")
+				.trim();
+		expect(
+			draw('subagent "analyst" stopped (#s2): the session ended before it finished', { agent: "analyst", toolCallId: "s2", isError: true }),
+		).toBe("⇢ analyst stopped: the session ended before it finished");
+		expect(
+			draw('subagent "docs" failed (#s1): rate limited', {
+				agent: "docs",
+				toolCallId: "s1",
+				isError: true,
+				model: "m",
+				usage: { input: 1, output: 0, cacheRead: 0, cost: 0 },
+			}),
+		).toBe("⇢ docs failed: rate limited · m · ↑1 ↓0 · $0");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+	expect(disposed).toBe(1);
+	expect(subagents.running.size).toBe(0);
+	// The model was told it is coming: it is told it is not, in the session file, without starting a run.
+	expect(h.sent).toEqual([
+		{
+			message: {
+				customType: "orqi-subagent",
+				content: 'subagent "analyst" stopped (#s2): the session ended before it finished',
+				display: true,
+				details: { agent: "analyst", toolCallId: "s2", isError: true },
+			},
+			options: undefined,
+		},
+	]);
+});
+
+test("plan mode blocks a subagent's one-way call: a user-defined type cannot act while planning", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-plan-nested-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		await h.commands.get("plan")!("", h.ctx);
+		await h.handlers.get("tool_execution_start")!({ toolCallId: "s1", toolName: "subagent", args: { agent: "auditor", task: "t" } }, h.ctx);
+		await h.handlers.get("tool_execution_start")!(
+			{ toolCallId: "s1/1", toolName: "mcp__orq__delete_dataset", args: { dataset_id: "d" }, parentToolCallId: "s1" },
+			h.ctx,
+		);
+		const verdict = (await h.handlers.get("tool_call")!(
+			{ toolCallId: "s1/1", toolName: "mcp__orq__delete_dataset", input: { dataset_id: "d" }, parentToolCallId: "s1" },
+			{ ...h.ctx, hasUI: true },
+		)) as any;
+		expect(verdict?.block).toBe(true);
+		expect(verdict?.reason).toContain("Plan mode is read-only");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("/plan switches read-only on and off, tells the model once each way, and persists", async () => {

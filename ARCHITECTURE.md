@@ -34,7 +34,8 @@ orqi
 | `src/mcp.ts` | The `orq` server registered with pi's MCP, credential choice, result rendering, hints |
 | `src/model.ts` | orq AI Router as the only pi provider, `onlyOrq()` filter |
 | `src/ask-user.ts` | `ask_user`: the model's question dialog (single, multi, free text), answered into the tool result |
-| `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs`) |
+| `src/subagent.ts` | In-process subagents (`investigator`, `analyst`, `docs` and user types), foreground or background |
+| `src/agent-types.ts` | User-defined subagent types: `<agentDir>/agents/*.md` and a trusted project's `.orqi/agents/*.md` |
 | `src/connection.ts` | The connection half of the pi extension (a command goes here only if it is about the connection; the rest are `harness.ts`'s): startup header entry, the not-connected warning and reconnect, the first-run welcome, plus `/key /whoami /workspace /server /reconnect /doctor /update` |
 | `src/workspaces.ts` | `/workspace`'s list: the CLI's `workspace list -o json` as aligned rows, the active workspace first |
 | `src/oauth.ts` | "Sign in with an account → orq.ai" in pi's `/login`, running `orq auth login` |
@@ -139,7 +140,7 @@ two-way and only recorded, while `delete_`/`submit_`/`invoke_` and any verb not 
 one-way and always wait for the dialog.
 
 Plan mode (`/plan`, `alt+p`, `--plan`) is a third permission mode the gate reads on every call.
-It lets through reads only (`read`, `ask_user`, `web_*`, benign orq tools, the built-in subagents),
+It lets through reads only (`read`, `ask_user`, `web_*`, benign orq tools, subagents, whose own calls pass the gate too),
 asks for every Bash command whatever `--auto` said, and blocks everything else, including a tool it
 has never heard of. The model hands its plan over with `exit_plan` (`src/plan.ts`), whose dialog is
 the only way out besides the user switching it off: approve and run here, approve and run in a
