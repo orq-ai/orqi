@@ -645,3 +645,56 @@ test("each memory line has a theme role, narrow forms included; the words and ma
 	// Roles never put escapes in the line itself.
 	for (const width of [60, 38, 26]) for (const row of memoryLines(proposed(), 3, width, NOW)) expect(row).not.toContain("\x1b");
 });
+
+test("when there is no room for the quoted text it is dropped, and the age stays at every width", () => {
+	const a = activity({
+		recalls: 2,
+		remembers: 2,
+		recent: [
+			{ kind: "recall", text: "k8s rollout", at: NOW - 59 * MIN, hits: 0 },
+			{ kind: "remember", text: "Use uv for tests", at: NOW - 12 * 24 * 60 * MIN, saved: false },
+		],
+	});
+	for (let width = 10; width <= 22; width++) {
+		const rows = memoryLines(state({ notes: 21, activity: a }), 3, width, NOW);
+		for (const row of rows) {
+			expect(visibleWidth(row)).toBe(width);
+			expect(row).not.toContain("\x1b");
+		}
+		expect(bare(rows[2]!).trimEnd()).toEndWith("59m");
+		expect(bare(rows[3]!).trimEnd()).toEndWith("12d");
+	}
+	// The mark and the result survive as long as they fit; the text is gone, not a lone character of it.
+	expect(bare(memoryLines(state({ activity: a }), 0, 20, NOW)[2]!).trimEnd()).toBe("  ↳ → nothing · 59m");
+	expect(bare(memoryLines(state({ activity: a }), 0, 10, NOW)[3]!).trimEnd()).toBe("  = · 12d");
+	expect(bare(memoryLines(state({ activity: a }), 0, 17, NOW)[2]!).trimEnd()).toBe("  → nothing · 59m");
+	expect(bare(memoryLines(state({ activity: a }), 0, 14, NOW)[2]!).trimEnd()).toBe("  ↳ · 59m");
+});
+
+test("memoryLineRole reads the result after the closing quote, whatever the age looks like", () => {
+	expect(memoryLineRole('  ↳ recalled "q" → nothing · 3 min ago')).toBe("warning");
+	expect(memoryLineRole('  ↳ "q" → nothing')).toBe("warning");
+	expect(memoryLineRole('  ↳ recalled "q" → 2 · 3 min ago')).toBe("text");
+	// Quoted text cannot fake it: the result is whatever follows the last quote.
+	expect(memoryLineRole('  ↳ recalled "x" → nothing · y" → 2 · 3 min ago')).toBe("text");
+	expect(memoryLineRole('  ↳ recalled "say "hi" → nothing · 3 min ago')).toBe("warning");
+	// The forms with no room for the text.
+	expect(memoryLineRole("  ↳ → nothing · 59m")).toBe("warning");
+	expect(memoryLineRole("  → nothing · 59m")).toBe("warning");
+	expect(memoryLineRole("  ↳ → 2 · now")).toBe("text");
+	expect(memoryLineRole("  → 2 · now")).toBe("text");
+	expect(memoryLineRole("  + · 3m")).toBe("text");
+	expect(memoryLineRole("  = · 12d")).toBe("dim");
+});
+
+test("isActivity claims only the shell: counts and a list, whose entries are checked one by one", () => {
+	const data: unknown = { recalls: 1, remembers: 0, recent: [{ kind: "recall", text: "ok", at: NOW, hits: 1 }, 7] };
+	expect(isActivity(data)).toBe(true);
+	if (isActivity(data)) {
+		// Reading an entry takes a check: the type is `unknown[]`, and this line fails to compile if it ever claims more.
+		// @ts-expect-error an entry is unknown until `memoryLines` has checked it
+		const text: string = data.recent[0]!.text;
+		expect(text).toBe("ok");
+	}
+	expect(body(memoryLines(state({ activity: data as never }), 0, 60, NOW)).slice(1)).toEqual(['  ↳ recalled "ok" → 1 · now']);
+});

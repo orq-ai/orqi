@@ -227,6 +227,12 @@ export function reserveFor(pct: number, window: number): number {
 	return Math.ceil((window * (100 - pct)) / 100);
 }
 
+/** The theme role a sidebar section's body line is painted in: the memory section reads its own lines, the others warn on a `⚠` and are muted otherwise. */
+export function sectionLineRole(id: SectionId, line: string): "muted" | "text" | "dim" | "accent" | "warning" {
+	if (id === "memory") return memoryLineRole(line);
+	return line.trimStart().startsWith("⚠") ? "warning" : "muted";
+}
+
 /** The sections the sidebar draws, in registry order: chosen in orqi.json and available. */
 export function sectionsToDraw(sections: readonly InspectorSection[], prefs: Prefs): InspectorSection[] {
 	return sections.filter((section) => !section.hidden?.() && prefs.sections[section.id] && !section.unavailable?.());
@@ -953,11 +959,7 @@ export function orqHarness(deps: HarnessDeps) {
 				const paintSection = ({ id, lines }: { id: SectionId; lines: string[] }) => [
 					blank,
 					side(theme.fg("dim", lines[0]!)),
-					...lines
-						.slice(1)
-						.map((line) =>
-							side(theme.fg(id === "memory" ? memoryLineRole(line) : line.trimStart().startsWith("⚠") ? "warning" : "muted", line)),
-						),
+					...lines.slice(1).map((line) => side(theme.fg(sectionLineRole(id, line), line))),
 				];
 				const title = " sidebar ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);

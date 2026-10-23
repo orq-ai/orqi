@@ -118,8 +118,15 @@ export function isLearned(data: unknown): data is NonNullable<MemorqState["learn
 	return isObject(data) && isCount(data.count) && isInstant(data.at) && typeof data.trigger === "string";
 }
 
-/** An activity as memorq reports it: two counts and a list. Its entries are checked one by one (`isRecent`), not here. */
-export function isActivity(data: unknown): data is MemorqActivity {
+/** What `isActivity` knows of an activity: two counts and a list. The entries are unknown until `drawable` has checked each. */
+export interface ActivityShell {
+	recalls: number;
+	remembers: number;
+	recent: unknown[];
+}
+
+/** An activity as memorq reports it: two counts and a list. Its entries are checked one by one (`drawable`), not here. */
+export function isActivity(data: unknown): data is ActivityShell {
 	return isObject(data) && isCount(data.recalls) && isCount(data.remembers) && Array.isArray(data.recent);
 }
 
@@ -190,17 +197,21 @@ const MIN_TEXT = 12;
 
 /**
  * One activity entry in `width` cells: `<verb> "<text>"<result> · <age>`. The quoted text gives way first
- * (`…` inside the quotes), never the age; and when the full verb would leave the text under `MIN_TEXT`
+ * (`…` inside the quotes, then gone altogether), never the age; and when the full verb would leave the text under `MIN_TEXT`
  * cells, the verb shrinks to its mark (`↳`, `+`, `=`) so the text keeps its room.
  */
 function recentLine(entry: MemorqRecent, width: number, now: number): string {
 	const [verb, mark] = entry.kind === "recall" ? ["↳ recalled", "↳"] : entry.saved === false ? ["= already saved", "="] : ["+ saved", "+"];
 	const text = printable(entry.text);
 	const result = entry.kind === "recall" && entry.hits !== undefined ? ` → ${entry.hits === 0 ? "nothing" : entry.hits}` : "";
-	const tail = `${result} · ${age(Math.max(0, now - entry.at))}`;
+	const when = age(Math.max(0, now - entry.at));
+	const tail = `${result} · ${when}`;
 	const room = (head: string) => width - visibleWidth(head) - visibleWidth(tail) - 2;
 	const head = room(`${verb} `) >= Math.min(visibleWidth(text), MIN_TEXT) ? `${verb} ` : `${mark} `;
-	return `${head}"${cut(text, Math.max(1, room(head)))}"${tail}`;
+	if (room(head) >= 1) return `${head}"${cut(text, room(head))}"${tail}`;
+	// No room for even one character of the text: it goes, then the mark, then the result, never the age.
+	const bare = [`${mark}${tail}`, tail.trimStart(), `${mark} · ${when}`, when];
+	return bare.find((line) => visibleWidth(line) <= width) ?? when;
 }
 
 /** Whether an entry can be drawn: well formed, and with some text left once memorq's escapes are taken out. */
@@ -211,7 +222,7 @@ const drawable = (data: unknown): data is MemorqRecent => isRecent(data) && prin
  * except the notes. When it does not fit it gives up, in turn: the word `notes`, the note count, the
  * `-ed` of `recalled`; when none fits, the second (`21 · 3 opened · …`) is cut by the caller, as the wireframe draws it.
  */
-function totalsLine(state: MemorqState, activity: MemorqActivity, reads: number, width: number): string {
+function totalsLine(state: MemorqState, activity: { recalls: number; remembers: number }, reads: number, width: number): string {
 	const counts = (recalled: string) =>
 		[
 			reads > 0 ? `${reads} opened` : "",
@@ -255,9 +266,14 @@ function statusLine(state: MemorqState): Closer | undefined {
 	return undefined;
 }
 
-/** Whether there is anything to draw in the activity view: a call counted, or an entry kept. */
-const hasActivity = (activity: unknown): activity is MemorqActivity =>
-	isActivity(activity) && (activity.recalls > 0 || activity.remembers > 0 || activity.recent.some(drawable));
+/** This session's activity as the section draws it: the counts and the entries it can draw. Undefined when there is nothing to draw. */
+function readActivity(data: unknown): { recalls: number; remembers: number; recent: MemorqRecent[] } | undefined {
+	if (!isActivity(data)) return undefined;
+	const recent = data.recent.filter(drawable);
+	return data.recalls > 0 || data.remembers > 0 || recent.length > 0
+		? { recalls: data.recalls, remembers: data.remembers, recent }
+		: undefined;
+}
 
 /**
  * The memory section, each line only when it has something to say. Before memorq reports any activity:
@@ -285,9 +301,9 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 		isLearned(state.learned) ? { urgency: 3, line: learnedLine(state.learned, inner, now) } : undefined,
 		statusLine(state),
 	].filter((closer): closer is Closer => closer !== undefined);
-	if (hasActivity(state.activity)) {
-		const recent = state.activity.recent.filter(drawable).slice(0, 2);
-		const body = [totalsLine(state, state.activity, reads, inner), ...recent.map((entry) => recentLine(entry, inner, now))];
+	const activity = readActivity(state.activity);
+	if (activity) {
+		const body = [totalsLine(state, activity, reads, inner), ...activity.recent.slice(0, 2).map((entry) => recentLine(entry, inner, now))];
 		const room = 4 - body.length;
 		const kept = closing.length <= room ? closing : [...closing].sort((a, b) => a.urgency - b.urgency).slice(0, room);
 		const lines = [...body, ...closing.filter((closer) => kept.includes(closer)).map((closer) => closer.line)];
@@ -303,6 +319,15 @@ export function memoryLines(state: MemorqState | undefined, reads: number, width
 	return sectionLines("memory", [...body, ...closing.map((closer) => closer.line)], width);
 }
 
+/**
+ * Whether the rest of a recall line (after its mark) ends in `→ nothing`. The result is whatever follows the
+ * last quote, so quoted text cannot fake one; with no room for the text there is no quote and the rest is the result.
+ */
+function foundNothing(rest: string): boolean {
+	const result = rest.includes('"') ? rest.slice(rest.lastIndexOf('"') + 1) : rest;
+	return /^ ?→ nothing(?: · .*)?$/.test(result);
+}
+
 /** The theme role a memory line is drawn in; the marks and words carry the meaning, colour only helps. */
 export type MemoryRole = "muted" | "text" | "dim" | "accent" | "warning";
 
@@ -314,9 +339,10 @@ export type MemoryRole = "muted" | "text" | "dim" | "accent" | "warning";
  */
 export function memoryLineRole(line: string): MemoryRole {
 	const text = line.trim();
-	if (/^↳ /.test(text)) return / → nothing · [^ ]+$/.test(text) ? "warning" : "text";
-	if (/^\+ (saved )?"/.test(text)) return "text";
-	if (/^= (already saved )?"/.test(text)) return "dim";
+	if (text.startsWith("↳")) return foundNothing(text.slice(1)) ? "warning" : "text";
+	if (text.startsWith("→")) return foundNothing(text) ? "warning" : /^→ \d/.test(text) ? "text" : "muted";
+	if (/^\+ (saved "|"|·)/.test(text)) return "text";
+	if (/^= (already saved "|"|·)/.test(text)) return "dim";
 	if (/^reviewing \d+ notes…/.test(text)) return "accent";
 	if (/^(learning paused|read-only|last review failed)/.test(text)) return "warning";
 	return "muted";
