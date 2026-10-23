@@ -702,7 +702,7 @@ export function orqCommands(
 					foreign.length > 0 &&
 					(await ctx.ui.confirm(
 						`Send ${foreign.map((c) => c.source).join(", ")} to ${host(server)}?`,
-						`${host(server)} is not an orq host orqi knows, and these credentials were not issued for it. It sees each one it is sent, accepted or not. No tries only the CLI's own sign-in there (ORQ_SERVER=${server} orq auth login).`,
+						`${host(server)} is not an orq host orqi knows, and these credentials were not issued for it. It sees each one it is sent, accepted or not. Choose no to try only the CLI's own sign-in there (ORQ_SERVER=${server} orq auth login).`,
 					));
 				if (!send) pick = (all) => all.filter((c) => HOST_SCOPED.has(c.source));
 				stageServer(server);
