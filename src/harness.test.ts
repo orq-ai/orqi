@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import { startupTheme, VERSION } from "./branding.ts";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { readSkill, skillOrigin } from "./skills.ts";
@@ -16,7 +16,6 @@ import {
 	repoOf,
 	reserveFor,
 	routeRow,
-	sectionLineRole,
 	sectionRows,
 	sectionsToDraw,
 	type HarnessDeps,
@@ -25,17 +24,7 @@ import {
 import { AGENT_TYPES } from "./subagent.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
-import {
-	contextLines,
-	minimapRow,
-	minimapRows,
-	trajectoryTitle,
-	peekLines,
-	processLines,
-	sectionLines,
-	signalLines,
-	type ContextSplit,
-} from "./inspector-rows.ts";
+import { minimapRow, minimapRows, trajectoryTitle, peekLines, sectionLines, type ContextSplit } from "./inspector-rows.ts";
 import { agentInfo, modelInfo, routerHeaders, talkable, type ModelInfo } from "./model.ts";
 import { boxLines, cells, filterRows, fit, oneLine, Panel, plainPanel } from "./panel.ts";
 import { hintsSection, schemaLines } from "./mcp.ts";
@@ -44,7 +33,7 @@ import { argSummary, canonical, signals, stepsOf, toAtif, Trajectory, type Step 
 import { ageLabel, parseChangelog } from "./whatsnew.ts";
 import { createDecider } from "./decider.ts";
 import { registerRouting } from "./router.ts";
-import { DEFAULT_SECTIONS, readPrefs, SECTIONS } from "./prefs.ts";
+import { DEFAULT_SECTIONS, readPrefs, writePrefs } from "./prefs.ts";
 import { ALLOW_ONCE, ALLOW_TURN, DENY, doorOf, knownVerb, maskSecrets, orqGate, planBlock, toolGate } from "./gate.ts";
 import type { PermissionMode } from "./permission-mode.ts";
 import { APPROVED, FRESH, NOT_PLANNING, PLAN_OFF, PLAN_ON, planPath } from "./plan.ts";
@@ -423,15 +412,15 @@ test("minimap rows: one glyph per role, +N for a subagent's steps, a gutter on t
 	trajectory.route("hard ▲", "floor");
 	const rows = trajectory.steps.map((step, i) => bare(minimapRow(step, 36, i === trajectory.steps.length - 1)));
 	expect(rows.every((row) => visibleWidth(row) === 36)).toBe(true);
-	expect(rows[0]).toStartWith(" › user   why is support-triage");
-	expect(rows[2]).toBe(" ⚙ tool   orq_list_traces ✓ 0.8s".padEnd(36));
-	expect(rows[3]).toBe(" ⇢ sub    investigator ✓ +4 $0.004".padEnd(36));
-	expect(rows.at(-1)).toStartWith("▌» route  hard ▲ floor");
+	expect(rows[0]).toStartWith(" › why is support-triage");
+	expect(rows[2]).toBe(" ⚙ tool orq_list_traces ✓ 0.8s".padEnd(36));
+	expect(rows[3]).toBe(" ⇢ investigator ✓ +4 $0.004".padEnd(36));
+	expect(rows.at(-1)).toStartWith("▌» hard ▲ floor");
 	// Long text is cut at the panel's width, with an ellipsis.
 	expect(rows[4]!.trimEnd()).toEndWith("…");
 	// A running step spins.
 	const running: Step = { id: 9, turn: 1, role: "tool", label: "orq_get_agent", detail: "", status: "running", ts: 0 };
-	expect(bare(minimapRow(running, 30, false, 2))).toStartWith(" ⠹ tool   orq_get_agent");
+	expect(bare(minimapRow(running, 30, false, 2))).toStartWith(" ⠹ tool orq_get_agent");
 });
 
 test("a running subagent row names the child call in flight", () => {
@@ -464,10 +453,10 @@ test("minimap rows stay pinned to the newest step unless a row is selected", () 
 	}));
 	const pinned = minimapRows(steps, 30, 10).map(bare);
 	expect(pinned).toHaveLength(10);
-	expect(pinned.at(-1)).toStartWith("▌⚙ tool   t30");
+	expect(pinned.at(-1)).toStartWith("▌⚙ tool t30");
 	const back = minimapRows(steps, 30, 10, 3).map(bare);
-	expect(back[0]).toStartWith(" ⚙ tool   t1");
-	expect(back[3]).toStartWith("▌⚙ tool   t4");
+	expect(back[0]).toStartWith(" ⚙ tool t1");
+	expect(back[3]).toStartWith("▌⚙ tool t4");
 	expect(minimapRows([], 30, 10)[0]).toContain("no steps yet");
 	// The counts ride on the trajectory's title rule; a long session drops "steps" before it outgrows the panel.
 	expect(trajectoryTitle(0, 0, 36)).toBe(` ─ trajectory ${"─".repeat(22)}`);
@@ -751,6 +740,10 @@ function harnessOn(
 		routing?: unknown;
 		catalogue?: ModelInfo[];
 		settingsManager?: SettingsManager;
+		/** `$EDITOR` as the harness would spawn it: what `o` in a peek runs, instead of a real editor. */
+		openEditor?: (command: string, args: string[]) => void | Promise<void>;
+		/** Panels stay open until their `done` runs, as pi's overlays do; by default `custom` resolves at once. */
+		hold?: boolean;
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
 		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
 		agentTypes?: HarnessDeps["agentTypes"];
@@ -810,6 +803,7 @@ function harnessOn(
 		permissionMode: options.permissionMode,
 		routing: options.routing as never,
 		settingsManager: options.settingsManager,
+		openEditor: options.openEditor,
 		agentTypes: options.agentTypes,
 		subagents: options.subagents,
 	})(pi as any);
@@ -817,8 +811,25 @@ function harnessOn(
 	const widgets = new Map<string, unknown>();
 	const opened: { panel?: Panel; sidebar?: { render(width: number): string[] } } = {};
 	let footer: { render(width: number): string[] } | undefined;
+	/** How many redraws the harness asked the TUI for. */
+	let renders = 0;
+	/** The raw-input listener `/sidebar focus` registered, until it is released. */
+	let rawInput: ((data: string) => { consume?: boolean } | undefined) | undefined;
+	/** How many panels have been closed (their `done` ran). */
+	let closedPanels = 0;
 	let branchChanged: (() => void) | undefined;
-	const plainTheme = { fg: (_token: string, text: string) => text, bold: (text: string) => text };
+	// Like pi's Theme, `fg` reads its own fields: handed around unbound it throws, which a render swallows into a blank sidebar.
+	// Also like pi's, an unknown colour role throws; the roles are the ones orqi's own theme defines.
+	const roleNames = new Set(Object.keys(JSON.parse(readFileSync(join(import.meta.dir, "..", "themes", "orq-dark.json"), "utf8")).colors));
+	const plainTheme = {
+		fg(this: { bold?: unknown } | undefined, token: string, text: string) {
+			if (!this?.bold) throw new TypeError("undefined is not an object (evaluating 'this.tokenAnsi')");
+			if (!roleNames.has(token)) throw new Error(`Unknown theme color: ${token}`);
+			return text;
+		},
+		bold: (text: string) => text,
+	};
+	const holdPanels = options.hold === true;
 	const ctx = {
 		mode: "tui",
 		cwd: options.cwd ?? "/work/orqi",
@@ -832,9 +843,14 @@ function harnessOn(
 			setWidget: (key: string, lines: unknown) => widgets.set(key, lines),
 			setWorkingIndicator: () => {},
 			setWorkingMessage: () => {},
-			onTerminalInput: () => () => {},
+			onTerminalInput: (listener: typeof rawInput) => {
+				rawInput = listener;
+				return () => {
+					if (rawInput === listener) rawInput = undefined;
+				};
+			},
 			setFooter: (factory: any) => {
-				footer = factory({ requestRender: () => {} }, plainTheme, {
+				footer = factory({ requestRender: () => renders++ }, plainTheme, {
 					onBranchChange: (callback: () => void) => {
 						branchChanged = callback;
 						return () => {};
@@ -844,12 +860,19 @@ function harnessOn(
 				});
 			},
 			custom: (factory: any, options?: any) => {
-				const component = factory({ requestRender: () => {} }, plainTheme, {}, () => {});
+				let finish = () => {};
+				const closed = new Promise<void>((resolve) => (finish = resolve));
+				const component = factory({ requestRender: () => {} }, plainTheme, {}, () => {
+					closedPanels++;
+					finish();
+				});
 				if (options?.overlayOptions && typeof options.overlayOptions === "function") {
 					opened.sidebar = component;
 					options.onHandle?.({});
-				} else opened.panel = component;
-				return Promise.resolve();
+					return Promise.resolve();
+				}
+				opened.panel = component;
+				return holdPanels ? closed : Promise.resolve();
 			},
 		},
 	};
@@ -867,6 +890,14 @@ function harnessOn(
 		const end = lines.findIndex((line, i) => i > at && !line.startsWith("  "));
 		return lines.slice(at + 1, end < 0 ? undefined : end).map((line) => line.trim());
 	};
+	/** The sidebar's memory header as drawn (`─ memory · 47 notes ─…`), or undefined when it is not. */
+	const memoryHeader = () =>
+		opened
+			.sidebar!.render(38)
+			.map((line) => bare(line).slice(1, -1).trimEnd())
+			.find((line) => line.startsWith(" ─ memory "));
+	/** Every row the sidebar draws, panel border off. */
+	const drawn = () => opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1).trimEnd());
 	const read = async (id: string, path: string, isError = false, parentToolCallId?: string) => {
 		await handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "read", args: { path }, parentToolCallId }, ctx);
 		await handlers.get("tool_execution_end")!({ toolCallId: id, toolName: "read", isError, durationMs: 1, parentToolCallId }, ctx);
@@ -876,7 +907,7 @@ function harnessOn(
 		opened
 			.sidebar!.render(38)
 			.map((line) => bare(line).slice(1, -1).trimEnd())
-			.filter((line) => /^[ ▌][^─\s] (user|assist|agent|tool|sub|route|memory) /.test(line));
+			.filter((line) => /^[ ▌][^─\s] \S/.test(line));
 	return {
 		commands,
 		ctx,
@@ -887,6 +918,8 @@ function harnessOn(
 		start,
 		stop,
 		memory,
+		memoryHeader,
+		drawn,
 		read,
 		entries,
 		sent,
@@ -898,6 +931,11 @@ function harnessOn(
 		branchChanged: () => branchChanged!(),
 		tools,
 		shortcuts,
+		renders: () => renders,
+		/** A key as the terminal sends it, through the listener `/sidebar focus` registered; true when the harness took it. */
+		key: (data: string) => rawInput?.(data)?.consume === true,
+		focused: () => rawInput !== undefined,
+		closedPanels: () => closedPanels,
 	};
 }
 
@@ -948,6 +986,176 @@ test("/sidebar lists the sections with their state and space toggles and persist
 		await next.commands.get("sidebar")!("", next.ctx);
 		expect(panelRows(next.opened.panel!)[2]).toBe("[ ] context");
 	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("alt+c and alt+m open context and memory to expanded and back, saved beside another window's choice, and redraw", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-depth-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		const before = h.renders();
+		await h.shortcuts.get("alt+c")!(h.ctx);
+		expect(readPrefs(dir).sidebarDepth).toEqual({ context: "expanded" });
+		expect(h.renders()).toBeGreaterThan(before);
+		// Another window opens memory meanwhile: the next toggle here rereads the file and keeps it.
+		writePrefs(dir, { ...readPrefs(dir), sidebarDepth: { context: "expanded", memory: "expanded" } });
+		await h.shortcuts.get("alt+c")!(h.ctx);
+		expect(readPrefs(dir).sidebarDepth).toEqual({ memory: "expanded" });
+		// This window took memory's depth from the file, so alt+m closes it.
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(readPrefs(dir).sidebarDepth).toBeUndefined();
+		expect(readPrefs(dir).sections).toEqual(DEFAULT_SECTIONS);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a sidebar whose first render throws draws one error line; one that fails later keeps its last good frame", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-render-error-"));
+	try {
+		const h = harnessOn(dir);
+		await h.start();
+		const theme = h.ctx.ui.theme as unknown as { fg(role: string, text: string): string };
+		const fg = theme.fg;
+		// Every role but `error` fails, with a message carrying an escape code that must not reach the screen.
+		theme.fg = function (this: unknown, role: string, text: string) {
+			if (role !== "error") throw new Error("Unknown theme color: accent\x1b[31m");
+			return `<${role}>${text}</${role}>`;
+		};
+		const broken = h.opened.sidebar!.render(60);
+		expect(broken).toEqual(["<error>sidebar error · Unknown theme color: accent</error>"]);
+		expect(h.opened.sidebar!.render(20)).toEqual(["<error>sidebar error · Unkn</error>"]);
+		// Once a frame has drawn, a later failure shows that frame rather than an error.
+		theme.fg = fg;
+		const good = h.opened.sidebar!.render(40);
+		expect(good.length).toBeGreaterThan(1);
+		theme.fg = () => {
+			throw new Error("boom");
+		};
+		expect(h.opened.sidebar!.render(40)).toEqual(good);
+		await h.stop();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("quiet sections fold to their headers: signals say ok, process its memory; expanded, process shows the last minute", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-fold-"));
+	const drawn = (h: ReturnType<typeof harnessOn>) => h.opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1));
+	try {
+		writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sections: { process: true } }));
+		const h = harnessOn(dir);
+		await h.start();
+		let lines = drawn(h);
+		const signals = lines.indexOf(` ─ signals · ok ${"─".repeat(20)}`);
+		expect(signals).toBeGreaterThan(-1);
+		expect(lines[signals + 1]!.trim()).toBe(""); // header alone, then the gap before the next section
+		const process = lines.findIndex((line) => /^ ─ process · \d+ MB ─+$/.test(line));
+		expect(process).toBeGreaterThan(-1);
+		expect(lines[process + 1]).toContain("alt+s"); // folded: the hint follows the header
+		// One item slot per drawn row, for /sidebar focus; only the context section (one item) names any here.
+		const items = (h.opened.sidebar as unknown as { items(): unknown[] }).items();
+		expect(items).toHaveLength(lines.length);
+		expect(items.filter((item) => item !== undefined).every((item) => (item as { section: string }).section === "context")).toBe(true);
+		await h.stop();
+
+		writePrefs(dir, { ...readPrefs(dir), sidebarDepth: { process: "expanded" } });
+		const open = harnessOn(dir);
+		await open.start();
+		lines = drawn(open);
+		const at = lines.findIndex((line) => /^ ─ process · \d+ MB ─+$/.test(line));
+		expect(lines[at + 1]).toMatch(/^ {2}\d+ MB +[▁▂▃▄▅▆▇█]+ +peak \d+ MB *$/);
+		await open.stop();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the context section is measured when state changes: a run, then a compaction, never a render", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-context-"));
+	let clock = 1_800_000_000_000;
+	const h = harnessOn(dir, { now: () => clock });
+	const section = () => {
+		const lines = h.opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1).trimEnd());
+		const at = lines.findIndex((line) => line.startsWith(" ─ context "));
+		const end = lines.findIndex((line, i) => i > at && (line.startsWith(" ─ ") || line.includes("alt+s")));
+		return lines.slice(at, end < 0 ? undefined : end);
+	};
+	try {
+		let usage: { tokens: number | null; contextWindow: number; percent: number | null } = {
+			tokens: 30_000,
+			contextWindow: 1_100_000,
+			percent: 3,
+		};
+		h.ctx.getContextUsage = () => usage as never;
+		(h.ctx.sessionManager as any).buildSessionProjection = () => ({
+			messages: [{ role: "user", content: "x".repeat(4_000), timestamp: 0 }],
+		});
+		await h.start();
+		expect(section()[0]).toStartWith(" ─ context · 30k · 3% ");
+		expect(section()[1]).toMatch(/^ {2}█+$/);
+		expect(section()[3]).toBe("  cache — · first turn writes it");
+		// alt+c: the same measurements, expanded.
+		await h.shortcuts.get("alt+c")!(h.ctx);
+		expect(section()[0]).toStartWith(" ─ context · 30k · 3% of 1.1M ");
+		expect(
+			section()
+				.filter((line) => line.trim())
+				.at(-1),
+		).toBe("  enter: /context table · alt+c less");
+		await h.shortcuts.get("alt+c")!(h.ctx);
+		// pi compacts: nothing to read until the next response, so what it kept stands in for the size.
+		usage = { tokens: null, contextWindow: 1_100_000, percent: null };
+		await h.handlers.get("session_compact")!({ compactionEntry: { tokensBefore: 812_000 }, reason: "threshold" }, h.ctx);
+		expect(section()[3]).toMatch(/^ {2}✓ compacted 812k → \d+(k)? · just now$/);
+		// Rebuilding the branch (/tree, /resume) renumbers the turns the mark is keyed on: it goes with them.
+		await h.handlers.get("session_tree")!({}, h.ctx);
+		expect(section()[3]).toBe("  cache — · first turn writes it");
+		await h.handlers.get("session_compact")!({ compactionEntry: { tokensBefore: 812_000 }, reason: "threshold" }, h.ctx);
+		expect(section()[3]).toMatch(/✓ compacted/);
+		// Time passing is read at the render: ten minutes on, the line is gone, with no new measurement.
+		clock += 11 * 60_000;
+		expect(section()[3]).toBe("  cache — · first turn writes it");
+		// memorq says how much it injected: a part of its own, measured again at once, never before it speaks.
+		usage = { tokens: 30_000, contextWindow: 1_100_000, percent: 3 };
+		h.ctx.getSystemPrompt = () => `You are orqi.\n${"p".repeat(8_000)}`;
+		await h.handlers.get("agent_end")!({}, h.ctx);
+		expect(section()[2]).toBe("  ■ msgs 28k ■ prompt 2k");
+		h.bus.emit("memorq:state", {
+			version: "0.14.0",
+			notes: 22,
+			usedThisTurn: 3,
+			context: 900,
+			stores: { notes: "", rules: "", skills: "" },
+			paused: false,
+			enabled: "on",
+		});
+		expect(section()[2]).toBe("  ■ msgs 28k ■ prompt 1k ■memory 900");
+		// More than the prompt holds is clamped; the same raw number again is not a change, so it measures nothing.
+		let reads = 0;
+		h.ctx.getContextUsage = () => {
+			reads++;
+			return usage as never;
+		};
+		const greedy = {
+			version: "0.14.0",
+			notes: 22,
+			usedThisTurn: 3,
+			context: 90_000,
+			stores: { notes: "", rules: "", skills: "" },
+			paused: false,
+			enabled: "on",
+		};
+		h.bus.emit("memorq:state", greedy);
+		expect(reads).toBe(1);
+		h.bus.emit("memorq:state", greedy);
+		h.bus.emit("memorq:state", { ...greedy, usedThisTurn: 4 });
+		expect(reads).toBe(1);
+	} finally {
+		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -1053,7 +1261,9 @@ test("the memory section waits for memorq: asked for at session start, drawn onc
 		h.bus.emit("memorq:state", memorqState());
 		await h.commands.get("sidebar")!("", h.ctx);
 		expect(panelRows(h.opened.panel!)[3]).toBe("[x] memory");
-		expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+		// Nothing read, recalled or saved yet: the section folds to its header.
+		expect(h.memoryHeader()).toBe(` ─ memory · 47 notes ${"─".repeat(15)}`);
+		expect(h.memory()).toEqual([]);
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
@@ -1102,6 +1312,9 @@ test("memorq with its commands but silent points at /doctor; ORQ_NOTES=off and a
 	}
 });
 
+/** How many notes the sidebar says were read: the `3` of `read ██░░░░░░░░░░   3 of 47`. */
+const readCount = (h: { memory(): string[] }) => Number(h.memory()[0]?.match(/(\d+) of 47$/)?.[1] ?? 0);
+
 test("a read of a note counts, wherever memorq keeps it; other reads and failed ones do not", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
 	const home = process.env.ORQ_NOTES_HOME;
@@ -1111,23 +1324,91 @@ test("a read of a note counts, wherever memorq keeps it; other reads and failed 
 		await h.start();
 		h.bus.emit("memorq:state", memorqState({ stores: { ...memorqState().stores, rules: "/work/orqi/.memorq/rules" } }));
 		await h.read("r1", "/home/me/.memorq/orq-ai__orqi/notes/a.md");
-		expect(h.memory()[1]).toBe("using 3 this turn · read 1");
+		expect(readCount(h)).toBe(1);
 		// The repo folder, relative to the working directory, when rules are written there.
 		await h.read("r2", ".memorq/rules/r.md");
-		expect(h.memory()[1]).toBe("using 3 this turn · read 2");
-		// The machine root still holds the other kinds' notes: ORQ_NOTES_HOME/<key>/<kind>/.
+		expect(readCount(h)).toBe(2);
+		// The machine root still holds the other kinds: ORQ_NOTES_HOME/<key>/<kind>/. A skill read is an event,
+		// but not one of the notes read: the count is of the notes memorq counts.
 		await h.read("r3", join(dir, "notes-home", "orq-ai__orqi", "skills", "s", "SKILL.md"));
-		expect(h.memory()[1]).toBe("using 3 this turn · read 3");
+		expect(readCount(h)).toBe(2);
+		expect(h.memory()[1]).toMatch(/^◇ S +now$/);
 		await h.read("r4", "src/main.ts");
 		await h.read("r5", "/home/me/.memorq/orq-ai__orqi/notes/missing.md", true);
-		expect(h.memory()[1]).toBe("using 3 this turn · read 3");
+		expect(readCount(h)).toBe(2);
 		// A subagent opening a note is a read too.
 		await h.read("r6", "/home/me/.memorq/orq-ai__orqi/notes/b.md", false, "subagent-1");
-		expect(h.memory()[1]).toBe("using 3 this turn · read 4");
+		expect(readCount(h)).toBe(3);
+		// The same note again is the same read: notes read, not reads.
+		await h.read("r7", "/home/me/.memorq/orq-ai__orqi/notes/a.md");
+		expect(readCount(h)).toBe(3);
+		// Newest first, by title: no file to open here, so the file name's words.
+		expect(h.memory()[1]).toMatch(/^◇ A +now$/);
 	} finally {
 		await h.stop();
 		if (home === undefined) delete process.env.ORQ_NOTES_HOME;
 		else process.env.ORQ_NOTES_HOME = home;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a note read shows its title from the file, read once when the read is counted and again only when the file changed", async () => {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "orqi-memory-")));
+	const notes = join(dir, "store", "notes");
+	mkdirSync(notes, { recursive: true });
+	const file = join(notes, "make-docs-serve-aabbccdd.md");
+	writeFileSync(file, "---\nkind: gotcha\n---\n# Make docs serve may lack MkDocs\n\nTrigger: running the docs site locally\n");
+	utimesSync(file, 1000, 1000);
+	const stores = { notes, rules: join(dir, "store", "rules"), skills: join(dir, "store", "skills") };
+	const h = harnessOn(dir, { cwd: dir });
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ stores }));
+		await h.read("r1", file);
+		expect(h.memory()[1]).toMatch(/^◇ Make docs serve may lack Mk… now$/);
+		// The file goes: the title was read once and is kept.
+		rmSync(file);
+		h.bus.emit("memorq:state", memorqState({ stores }));
+		expect(h.memory()[1]).toMatch(/^◇ Make docs serve may lack Mk… now$/);
+		// A note rewritten with a new title, read again: the new title.
+		writeFileSync(file, "# Docs need the docs group\n");
+		utimesSync(file, 2000, 2000);
+		await h.read("r2", file);
+		expect(h.memory()[1]).toMatch(/^◇ Docs need the docs group +now$/);
+		expect(readCount(h)).toBe(1);
+		// Expanded, the note's trigger is its detail line.
+		writeFileSync(file, "# Docs need the docs group\n\nTrigger: serving the docs\n");
+		utimesSync(file, 3000, 3000);
+		await h.read("r3", file);
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(
+			h
+				.drawn()
+				.filter((line) => line.startsWith("  ") && /serving the docs|Docs need the docs group/.test(line))
+				.map((line) => line.trim()),
+		).toEqual([expect.stringMatching(/^◇ Docs need the docs group +now$/), "when: serving the docs"]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the trajectory row of a note read is `◇ memory <title>`; another read keeps `⚙ tool read`", async () => {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "orqi-memory-")));
+	const notes = join(dir, "store", "notes");
+	mkdirSync(notes, { recursive: true });
+	const file = join(notes, "make-docs-serve-aabbccdd.md");
+	writeFileSync(file, "# Make docs serve\n");
+	const stores = { notes, rules: join(dir, "store", "rules"), skills: join(dir, "store", "skills") };
+	const h = harnessOn(dir, { cwd: dir });
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ stores }));
+		await h.read("r1", file);
+		await h.read("r2", join(dir, "src", "main.ts"));
+		expect(h.rows()).toEqual([" ◇ memory Make docs serve", "▌⚙ tool read ✓"]);
+	} finally {
+		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
@@ -1145,12 +1426,12 @@ test("a subagent's calls draw under its row while it runs, not as rows of their 
 			{ toolCallId: "s1/1", toolName: "read", args: { path: "/x" }, parentToolCallId: "s1" },
 			h.ctx,
 		);
-		expect(h.rows()).toEqual([expect.stringMatching(/sub +investigator read \+1$/)]);
+		expect(h.rows()).toEqual([expect.stringMatching(/ investigator read \+1$/)]);
 		await h.handlers.get("tool_execution_end")!(
 			{ toolCallId: "s1/1", toolName: "read", isError: false, durationMs: 1, parentToolCallId: "s1" },
 			h.ctx,
 		);
-		expect(h.rows()).toEqual([expect.stringMatching(/sub +investigator \+1$/)]);
+		expect(h.rows()).toEqual([expect.stringMatching(/ investigator \+1$/)]);
 		// A nested call with no subagent step to sit under draws nowhere.
 		await h.read("b1/1", "/y", false, "b1");
 		expect(h.rows()).toHaveLength(1);
@@ -1174,7 +1455,7 @@ test("a malformed memorq:state is ignored and the last good one stays drawn", as
 			{ ...memorqState(), notes: "many" },
 		]) {
 			h.bus.emit("memorq:state", bad);
-			expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+			expect(h.memoryHeader()).toContain("memory · 47 notes");
 		}
 	} finally {
 		await h.stop();
@@ -1194,13 +1475,16 @@ test("a note read through a symlink counts, whichever side of the link the store
 		await viaReal.start();
 		viaReal.bus.emit("memorq:state", memorqState({ stores: stores(real) }));
 		await viaReal.read("r1", join(dir, "linked-store", "notes", "a.md"));
-		expect(viaReal.memory()[1]).toBe("using 3 this turn · read 1");
+		expect(readCount(viaReal)).toBe(1);
+		// The same note through its other spelling is the same read.
+		await viaReal.read("r2", join(real, "notes", "a.md"));
+		expect(readCount(viaReal)).toBe(1);
 		await viaReal.stop();
 		const viaLink = harnessOn(dir, { cwd: dir });
 		await viaLink.start();
 		viaLink.bus.emit("memorq:state", memorqState({ stores: stores(join(dir, "linked-store")) }));
 		await viaLink.read("r1", join(real, "notes", "a.md"));
-		expect(viaLink.memory()[1]).toBe("using 3 this turn · read 1");
+		expect(readCount(viaLink)).toBe(1);
 		await viaLink.stop();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
@@ -1658,7 +1942,7 @@ test("a loaded memorq gets a few seconds to answer: loading, then not answering"
 		expect(panelRows(h.opened.panel!)[3]).toBe("[ ] memory  · not answering · /doctor");
 		// An answer, however late, is drawn.
 		h.bus.emit("memorq:state", memorqState());
-		expect(h.memory()[0]).toBe("47 notes for this repo");
+		expect(h.memoryHeader()).toContain("memory · 47 notes");
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
@@ -1671,9 +1955,114 @@ test("a state whose learn is malformed keeps the state and drops the learn", asy
 	try {
 		await h.start();
 		h.bus.emit("memorq:state", memorqState({ learned: { count: null, trigger: "ship", at: 1 } }));
-		expect(h.memory()).toEqual(["47 notes for this repo", "using 3 this turn"]);
+		expect(h.memoryHeader()).toContain("memory · 47 notes");
 		expect(h.entries).toEqual([]);
 	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("memorq's recalls and saves join the reads as events, newest first; misses are counted beyond the five it sends", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		// As memorq's Python sends them, parsed by its extension into `at`: epoch milliseconds, newest first.
+		const entry = (i: number) => ({ kind: "recall" as const, text: `q${i}`, at: Date.now() - (100 - i) * 1000, hits: 0 });
+		for (let i = 1; i <= 8; i++) {
+			const recent = [entry(i), ...(i > 1 ? [entry(i - 1)] : [])];
+			h.bus.emit("memorq:state", memorqState({ activity: { recalls: i, remembers: 0, recent } }));
+		}
+		expect(h.memory()).toEqual([
+			expect.stringMatching(/^read ░{12} +0 of 47$/),
+			"recall 8 · 8 missed",
+			expect.stringMatching(/^↳ "q8" → nothing +1m$/),
+			"alt+m more · enter: peek",
+		]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("memorq's counters going backwards (it restarted) forget the misses seen before", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const h = harnessOn(dir);
+	const entry = (text: string, ago: number, hits = 0) => ({ kind: "recall" as const, text, at: Date.now() - ago * 1000, hits });
+	const [a, b, c, d] = [entry("a", 30), entry("b", 20), entry("c", 5), entry("d", 2, 3)];
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ activity: { recalls: 2, remembers: 0, recent: [b, a] } }));
+		expect(h.memory()[1]).toBe("recall 2 · 2 missed");
+		// A new memorq session: its counts start again, and the old misses do not count in them.
+		h.bus.emit("memorq:state", memorqState({ activity: { recalls: 1, remembers: 0, recent: [c] } }));
+		expect(h.memory()[1]).toBe("recall 1 · 1 missed");
+		h.bus.emit("memorq:state", memorqState({ activity: { recalls: 2, remembers: 0, recent: [d, c] } }));
+		expect(h.memory()[1]).toBe("recall 2 · 1 missed");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the hint names alt+m until a depth key has been used, in any window, and expanded the section lists its events", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const state = memorqState({
+		activity: { recalls: 1, remembers: 0, recent: [{ kind: "recall", text: "k8s rollout", at: Date.now(), hits: 0 }] },
+	});
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", state);
+		expect(h.memory().at(-1)).toBe("alt+m more · enter: peek");
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(readPrefs(dir).depthKeyUsed).toBe(true);
+		expect(h.drawn().join("\n")).toContain('↳ "k8s rollout" found nothing');
+		expect(h.drawn().join("\n")).toContain("memory has no note on this yet");
+		expect(h.drawn().join("\n")).toContain("alt+m less");
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(h.memory().join("\n")).not.toContain("alt+m more");
+		await h.stop();
+		// The next window has learned the key too.
+		const next = harnessOn(dir);
+		await next.start();
+		next.bus.emit("memorq:state", state);
+		expect(next.memory().join("\n")).not.toContain("alt+m more");
+		await next.stop();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the expanded memory section lists as many events as the panel has room for, and never loses its footer", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-memory-"));
+	const rows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+	Object.defineProperty(process.stdout, "rows", { value: 30, configurable: true });
+	writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, sidebarDepth: { memory: "expanded" } });
+	const recent = Array.from({ length: 5 }, (_, i) => ({
+		kind: "recall" as const,
+		text: `query number ${i}`,
+		at: Date.now() - i * 1000,
+		hits: 0,
+	}));
+	const h = harnessOn(dir);
+	try {
+		await h.start();
+		h.bus.emit("memorq:state", memorqState({ activity: { recalls: 5, remembers: 0, recent } }));
+		const lines = h.drawn();
+		// The slot is the screen less 4, and the frame fits it: the footer is not the clipped bottom.
+		expect(lines.length).toBeLessThanOrEqual(26);
+		expect(lines.join("\n")).toContain("alt+m less");
+		const shown = lines.filter((line) => line.includes("↳ ")).length;
+		expect(shown).toBeGreaterThan(0);
+		expect(shown).toBeLessThan(5);
+		// More room, more events.
+		Object.defineProperty(process.stdout, "rows", { value: 60, configurable: true });
+		expect(h.drawn().filter((line) => line.includes("↳ "))).toHaveLength(5);
+	} finally {
+		if (rows) Object.defineProperty(process.stdout, "rows", rows);
+		else delete (process.stdout as { rows?: number }).rows;
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -1686,16 +2075,16 @@ test("/reload and /new: the next instance asks again and draws the fresh state",
 	try {
 		await first.start();
 		bus.emit("memorq:state", memorqState({ notes: 12 }));
-		expect(first.memory()[0]).toBe("12 notes for this repo");
+		expect(first.memoryHeader()).toContain("memory · 12 notes");
 		await first.stop();
 		// pi builds the extension again for the next session; memorq answers the new request.
 		bus.on("memorq:state?", () => bus.emit("memorq:state", memorqState({ notes: 13 })));
 		const next = harnessOn(dir, { bus });
 		await next.start();
 		expect(bus.sent.filter((channel) => channel === "memorq:state?").length).toBe(2);
-		expect(next.memory()[0]).toBe("13 notes for this repo");
+		expect(next.memoryHeader()).toContain("memory · 13 notes");
 		// The old instance is gone from the bus: it keeps what it last drew.
-		expect(first.memory()[0]).toBe("12 notes for this repo");
+		expect(first.memoryHeader()).toContain("memory · 12 notes");
 		await next.stop();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
@@ -2202,55 +2591,14 @@ test("signals count a loop and errors inside a subagent", () => {
 
 test("panel sections: a rule, an indented body, one calm line when empty", () => {
 	expect(sectionLines("memory", [], 36)).toEqual([" ─ memory ".padEnd(36, "─"), "  nothing yet".padEnd(36)]);
-	const split: ContextSplit = {
-		prompt: 4_440,
-		hints: 680,
-		project: 0,
-		tools: 17_810,
-		hidden: 1_540,
-		skills: 1_930,
-		messages: 2_410,
-		window: 1_050_000,
-		cache: 0.94,
-		counts: { orq: 44, builtin: 4, hidden: [], skills: 24, hinted: 1, turns: 2, results: 2 },
-	};
-	expect(contextLines(split, 36)).toEqual([
-		" ─ context ".padEnd(36, "─"),
-		"  prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k",
-		"  tools  ▇▇▇▇▇▇▁▁ 17.8k msgs    2.4k",
-		"  cache 94% · 27.3k/1.1M · /context ",
-	]);
-	expect(
-		signalLines({ errors: 0, tools: 6, oneWay: 0, pending: 0 }, 36)
-			.slice(1)
-			.map((line) => line.trimEnd()),
-	).toEqual(["  no warnings · 0 irreversible calls"]);
-	expect(
-		signalLines({ loop: { tool: "get_span", count: 4 }, errors: 1, tools: 6, oneWay: 0, pending: 0 }, 40)
-			.slice(1)
-			.map((line) => line.trimEnd()),
-	).toEqual(["  ⚠ tool loop  get_span ×4 same args", "  errors 1/6 · irreversible calls 0"]);
-	expect(signalLines({ errors: 0, tools: 2, oneWay: 0, pending: 1 }, 36)[1]!.trimEnd()).toBe("  irreversible calls 0 · pending 1");
-});
-
-test("the process section: resident memory now, the last minute scaled to the peak, and the peak", () => {
-	const MB = 1_048_576;
-	const rule = ` ─ process ${"─".repeat(25)}`;
-	expect(processLines([], 0, 36)).toEqual([rule, "  measuring…".padEnd(36)]);
-	const rising = [100, 120, 140, 160, 180, 200, 212, 205, 190, 184, 184, 184, 184].map((mb) => mb * MB);
-	const [head, line] = processLines(rising, 212 * MB, 36);
-	expect(head).toBe(rule);
-	// Twelve bars: the oldest sample has scrolled out; the peak is a full block.
-	expect(line!.trimEnd()).toBe("  184 MB  ▅▆▇▇████▇▇▇▇  peak 212 MB");
-	expect(visibleWidth(line!)).toBe(36);
-	expect(processLines([1.2 * 1024 * MB], 1.2 * 1024 * MB, 36)[1]!.trimEnd()).toBe("  1.2 GB  █             peak 1.2 GB");
+	// Signals and process: inspector-rows.test.ts, with their folding.
 });
 
 test("minimap rows mark a call waiting on the gate", () => {
 	const step: Step = { id: 5, turn: 1, role: "tool", label: "delete_dataset", detail: "", status: "running", ts: 0, gate: "waiting" };
-	expect(bare(minimapRow(step, 36, false)).trimEnd()).toBe(" ⠋ tool   delete_dataset ?");
+	expect(bare(minimapRow(step, 36, false)).trimEnd()).toBe(" ⠋ tool delete_dataset ?");
 	const done: Step = { ...step, status: "ok", gate: "allowed" };
-	expect(bare(minimapRow(done, 36, false)).trimEnd()).toBe(" ⚙ tool   delete_dataset ✓");
+	expect(bare(minimapRow(done, 36, false)).trimEnd()).toBe(" ⚙ tool delete_dataset ✓");
 	// A managed agent's reply is labelled as the agent's.
 	const reply: Step = {
 		id: 6,
@@ -2262,7 +2610,7 @@ test("minimap rows mark a call waiting on the gate", () => {
 		ts: 0,
 		model: "agent/qa-val-agent",
 	};
-	expect(bare(minimapRow(reply, 36, false)).trimEnd()).toBe(" ▌ agent  I can help");
+	expect(bare(minimapRow(reply, 36, false)).trimEnd()).toBe(" ▌ agent I can help");
 });
 
 test("the context split: prompt and skills index apart, active schemas, the rest is messages", () => {
@@ -2403,11 +2751,6 @@ test("/context: a row per part with tokens, share and cache, one bar, then the l
 	expect(withProject.length).toBe(rows[0]!.length);
 	// Agent mode: the agent's own prompt and tools are not ours to count; say so, and the way back.
 	expect(contextRows({ ...split, agent: "qa-val-agent" })[0]).toStartWith("agent mode: qa-val-agent's instructions");
-	expect(
-		contextLines({ ...split, agent: "qa-val-agent" }, 36)
-			.slice(1)
-			.map((line) => line.trim()),
-	).toEqual(["agent qa-val-agent: its prompt", "and tools run on orq.ai", "msgs 2.4k/1.1M · /context"]);
 	// Nothing hidden, nothing measured from the cache: those levers are not offered.
 	const bare = contextRows({ ...split, cache: undefined, hidden: 0, counts: { ...split.counts, hidden: [] } });
 	expect(bare.some((row) => row.includes("ORQI_ALL_TOOLS") || row.includes("hidden:") || row.includes("cache hit"))).toBe(false);
@@ -2762,7 +3105,7 @@ test("a resumed background subagent is drawn finished from its orqi-subagent ent
 	const h = harnessOn(dir, { branch, subagents });
 	try {
 		await h.start();
-		expect(h.rows()).toContainEqual(expect.stringMatching(/sub +docs ✓ \$0\.002$/));
+		expect(h.rows()).toContainEqual(expect.stringMatching(/⇢ docs ✓ \$0\.002$/));
 		// The transcript line for the message: who, what model, what it cost.
 		const drawn = h.renderers.get("orqi-subagent")!(
 			{ role: "custom", customType: "orqi-subagent", content: "x", display: true, details: branch[3]!.details },
@@ -3288,22 +3631,430 @@ test("a resumed session's routing section counts the replayed decisions: the mar
 		const lines = h.opened.sidebar!.render(38).map((line) => bare(line).slice(1, -1).trim());
 		const at = lines.findIndex((line) => line.startsWith("─ routing"));
 		expect(at).toBeGreaterThan(-1);
+		// The header names the slot the last route answered on.
+		expect(lines[at]).toMatch(/^─ routing · default ─+$/);
 		expect(lines[at + 1]).toBe("fast 1 · default 1 · frontier 0");
 		expect(lines[at + 2]).toMatch(/^1 switch · lost cache ~\$0\.\d+$/);
 		expect(lines[at + 3]).toBe("1 unsure, kept the last model");
 		expect(lines[at + 4]).toBe("decider-4b 2× · 0.2 s · $0.00002");
+		// Routing keeps all its lines (its content is not redesigned): the saving survives the compact cap.
+		expect(lines[at + 5]).toMatch(/^(saved|costs) ~\$0\.\d+ (vs|more than) gpt-5\.6-terra$/);
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
-test("a section line's colour: the memory section reads its own lines, the others warn on a warning mark", () => {
-	expect(sectionLineRole("memory", '  ↳ recalled "q" → nothing · now')).toBe("warning");
-	expect(sectionLineRole("memory", '  + saved "q" · 3m')).toBe("text");
-	expect(sectionLineRole("memory", "  47 notes for this repo")).toBe("muted");
-	expect(sectionLineRole("signals", "  ⚠ 3 errors")).toBe("warning");
-	expect(sectionLineRole("signals", "  3 errors")).toBe("muted");
-	// Only the memory section reads a recall line by its words.
-	expect(sectionLineRole("context", '  ↳ recalled "q" → nothing · now')).toBe("muted");
+test("the trajectory shows no current step while the focus is on an item below it", () => {
+	const steps = Array.from({ length: 3 }, (_, i) => ({
+		id: i,
+		turn: 1,
+		role: "tool" as const,
+		label: `t${i + 1}`,
+		detail: "",
+		status: "ok" as const,
+		ts: 0,
+	}));
+	expect(minimapRows(steps, 30, 10).map(bare).at(-1)).toStartWith("▌⚙ tool t3");
+	const unmarked = minimapRows(steps, 30, 10, undefined, 0, undefined, false).map(bare);
+	expect(unmarked).toHaveLength(3);
+	expect(unmarked.every((row) => row.startsWith(" "))).toBe(true);
+});
+
+// ── /sidebar focus and peek ───────────────────────────────────────────────
+
+const UP = "\x1b[A";
+const DOWN = "\x1b[B";
+const ENTER = "\r";
+const ESC = "\x1b";
+
+/**
+ * A harness with a store of two notes read (the docs note first, the verify note newer), a recall that found
+ * the docs note's title, a save and a recall that found nothing, and the context measured: every kind of item
+ * `/sidebar focus` can reach. `held` keeps panels open until their `done` runs.
+ */
+async function peekHarness(
+	over: {
+		openEditor?: (command: string, args: string[]) => void | Promise<void>;
+		hold?: boolean;
+		expanded?: boolean;
+		settingsManager?: SettingsManager;
+	} = {},
+) {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "orqi-peek-")));
+	const notes = join(dir, "store", "notes");
+	mkdirSync(notes, { recursive: true });
+	const created = new Date(Date.now() - 9 * 86_400_000).toISOString().slice(0, 10);
+	const docs = join(notes, "make-docs-serve-b03006de.md");
+	writeFileSync(
+		docs,
+		`---\nkind: gotcha\ncreated: ${created}\norigin: session_end\n---\n# Make docs serve may lack MkDocs\n\nTrigger: running the docs site locally\n\nRun \`uv sync --group docs\` first.\n\nWhy: The Makefile target assumes the docs group is synced.\n`,
+	);
+	const verify = join(notes, "verify-docs-12345678.md");
+	writeFileSync(verify, "# Verify docs changes with strict build\n\nTrigger: finishing a docs change\n\nRun the strict build.\n");
+	const stores = { notes, rules: join(dir, "store", "rules"), skills: join(dir, "store", "skills") };
+	const h = harnessOn(dir, { cwd: dir, hold: over.hold, openEditor: over.openEditor, settingsManager: over.settingsManager });
+	// A tall terminal, so the expanded list draws every event; stop() puts the real height back.
+	const rows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+	Object.defineProperty(process.stdout, "rows", { value: 60, configurable: true });
+	const stop = h.stop;
+	h.stop = async () => {
+		await stop();
+		if (rows) Object.defineProperty(process.stdout, "rows", rows);
+		else delete (process.stdout as { rows?: number }).rows;
+	};
+	h.ctx.getContextUsage = () => ({ tokens: 30_000, contextWindow: 1_100_000, percent: 3 }) as never;
+	(h.ctx.sessionManager as any).buildSessionProjection = () => ({ messages: [{ role: "user", content: "x".repeat(4_000), timestamp: 0 }] });
+	await h.start();
+	const at = Date.now();
+	h.bus.emit(
+		"memorq:state",
+		memorqState({
+			stores,
+			activity: {
+				recalls: 2,
+				remembers: 1,
+				recent: [
+					{ kind: "recall", text: "k8s rollout", at: at - 1000, hits: 0 },
+					{ kind: "remember", text: "Pin the docs deps", at: at - 2000, saved: true, trigger: "editing docs", path: docs },
+					{ kind: "recall", text: "mkdocs strict build", at: at - 3000, hits: 5, top: "Verify docs changes with strict build" },
+				],
+			},
+		}),
+	);
+	await h.read("r1", docs);
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	await h.read("r2", verify);
+	// Compact draws only the newest event; expanded, the list the focus walks.
+	if (over.expanded) await h.shortcuts.get("alt+m")!(h.ctx);
+	return { h, dir, docs, verify, stores };
+}
+
+/** The drawn rows the focus marks with the `▌` gutter, borders off. */
+const marked = (h: { drawn(): string[] }) => h.drawn().filter((line) => line.startsWith("▌"));
+
+test("/sidebar focus: ↑↓ walks the trajectory, then the context section and each memory event, and back; esc leaves", async () => {
+	const { h, dir } = await peekHarness();
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		expect(h.focused()).toBe(true);
+		// Where it starts: the newest step, marked as before.
+		expect(h.rows().at(-1)).toStartWith("▌");
+		expect(marked(h).filter((line) => !/^▌[^ ]/.test(line))).toEqual([]);
+		// ↓ past the newest step: the context section as a whole (every body row of it).
+		expect(h.key(DOWN)).toBe(true);
+		expect(h.rows().filter((line) => line.startsWith("▌"))).toEqual([]);
+		const context = marked(h);
+		expect(context.length).toBeGreaterThan(1);
+		const inContext = h.drawn().findIndex((line) => line.startsWith("▌"));
+		expect(h.drawn()[inContext - 1]).toStartWith(" ─ context");
+		// ↓: the newest memory event (compact draws only that one).
+		h.key(DOWN);
+		expect(marked(h)).toEqual([expect.stringMatching(/^▌ ◇ Verify docs changes with st… now$/)]);
+		h.key(DOWN);
+		expect(marked(h)).toEqual([expect.stringMatching(/^▌ ◇ Verify docs changes with st… now$/)]); // the last stop stays
+		// alt+m lists the events; the focus stays on the one it was on, and ↓ goes down the list.
+		await h.shortcuts.get("alt+m")!(h.ctx);
+		expect(marked(h)[0]).toMatch(/^▌ ◇ Verify docs changes with +now$/);
+		h.key(DOWN);
+		expect(marked(h)[0]).toMatch(/^▌ ◇ Make docs serve may lack/);
+		h.key(DOWN);
+		expect(marked(h)[0]).toMatch(/^▌ ↳ "k8s rollout" found nothing +now$/);
+		expect(marked(h)).toHaveLength(2); // the title and its detail line: one event
+		h.key(DOWN);
+		expect(marked(h)[0]).toMatch(/^▌ \+ Pin the docs deps/);
+		h.key(DOWN);
+		expect(marked(h)[0]).toMatch(/^▌ ↳ "mkdocs strict build" found/);
+		// All the way back up: the memory events, the context, then the newest step again.
+		for (let i = 0; i < 4; i++) h.key(UP); // four events up from the last: the first event
+		expect(marked(h)[0]).toMatch(/^▌ ◇ Verify docs changes with/);
+		h.key(UP);
+		expect(h.drawn()[h.drawn().findIndex((line) => line.startsWith("▌")) - 1]).toStartWith(" ─ context");
+		h.key(UP);
+		expect(h.rows().at(-1)).toStartWith("▌");
+		expect(marked(h).filter((line) => !/^▌[^ ]/.test(line))).toEqual([]);
+		// esc gives the keyboard back.
+		h.key(DOWN);
+		expect(h.key(ESC)).toBe(true);
+		expect(h.focused()).toBe(false);
+		expect(marked(h).filter((line) => line.startsWith("▌ "))).toEqual([]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/** Walk the focus down to the memory event whose row matches. */
+function focusEvent(h: { key(data: string): boolean; drawn(): string[] }, title: RegExp) {
+	for (let i = 0; i < 12; i++) h.key(UP); // back to the trajectory, then down from there
+	// A section's event wears `▌ ` and a space; the trajectory's own row for the same note reads `▌◇`, which is not it.
+	const onEvent = () => marked(h).some((line) => line.startsWith("▌ ") && title.test(line));
+	for (let i = 0; i < 20 && !onEvent(); i++) h.key(DOWN);
+	expect(onEvent()).toBe(true);
+}
+
+test("enter on a memory event opens the whole note: title, facts, trigger, body, why, path; esc closes", async () => {
+	const { h, dir, docs } = await peekHarness({ hold: true, expanded: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Make docs serve/);
+		h.key(ENTER);
+		const shown = (h.opened.panel as Panel).render(84).map((line) => bare(line));
+		const text = shown.map((line) => line.slice(2, -2).trimEnd());
+		expect(shown[0]).toMatch(/^┌─ note /);
+		expect(text.slice(1, 10)).toEqual([
+			"Make docs serve may lack MkDocs",
+			"gotcha · 9d old · origin: session_end",
+			"",
+			"Trigger: running the docs site locally",
+			"",
+			"Run `uv sync --group docs` first.",
+			"",
+			"Why: The Makefile target assumes the docs group is synced.",
+			"",
+		]);
+		// The path is long and has no spaces: the panel breaks it where it must, and it is all there.
+		expect(text.slice(10, -3).join("")).toBe(docs);
+		expect(text.at(-2)).toBe("esc close · o open in $EDITOR · ↑↓ other events");
+		// While the overlay is open the sidebar leaves every key to it.
+		expect(h.key(ESC)).toBe(false);
+		(h.opened.panel as Panel).handleInput(ESC);
+		expect(h.closedPanels()).toBe(1);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// Closed, the focus is back where it was.
+		expect(h.key(DOWN)).toBe(true);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("↑↓ in the overlay move to the previous and next event without closing it, and the sidebar follows", async () => {
+	const { h, dir } = await peekHarness({ hold: true, expanded: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Verify docs changes/);
+		h.key(ENTER);
+		const panel = h.opened.panel as Panel;
+		const title = () => bare(panel.render(84)[1]!).slice(2, -2).trimEnd();
+		const badge = () => bare(panel.render(84)[0]!);
+		expect(title()).toBe("Verify docs changes with strict build");
+		expect(badge()).toContain("1/5");
+		// The next event down the sidebar is the other note, then the recall that found nothing.
+		panel.handleInput(DOWN);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(title()).toBe("Make docs serve may lack MkDocs");
+		expect(badge()).toContain("2/5");
+		expect(marked(h)[0]).toContain("Make docs serve");
+		panel.handleInput(DOWN);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(title()).toBe('"k8s rollout"');
+		expect(marked(h)[0]).toContain('"k8s rollout"');
+		panel.handleInput(DOWN);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// The save names its file, so it opens the note it wrote: the same one the read above opened.
+		expect(title()).toBe("Make docs serve may lack MkDocs");
+		expect(badge()).toContain("4/5");
+		expect(marked(h)[0]).toContain("Pin the docs deps");
+		panel.handleInput(UP);
+		panel.handleInput(UP);
+		panel.handleInput(UP);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(title()).toBe("Verify docs changes with strict build");
+		// Past the first event it stays; nothing closed.
+		panel.handleInput(UP);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(title()).toBe("Verify docs changes with strict build");
+		expect(h.closedPanels()).toBe(0);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a recall opens its top hit's note when it can be found, else the query and what it found", async () => {
+	const { h, dir } = await peekHarness({ hold: true, expanded: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /↳ "mkdocs strict/);
+		h.key(ENTER);
+		const text = (h.opened.panel as Panel).render(84).map((line) => bare(line).slice(2, -2).trimEnd());
+		expect(text[1]).toBe("Verify docs changes with strict build");
+		expect(text).toContain("Run the strict build.");
+		(h.opened.panel as Panel).handleInput(ESC);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		focusEvent(h, /↳ "k8s rollout"/);
+		h.key(ENTER);
+		const miss = (h.opened.panel as Panel).render(84).map((line) => bare(line).slice(2, -2).trimEnd());
+		expect(miss.slice(1, 5)).toEqual([
+			'"k8s rollout"',
+			expect.stringMatching(/^recall · found nothing · now$/),
+			"",
+			"memory has no note on this yet",
+		]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a note whose file is gone shows a short message and never throws", async () => {
+	const { h, dir, docs } = await peekHarness({ hold: true, expanded: true });
+	try {
+		rmSync(docs);
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Make docs serve/);
+		expect(h.key(ENTER)).toBe(true);
+		const text = (h.opened.panel as Panel).render(84).map((line) => bare(line).slice(2, -2).trimEnd());
+		expect(text.slice(1, 5)).toEqual(["Make docs serve may lack MkDocs", "", "The file is gone.", ""]);
+		expect(text.slice(5, -3).join("")).toBe(docs);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("o opens the note's file in $EDITOR with the path as an argument; unset, it says so and opens nothing", async () => {
+	const calls: { command: string; args: string[] }[] = [];
+	const { h, dir, docs } = await peekHarness({
+		hold: true,
+		expanded: true,
+		openEditor: (command, args) => void calls.push({ command, args }),
+	});
+	const editor = process.env.EDITOR;
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Make docs serve/);
+		h.key(ENTER);
+		const panel = h.opened.panel as Panel;
+		process.env.EDITOR = "code -w";
+		panel.handleInput("o");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(calls).toEqual([{ command: "code", args: ["-w", docs] }]);
+		delete process.env.EDITOR;
+		panel.handleInput("o");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(calls).toHaveLength(1);
+		expect(h.notices.at(-1)).toContain("$EDITOR is not set");
+		const hint = bare(panel.render(84).at(-2)!);
+		expect(hint).toContain("no $EDITOR set · esc close · ↑↓ other events");
+		expect(hint).not.toContain("…");
+		// A recall with no note to open has nothing for `o`.
+		(h.opened.panel as Panel).handleInput(ESC);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		focusEvent(h, /↳ "k8s rollout"/);
+		h.key(ENTER);
+		process.env.EDITOR = "vim";
+		(h.opened.panel as Panel).handleInput("o");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(calls).toHaveLength(1);
+	} finally {
+		if (editor === undefined) delete process.env.EDITOR;
+		else process.env.EDITOR = editor;
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("enter on the context section opens the /context table; enter on a trajectory step still peeks at it", async () => {
+	const { h, dir } = await peekHarness({ hold: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		h.key(ENTER); // the newest step
+		expect(bare(h.opened.panel!.render(84)[0]!)).not.toContain("context");
+		// While a step's peek is open the sidebar leaves the keys to it (it was swallowing esc).
+		expect(h.key(ESC)).toBe(false);
+		(h.opened.panel as Panel).handleInput(ESC);
+		expect(h.closedPanels()).toBe(1);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		h.drawn(); // the TUI redraws between keys
+		h.key(DOWN); // into the context section
+		expect(h.key(ENTER)).toBe(true);
+		const lines = (h.opened.panel as Panel).render(84).map((line) => bare(line));
+		expect(lines[0]).toMatch(/^┌─ context .*30k of 1\.1M · 3%/);
+		expect(lines.join("\n")).toContain("tools");
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a keyboard that is not on an item passes through: other keys are not taken", async () => {
+	const { h, dir } = await peekHarness();
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		expect(h.key("a")).toBe(false);
+		h.key(DOWN);
+		expect(h.key("a")).toBe(false);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("an item that leaves the sidebar (its section folds back to compact) is no longer the focus: the newest step is", async () => {
+	const { h, dir } = await peekHarness({ expanded: true });
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /↳ "k8s rollout"/);
+		expect(h.rows().filter((line) => line.startsWith("▌"))).toEqual([]);
+		await h.shortcuts.get("alt+m")!(h.ctx); // compact draws only the newest event
+		expect(marked(h).filter((line) => /k8s/.test(line))).toEqual([]);
+		expect(h.rows().at(-1)).toStartWith("▌"); // the trajectory has its marker back
+		// Enter acts on the newest step, not on the event that is no longer there.
+		h.key(ENTER);
+		expect(bare(h.opened.panel!.render(84)[0]!)).toMatch(/^┌─ step /);
+		(h.opened.panel as Panel).handleInput(ESC);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// ↓ from there enters the first item again, not a ghost of the old one.
+		h.key(DOWN);
+		expect(marked(h)[0]).toBeDefined();
+		expect(h.rows().filter((line) => line.startsWith("▌"))).toEqual([]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("o runs the editor pi would: its externalEditor setting, then $VISUAL, then $EDITOR", async () => {
+	const calls: { command: string; args: string[] }[] = [];
+	const settings = { externalEditor: "" };
+	const settingsManager = { getSettings: () => settings, getProjectSettings: () => ({}) } as unknown as SettingsManager;
+	const { h, dir, docs } = await peekHarness({
+		hold: true,
+		expanded: true,
+		settingsManager,
+		// Slow, as a real editor is: the key is done only when the editor is.
+		openEditor: async (command, args) => {
+			await new Promise((resolve) => setTimeout(resolve, 1));
+			calls.push({ command, args });
+		},
+	});
+	const { EDITOR, VISUAL } = process.env;
+	try {
+		await h.commands.get("sidebar")!("focus", h.ctx);
+		focusEvent(h, /Make docs serve/);
+		h.key(ENTER);
+		const panel = h.opened.panel as Panel;
+		const open = async () => {
+			panel.handleInput("o");
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		};
+		process.env.EDITOR = "vim";
+		process.env.VISUAL = "nvim";
+		await open();
+		settings.externalEditor = "emacs -nw";
+		await open();
+		expect(calls).toEqual([
+			{ command: "nvim", args: [docs] },
+			{ command: "emacs", args: ["-nw", docs] },
+		]);
+	} finally {
+		if (EDITOR === undefined) delete process.env.EDITOR;
+		else process.env.EDITOR = EDITOR;
+		if (VISUAL === undefined) delete process.env.VISUAL;
+		else process.env.VISUAL = VISUAL;
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

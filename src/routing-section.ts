@@ -38,6 +38,8 @@ export interface RoutingStats {
 	dry: boolean;
 	/** Whether anything was routed this session. */
 	routed: boolean;
+	/** The rung the last route named (a retry's escalation included): the slot answering now. */
+	last?: Rung;
 }
 
 const cost = (price: Price, cached: number, uncached: number, output: number) =>
@@ -51,9 +53,11 @@ export function routingStats(steps: Step[], priceOf: (id: string) => Price | und
 	let ms = 0;
 	let deciderCost = 0;
 	let decider: string | undefined;
+	let last: Rung | undefined;
 	for (const step of steps) {
 		if (step.role !== "route" || !step.route) continue;
 		marks += 1;
+		last = step.route.named;
 		if (!step.route.retry) picks[step.route.named] += 1;
 		if (step.route.unsure) unsure += 1;
 		if (step.durationMs !== undefined) {
@@ -114,11 +118,22 @@ export function routingStats(steps: Step[], priceOf: (id: string) => Price | und
 		baseline,
 		dry,
 		routed,
+		...(last ? { last } : {}),
 	};
 }
 
 export function routingLines(stats: RoutingStats, width: number): string[] {
-	if (!stats.routed) return sectionLines(stats.dry ? "routing · dry run" : "routing", [], width, "no routed messages yet");
+	return sectionLines(routingSummary(stats) ? `routing · ${routingSummary(stats)}` : "routing", routingBody(stats), width);
+}
+
+/** The routing header's answer: the slot the last route answered on, and `dry run` while the picks are only what it would have done. */
+export function routingSummary(stats: Pick<RoutingStats, "dry" | "last">): string | undefined {
+	return [stats.last ? SLOT[stats.last] : "", stats.dry ? "dry run" : ""].filter(Boolean).join(" · ") || undefined;
+}
+
+/** The routing section's body, under its header. */
+export function routingBody(stats: RoutingStats): string[] {
+	if (!stats.routed) return ["no routed messages yet"];
 	// In a dry run the picks are what it would have done; the title says so, the panel has no width to spare.
 	const body = [RUNGS.map((rung) => `${SLOT[rung]} ${stats.picks[rung]}`).join(" · ")];
 	const churn = [
@@ -147,5 +162,5 @@ export function routingLines(stats: RoutingStats, width: number): string[] {
 					: `costs ~${amount} more than ${base}`,
 		);
 	}
-	return sectionLines(stats.dry ? "routing · dry run" : "routing", body, width);
+	return body;
 }

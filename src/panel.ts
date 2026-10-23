@@ -111,7 +111,9 @@ export function boxLines(spec: PanelSpec, width: number, selected = 0, paint: Pa
 		const wrapped = spec.rows.flatMap((row) => (row === "" ? [""] : wrapTextWithAnsi(row, inner)));
 		for (const row of wrapped.slice(offset, offset + height)) out.push(line(paint.text(row)));
 		if (wrapped.length > height) {
-			const shown = `${offset + 1}-${Math.min(wrapped.length, offset + height)} of ${wrapped.length} lines · ↑↓ scroll`;
+			// A panel whose keys own ↑↓ (a peek moves between events with them) scrolls with paging only.
+			const keys = spec.keys && "up" in spec.keys && "down" in spec.keys ? "pgup/pgdn" : "↑↓";
+			const shown = `${offset + 1}-${Math.min(wrapped.length, offset + height)} of ${wrapped.length} lines · ${keys} scroll`;
 			out.push(line(paint.dim(shown)));
 		}
 	} else {
@@ -149,8 +151,10 @@ export class Panel implements Component {
 		}
 	}
 
-	update(spec: PanelSpec): void {
+	/** New content for the panel. The scroll stays (a streaming answer updates on every token); `top` starts a different document at its top. */
+	update(spec: PanelSpec, { top = false }: { top?: boolean } = {}): void {
 		this.spec = spec;
+		if (top) this.offset = 0;
 		this.selected = Math.min(this.selected, Math.max(0, this.visible().length - 1));
 		this.requestRender();
 	}
@@ -204,10 +208,10 @@ export class Panel implements Component {
 			this.done();
 			return;
 		}
-		if (
-			!this.spec.selectable &&
-			(matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))
-		) {
+		// A panel whose keys name ↑ or ↓ owns them (a peek moves between events); paging still scrolls.
+		const owns = (key: string) => this.spec.keys !== undefined && key in this.spec.keys;
+		const arrow = (matchesKey(data, "up") && !owns("up")) || (matchesKey(data, "down") && !owns("down"));
+		if (!this.spec.selectable && (arrow || matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))) {
 			const step = matchesKey(data, "pageUp") || matchesKey(data, "pageDown") ? this.height() : 1;
 			this.offset = Math.max(0, this.offset + (matchesKey(data, "up") || matchesKey(data, "pageUp") ? -step : step));
 			this.requestRender();

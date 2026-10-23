@@ -1,7 +1,7 @@
 /** Checks for the sidebar's routing section: picks, switches, the cache they cost, and savings against the default model. */
 
 import { expect, test } from "bun:test";
-import { routingLines, routingStats } from "./routing-section.ts";
+import { routingLines, routingStats, routingSummary } from "./routing-section.ts";
 import { type Step, Trajectory } from "./trajectory.ts";
 
 const PRICES: Record<string, { input: number; output: number; cacheRead: number }> = {
@@ -83,7 +83,7 @@ test("the section's lines, and what it says before anything was routed or withou
 		answer(2, "openai/gpt-5.6-terra", 11_000, 0),
 	];
 	const lines = routingLines(routingStats(steps, priceOf, "openai/gpt-5.6-terra", false), 38).map((line) => line.trim());
-	expect(lines[0]).toMatch(/^─ routing ─+$/);
+	expect(lines[0]).toMatch(/^─ routing · default ─+$/);
 	expect(lines.slice(1)).toEqual([
 		"fast 1 · default 1 · frontier 0",
 		"1 switch · lost cache ~$0.018",
@@ -99,7 +99,7 @@ test("the section's lines, and what it says before anything was routed or withou
 		),
 		38,
 	);
-	expect(dry[0]!.trim()).toMatch(/^─ routing · dry run ─+$/);
+	expect(dry[0]!.trim()).toMatch(/^─ routing · fast · dry run ─+$/);
 	expect(dry[1]!.trim()).toBe("fast 1 · default 0 · frontier 0");
 	expect(dry.at(-1)!.trim()).toMatch(/^would save ~\$0\.0\d\d vs gpt-5\.6-terra$/);
 	expect(routingLines(routingStats([], priceOf, "openai/gpt-5.6-terra", false), 38)[1]!.trim()).toBe("no routed messages yet");
@@ -140,4 +140,20 @@ test("review: a retry alone is routing activity, and a dry run prices a retry's 
 	// Spent on terra: 0.0212 + 0.0232. Would-be: luna 0.00212, then the retry on terra after a switch
 	// from luna, so its 20k prompt is read uncached: 0.0412.
 	expect(stats.saved).toBeCloseTo(0.0444 - (0.00212 + 0.0412), 9);
+});
+
+test("the header names the slot the last route answered on, and says when it is a dry run", () => {
+	const stats = routingStats(
+		[route(1, "easy"), answer(1, "openai/gpt-5.6-luna", 10_000, 0), route(2, "hard")],
+		priceOf,
+		"openai/gpt-5.6-terra",
+		false,
+	);
+	expect(stats.last).toBe("hard");
+	expect(routingSummary(stats)).toBe("frontier");
+	// A retry's escalation is the slot answering now.
+	expect(routingSummary(routingStats([route(1, "easy"), route(1, "medium", { retry: true })], priceOf, "x", false))).toBe("default");
+	expect(routingSummary({ dry: true, last: "easy" })).toBe("fast · dry run");
+	expect(routingSummary({ dry: true })).toBe("dry run");
+	expect(routingSummary({ dry: false })).toBeUndefined();
 });

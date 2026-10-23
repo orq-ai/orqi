@@ -490,6 +490,45 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   off, so the RAM readout an upgrade used to show is gone until `/sidebar` turns it on. The file is
   read forgivingly (missing, unreadable or odd means the defaults; unknown ids are ignored) and each
   toggle rereads it and changes only its own id, so two orqi windows keep each other's choices.
+  The frame draws every header (` ─ title · summary ─`: the name `accent`, the section's `summary()`
+  `text`, the rule `dim`), so a section is read by its header; `lines()` is only the body, rendered for
+  the panel width less `BODY_INDENT`, and an empty body folds the section to its header (signals with
+  nothing firing, process unless expanded). Compact shows `COMPACT_LINES` (4) body lines at most;
+  expanded shows them all. A body line is a string, painted in one role as before, or a `Row`
+  (`{ segs, item? }`): its segments (`{ role, text, flex? }`) are made `printable()`, cut to width on
+  their plain text (the `flex` one gives way first, so a right-hand age survives) and only then
+  painted, so a cut never splits an escape code. `item` names what the row shows and stays with every
+  drawn row (`drawSections`, the component's `items()`), so `/sidebar focus` can map rows to items.
+  `alt+c` and `alt+m` toggle context and memory between compact and expanded, saved as `sidebarDepth`
+  in the same file and the same way (`savePrefs`).
+- **`/sidebar focus` walks the trajectory, then the items below it, and enter peeks.** `moveFocus`
+  (`src/sidebar-focus.ts`) steps through the trajectory's steps and then the distinct items of the drawn
+  rows (`stopsOf` over the frame's `items()`; the context section names one item on all its rows through
+  `asItem`). The selected item's rows wear the trajectory's `▌` gutter (`drawSections`), and the
+  trajectory shows none while an item has the focus; an item that leaves the frame (a section folded
+  back) is dropped from the focus. Enter on a memory event opens its note in a `Panel`
+  (`peekMemory`, `src/note-peek.ts`): the file is read when the overlay opens and when ↑↓ moves to another
+  event, never in a render, and a missing or unreadable one is a line of text. A save's path is opened only
+  inside a store (memorq sends it), a recall's top hit is found by title in the stores. `o` runs the editor pi would
+  (its `externalEditor` setting, then `$VISUAL`, then `$EDITOR`) with the path as an argument, no shell, the
+  terminal handed over with an async `spawn` as pi's own editor does (`runEditor`; `deps.openEditor` in
+  tests); with none set the overlay says so. Enter on the context section
+  calls the same `showContext` the `/context` command runs. **While an overlay opened from focus is up
+  the sidebar's `onTerminalInput` passes every key through** (`peeking`): it runs before the overlay, so
+  it would otherwise swallow esc and the arrows. A `Panel` whose `keys` name `up` or `down` owns those
+  keys (paging still scrolls); `update(spec, { top: true })` starts a different document at its top, a plain
+  `update` keeps the scroll (`/btw` updates on every token).
+- **The context section's estimates are worked out when state changes, and its lines are fitted to a 34-cell body.**
+  `contextEstimates` (`src/context-section.ts`) runs from `measure` (session start, after a run, on a model
+  switch, on a compaction), on every trajectory change (a route, a message) and when `/compact-at` moves the
+  reserve, so a render only reads them, plus the clock for a compaction's age (which is why the
+  "compacted … ago" line expires at render time). Growth is the mean change of the last 5 samples taken since the last
+  compaction (the drop is not a trend); with none, the cache line ends `flat`. pi gives no usage until a response
+  follows a compaction, so `session_compact` records pi's `tokensBefore` and estimates the size after
+  (what is fixed plus pi's `estimateTokens` over the messages it kept) and `measure` uses it until pi can say.
+  memorq's `context` (tokens it injected) is taken out of `prompt` into `memory`, never more than the prompt
+  holds; without it there is no memory part. The wireframe's frames are 38 cells wide, the real body 34, so
+  a few lines have a tighter form (`■tools 21k`, `· ` closed up to a space, `+4.1k/turn`).
 - **`/compact-at` moves pi's reserve, it does not compact.** pi compacts once the context passes
   `window - compaction.reserveTokens` (16384 by default, about 92% of 200k), and its SettingsManager
   has no setter for the reserve, nor pi's `/settings` a slot for an extension. So the percent lives in
@@ -527,9 +566,22 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   and once orqi's session has ended its host opens nothing.
 - **A note read counts wherever memorq keeps it.** memorq's state names only the folder each kind is
   written to, and a kind written to the repository is still read from the machine store, so
-  `isNoteRead` also knows memorq's machine roots (`ORQ_NOTES_HOME`, else `~/.memorq`, plus the
+  `noteKind` also knows memorq's machine roots (`ORQ_NOTES_HOME`, else `~/.memorq`, plus the
   legacy `~/.orq/knowledge`). Store folders are resolved through symlinks when a state arrives, the
   read file after the read finishes, never in a render. A subagent's read counts too.
+- **Memory's reads are events, titled once from the note file.** `noteReads` is a list of `{ path, at }`
+  (a path once, with its newest time, capped), and the sidebar shows a note by the title in its file
+  (`src/note-info.ts`: the first `# ` heading, `Trigger:` or `Use when:` for the detail line, else the file
+  name's words). The file is read when the read is counted and again only when its modified time moved,
+  never in a render. memorq sends only its newest five recalls and saves, so orqi keeps every one it has
+  seen this session (`mergeRecent`): that is what counts the recalls that found nothing. The section's view
+  (`memoryView`) is rebuilt when a state arrives or a note is read, and a render only lays it out. Expanded,
+  the frame hands memory the rows the other sections leave (`SectionFrame.rows`), so it lists as many events as
+  fit and never loses its footer. The hint `alt+m more` shows until a depth key was pressed once
+  (`depthKeyUsed` in `orqi.json`). The `read N of M` count is of notes and rules (what memorq's `notes` counts): a skill read
+  is an event but not in it, and N never passes M. `mergeRecent` forgets what it saw when memorq's totals go
+  down, which is memorq starting a session of its own.
+- **The trajectory's memory marks are session-local too.** A read becomes a `◇ memory <title>` row once it is counted (until then it is a plain `⚙ tool read`), and after a resume or a compaction rebuild the earlier reads stay tool rows: only recalls and saves are restored, from their tool results.
 - **A learn is recorded once.** memorq republishes the same `learned` on every change and answers
   every `memorq:state?`, and a resume replays the `orqi-memory` entries, so each learn is keyed by
   `at|trigger|count`, seeded from the branch at session start; a learn published before that waits

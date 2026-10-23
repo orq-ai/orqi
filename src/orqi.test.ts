@@ -353,6 +353,39 @@ test("our commands never collide with a pi built-in", () => {
 	).toEqual([]);
 });
 
+test("our shortcuts never take a key pi binds by default", async () => {
+	// pi lets an extension shortcut shadow its own binding, or ignores it for a reserved one, silently
+	// either way. Its key table is not in the export map, so it is read by path, as the slash commands are.
+	const { KEYBINDINGS } = (await import(
+		join(import.meta.dir, "..", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "keybindings.js")
+	)) as { KEYBINDINGS: Record<string, { defaultKeys: string | string[] }> };
+	const taken = new Set(Object.values(KEYBINDINGS).flatMap(({ defaultKeys }) => [defaultKeys].flat().map((key) => key.toLowerCase())));
+	expect(taken.has("ctrl+t")).toBe(true); // the scrape still finds the table: ctrl+t is pi's thinking toggle
+
+	const shortcuts: string[] = [];
+	const pi = {
+		registerEntryRenderer: () => {},
+		registerMessageRenderer: () => {},
+		registerCommand: () => {},
+		registerShortcut: (key: string) => shortcuts.push(key),
+		registerTool: () => {},
+		on: () => {},
+		events: { on: () => () => {}, emit: () => {} },
+		appendEntry: () => {},
+	} as any;
+	orqCommands(noReconnect, () => [], { name: "orqi", version: "v0", status: "", cwd: "~" })(pi);
+	orqHarness({
+		agentDir: tmpdir(),
+		catalogue: () => [],
+		toolCount: () => 0,
+		callTool: async () => ({ text: "", isError: false }),
+		workspace: () => undefined,
+	})(pi);
+	expect(shortcuts).toEqual(expect.arrayContaining(["alt+s", "alt+p", "alt+c", "alt+m"]));
+	expect(new Set(shortcuts).size).toBe(shortcuts.length);
+	expect(shortcuts.filter((key) => taken.has(key))).toEqual([]);
+});
+
 test("the model catalogue cache belongs to the credential that fetched it", async () => {
 	// A cache written by one credential (12 models, no agent access) was served to the
 	// next for 24 h: a /login that could see 149 agents still got "no agents visible".

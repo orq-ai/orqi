@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { HStack, matchesKey, VStack, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
-import { ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { isAgentModel } from "./agents.ts";
 import { apiBaseUrl, DEFAULT_SERVER, runOrq } from "./auth.ts";
 import {
@@ -18,38 +19,57 @@ import {
 	type Paint,
 } from "./footer.ts";
 import {
-	contextLines,
+	asItem,
 	contextUsed,
-	sectionLines,
+	BODY_INDENT,
+	cutPlain,
+	drawSections,
+	type FrameRow,
+	type Line,
 	MINIMAP_MIN_COLS,
 	MINIMAP_WIDTH,
 	minimapRows,
+	paintLine,
 	peekLines,
-	processLines,
-	signalLines,
+	printable,
+	processBody,
+	processSummary,
 	SPINNER,
-	trajectoryTitle,
+	sectionBlock,
+	signalBody,
+	signalSummary,
+	trajectoryHeader,
 	type ContextSplit,
 } from "./inspector-rows.ts";
 import type { ModelInfo } from "./model.ts";
 import {
 	isLearned,
+	injectedTokens,
 	isMemorqState,
-	isNoteRead,
+	noteKind,
 	learnHead,
 	learnPhrase,
-	memoryLineRole,
-	memoryLines,
+	memoryBody,
+	memorySummary,
+	memoryView,
+	mergeRecent,
+	noteRead,
 	noteRoots,
 	readPath,
 	type MemorqHost,
+	type MemorqRecent,
 	type MemorqState,
+	type MemoryView,
+	type NoteRead,
 } from "./memory-section.ts";
-import { routingLines, routingStats } from "./routing-section.ts";
+import { NoteInfos } from "./note-info.ts";
+import { editorCommand, peekOf } from "./note-peek.ts";
+import { type Focus, type ItemRef, moveFocus, sameItem, stopsOf } from "./sidebar-focus.ts";
+import { type RoutingStats, routingBody, routingStats, routingSummary } from "./routing-section.ts";
 import { pickModel } from "./model-picker.ts";
 import { Panel, panelPaint, type PanelSpec } from "./panel.ts";
 import { MEMORQ_COMMANDS } from "./memorq-detect.ts";
-import { COMPACT_AT_MAX, COMPACT_AT_MIN, isCompactAt, readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
+import { COMPACT_AT_MAX, COMPACT_AT_MIN, type Depth, isCompactAt, readPrefs, writePrefs, type Prefs, type SectionId } from "./prefs.ts";
 import { studioHost, threadUrl, type TraceRef } from "./trace.ts";
 import { applyGardenKey, openGarden, registerGarden } from "./garden.ts";
 import {
@@ -84,6 +104,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { registerViewCommands } from "./harness-commands.ts";
 import { cacheRate, selectionName, contextSplit } from "./harness-views.ts";
+import { contextBody, contextEstimates, contextSummary, type CompactionMark, type ContextEstimates } from "./context-section.ts";
 
 export interface HarnessDeps {
 	agentDir: string;
@@ -110,6 +131,8 @@ export interface HarnessDeps {
 	now?: () => number;
 	/** This session's pi settings, so `/compact-at` can move the compaction reserve in memory. */
 	settingsManager?: SettingsManager;
+	/** Run `$EDITOR` on a note's file (peek's `o`), the terminal handed over until it exits; tests replace it. Throws when it cannot start. */
+	openEditor?: (command: string, args: string[]) => void | Promise<void>;
 	/** Background subagents still running, disposed when the session ends. */
 	subagents?: SubagentHost;
 	/** The subagent types and the files that did not load, for `/subagents`; absent, the built-ins only. */
@@ -220,17 +243,25 @@ const WORKSPACE_STATUS = "orq-workspace";
 /** What one sidebar frame has already worked out, handed to every section it draws. */
 export interface SectionFrame {
 	signals: ReturnType<typeof signals>;
+	/** How much this section says: compact by default, expanded once `alt+c`/`alt+m` (or orqi.json) opens it. */
+	depth: Depth;
+	/** The body lines this section may use: a section that lists things (memory, expanded) stops when the panel is full. */
+	rows: number;
 }
 
 /**
- * One section of the sidebar under the trajectory. `lines` is a pure renderer
- * over state already measured; `unavailable` names why it cannot show (memorq
- * not installed), which greys its row in /sidebar.
+ * One section of the sidebar under the trajectory. The frame draws every header the same way,
+ * ` ─ title · summary ───`, so a section is read by its header; `lines` is the body under it, a pure
+ * renderer over state already measured. An empty body folds the section to its header (a quiet
+ * section), and undefined leaves it out of the frame (context before its first measure). `unavailable`
+ * names why it cannot show (memorq not installed), which greys its row in /sidebar.
  */
 export interface InspectorSection {
 	id: SectionId;
 	title: string;
-	lines(width: number, frame: SectionFrame): string[];
+	/** The header's answer to the section's one question: `ok` in `─ signals · ok`, `174 MB` in `─ process · 174 MB`. */
+	summary?(frame: SectionFrame): string | undefined;
+	lines(width: number, frame: SectionFrame): Line[] | undefined;
 	unavailable?(): string | undefined;
 	/** A word for /sidebar's row while the section is still on: `loading…`. */
 	note?(): string | undefined;
@@ -241,12 +272,6 @@ export interface InspectorSection {
 /** The reserve that makes pi compact at `pct` of `window`: pi compacts once the context passes `window - reserve`. */
 export function reserveFor(pct: number, window: number): number {
 	return Math.ceil((window * (100 - pct)) / 100);
-}
-
-/** The theme role a sidebar section's body line is painted in: the memory section reads its own lines, the others warn on a `⚠` and are muted otherwise. */
-export function sectionLineRole(id: SectionId, line: string): "muted" | "text" | "dim" | "accent" | "warning" {
-	if (id === "memory") return memoryLineRole(line);
-	return line.trimStart().startsWith("⚠") ? "warning" : "muted";
 }
 
 /** The sections the sidebar draws, in registry order: chosen in orqi.json and available. */
@@ -281,6 +306,10 @@ const HEADER_ROWS = 2;
 const ROUTING_OFF = "/model orq/auto";
 /** The sidebar's own lines: top border, trajectory title, hint, bottom border. */
 const FRAME_CHROME = 4;
+/** The trajectory rows a frame keeps for it whatever the sections ask. */
+const MIN_TRAJECTORY = 3;
+/** The least body rows memory's expanded list is given: room for one event and its footer. */
+const MIN_MEMORY_ROWS = 6;
 const UNPATCHED = Symbol.for("orqi.layout.render");
 
 /**
@@ -535,6 +564,29 @@ export function orqHarness(deps: HarnessDeps) {
 			render();
 		};
 		let split: ContextSplit | undefined;
+		/** What the context section estimates, worked out when state changes (a run, a route, a compaction), never in a render. */
+		let estimates: ContextEstimates | undefined;
+		/** The last compaction pi did this session, from `session_compact`. */
+		let compaction: CompactionMark | undefined;
+		/** What memorq said it injected when the split was last measured, raw: the split holds it clamped to the prompt. */
+		let measuredInjected: number | undefined;
+		/** Whether pi compacts at all, read with the reserve in `applyCompactAt`: the trajectory path never calls pi. */
+		let compactionOn = true;
+		/** Whether pi compacts at all: a reserve to measure the compaction point from. */
+		const compactReserve = () => (compactionOn ? reserveTokens : undefined);
+		const refreshEstimates = () => {
+			estimates = split
+				? contextEstimates({
+						split,
+						samples: trajectory.samples,
+						steps: trajectory.steps,
+						priceOf,
+						reserve: compactReserve(),
+						compactAt: prefs.compactAt,
+						compaction,
+					})
+				: undefined;
+		};
 		// Which sidebar sections show: orqi.json in the agent dir, read once per session (makeServices builds
 		// this extension again for /new, /resume and /fork) and written whole on every toggle.
 		const prefs = readPrefs(deps.agentDir);
@@ -568,20 +620,26 @@ export function orqHarness(deps: HarnessDeps) {
 				deps.settingsManager.applyOverrides({ compaction: { reserveTokens: wanted ?? projectReserve() ?? reserve ?? 16_384 } });
 				overriding = wanted !== undefined;
 			}
-			reserveTokens = pi.getSettings().compaction?.reserveTokens ?? 16_384;
+			const settings = pi.getSettings();
+			reserveTokens = settings.compaction?.reserveTokens ?? 16_384;
+			compactionOn = settings.compaction?.enabled !== false;
+			refreshEstimates();
 		};
 		/**
-		 * Switch one section and save it. The file is read again and only this id changed, so a second
-		 * orqi window's choices since this one started are kept rather than overwritten, and come back
-		 * into this one. Never from a render: it reads and writes the file.
+		 * Change the sidebar's choices and save them. The file is read again and only this change is made to
+		 * it, so a second orqi window's choices since this one started are kept rather than overwritten, and
+		 * come back into this one. Never from a render: it reads and writes the file. A failed save still
+		 * applies in memory and says why.
 		 */
-		const setSection = (ctx: ExtensionContext | undefined, id: SectionId, value: boolean) => {
-			prefs.sections[id] = value;
+		const savePrefs = (ctx: ExtensionContext | undefined, change: (into: Prefs) => void) => {
+			change(prefs);
 			try {
 				const fresh = readPrefs(deps.agentDir);
-				fresh.sections[id] = value;
+				change(fresh);
 				writePrefs(deps.agentDir, fresh);
 				Object.assign(prefs.sections, fresh.sections);
+				prefs.sidebarDepth = fresh.sidebarDepth;
+				prefs.depthKeyUsed = fresh.depthKeyUsed;
 			} catch (error) {
 				// memorq calls this through panel.set, possibly after this session closed: a stale ctx throws on use.
 				try {
@@ -590,6 +648,25 @@ export function orqHarness(deps: HarnessDeps) {
 					// The choice still applies in memory; only the notice is lost.
 				}
 			}
+		};
+		/** Switch one section on or off, and save it. */
+		const setSection = (ctx: ExtensionContext | undefined, id: SectionId, value: boolean) =>
+			savePrefs(ctx, (into) => {
+				into.sections[id] = value;
+			});
+		/**
+		 * Open one section to expanded, or back to compact, save it and redraw. A depth key pressed once is
+		 * remembered, so the hint that names it (memory's `alt+m more`) goes for good.
+		 */
+		const toggleDepth = (ctx: ExtensionContext | undefined, id: SectionId) => {
+			const depth: Depth = prefs.sidebarDepth?.[id] === "expanded" ? "compact" : "expanded";
+			savePrefs(ctx, (into) => {
+				const depths = { ...into.sidebarDepth, [id]: depth };
+				if (depth === "compact") delete depths[id];
+				into.sidebarDepth = Object.keys(depths).length ? depths : undefined;
+				into.depthKeyUsed = true;
+			});
+			render();
 		};
 		// ── memory: what memorq last published on the bus, and the notes the model opened ──
 		// Subscribed at load, not at session_start: memorq, a path extension, loads first and may publish
@@ -605,7 +682,17 @@ export function orqHarness(deps: HarnessDeps) {
 		let notesOff = false;
 		let roots = noteRoots();
 		let realRoots = roots;
-		let noteReads = 0;
+		/** The notes opened this session, newest first, a path once with its newest time. */
+		let noteReads: NoteRead[] = [];
+		/** Titles of the notes read, from their files, read when a read is counted and never in a render. */
+		const noteInfos = new NoteInfos();
+		/** Every recall and save memorq has reported this session: it sends the newest five each time. */
+		let seenRecent: MemorqRecent[] = [];
+		/** What the memory section draws, worked out when a state arrives or a note is read, never in a render. */
+		let memory: MemoryView | undefined;
+		const refreshMemory = () => {
+			memory = memoryView(memorqState, noteReads, (path) => noteInfos.get(path), seenRecent);
+		};
 		/** `read` paths by tool call: tool_execution_end carries no args. */
 		const readPaths = new Map<string, string>();
 		/** A path with its symlinks resolved, or the path itself when it cannot be (missing, or empty). */
@@ -662,10 +749,15 @@ export function orqHarness(deps: HarnessDeps) {
 		pi.events.on("memorq:state", (data) => {
 			// The bus is untyped: a payload this renderer cannot read is ignored, and the last good one stays.
 			if (!isMemorqState(data)) return;
+			const before = memorqState;
 			// A malformed learn is dropped; the rest of the state still draws.
 			memorqState = isLearned(data.learned) ? data : { ...data, learned: undefined };
 			realStores = { notes: real(data.stores.notes), rules: real(data.stores.rules), skills: real(data.stores.skills) };
 			recordLearn(memorqState.learned);
+			seenRecent = mergeRecent(seenRecent, memorqState, before);
+			refreshMemory();
+			// What memorq injected is a part of the context of its own: measure again when it moves.
+			if (ctxRef && split && injectedTokens(memorqState) !== measuredInjected) measure(ctxRef);
 			render();
 		});
 		/**
@@ -712,11 +804,13 @@ export function orqHarness(deps: HarnessDeps) {
 			const path = readPaths.get(toolCallId);
 			readPaths.delete(toolCallId);
 			if (!path || isError || !memorqState) return;
-			const hit =
-				isNoteRead(path, memorqState.stores, roots, cwd) ||
-				isNoteRead(real(readPath(path, cwd)), realStores ?? memorqState.stores, realRoots, cwd);
-			if (!hit) return;
-			noteReads++;
+			const file = real(readPath(path, cwd));
+			const kind = noteKind(path, memorqState.stores, roots, cwd) ?? noteKind(file, realStores ?? memorqState.stores, realRoots, cwd);
+			if (!kind) return;
+			noteInfos.load(file);
+			trajectory.note(toolCallId, file);
+			noteReads = noteRead(noteReads, file, now(), kind);
+			refreshMemory();
 			render();
 		};
 		let startedAt = Date.now();
@@ -725,16 +819,21 @@ export function orqHarness(deps: HarnessDeps) {
 			try {
 				const agent = isAgentModel(ctx.model?.id);
 				const usage = ctx.getContextUsage();
+				const injected = injectedTokens(memorqState);
 				split = contextSplit({
 					systemPrompt: agent ? "" : ctx.getSystemPrompt(),
 					tools: pi.getAllTools(),
 					active: agent ? [] : pi.getActiveTools(),
-					used: usage?.tokens ?? 0,
+					// pi cannot say what is in use until a response follows a compaction; what the compaction left stands in.
+					used: usage?.tokens ?? compaction?.after ?? 0,
 					window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
 					steps: trajectory.steps,
 					turns: trajectory.turn,
 					agent: agent ? ctx.model!.id.slice(6) : undefined,
+					memory: { tokens: injected, notes: memorqState?.notes },
 				});
+				measuredInjected = injected;
+				refreshEstimates();
 			} catch {
 				// A stale handle: keep the last split.
 			}
@@ -743,6 +842,12 @@ export function orqHarness(deps: HarnessDeps) {
 		// ── minimap state ─────────────────────────────────────────────────────
 		let minimapForced: boolean | undefined; // undefined = auto by width
 		let minimapSelected: number | undefined;
+		/** The item `/sidebar focus` is on below the trajectory (a memory event, the context section); then no step is selected. */
+		let sideSelected: ItemRef | undefined;
+		/** The item of each row of the last frame, for ↑↓ to walk. */
+		let frameItems: (ItemRef | undefined)[] = [];
+		/** An overlay of orqi's own (a step, a note, /context) is open from `/sidebar focus`: it takes every key, esc included. */
+		let peeking = false;
 		let minimapFocused = false;
 		let releaseKeys: (() => void) | undefined;
 		let sideRoot: ReturnType<typeof composeLayout> | undefined;
@@ -886,17 +991,50 @@ export function orqHarness(deps: HarnessDeps) {
 		};
 
 		// ── the sidebar ─────────────────────────────────────────────────────
+		/**
+		 * orq/auto's numbers for the routing section, worked out once per change to the trajectory (or to the
+		 * dry run and the default model it is measured against), not on every frame.
+		 */
+		let routed: { stats: RoutingStats; dry: boolean; baseline: string } | undefined;
+		trajectory.onChange(() => {
+			routed = undefined;
+			// A route, a message, a rebuilt branch: the estimates read the trajectory, so they move with it.
+			refreshEstimates();
+		});
+		const routingNow = () => {
+			const dry = deps.routing?.dryRun ?? false;
+			const baseline = deps.routing?.pool.medium ?? "";
+			if (routed?.dry !== dry || routed.baseline !== baseline)
+				routed = { stats: routingStats(trajectory.steps, priceOf, baseline, dry), dry, baseline };
+			return routed.stats;
+		};
 		/** The sections under the trajectory, in `SECTIONS` order (src/prefs.ts); orqi.json says which are drawn. */
 		const sections: InspectorSection[] = [
 			// Drawn by the frame itself (it fills the height the others leave); listed here so /sidebar offers it.
 			{ id: "trajectory", title: "trajectory", lines: () => [] },
-			{ id: "signals", title: "signals", lines: (w, frame) => signalLines(frame.signals, w) },
-			// Empty until the first measure: an empty section is skipped.
-			{ id: "context", title: "context", lines: (w) => (split ? contextLines(split, w) : []) },
+			{
+				id: "signals",
+				title: "signals",
+				summary: (frame) => signalSummary(frame.signals),
+				lines: (_w, frame) => signalBody(frame.signals),
+			},
+			// Left out until the first measure. The estimates were worked out when state changed; the clock is
+			// read only for a compaction's age.
+			{
+				id: "context",
+				title: "context",
+				summary: (frame) => (split ? contextSummary(split, frame.depth) : undefined),
+				// One item for `/sidebar focus`: enter opens the /context table, whatever row it is on.
+				lines: (w, frame) => (split && estimates ? asItem(contextBody(split, estimates, frame.depth, w, now()), "context") : undefined),
+			},
 			{
 				id: "memory",
 				title: "memory",
-				lines: (w) => (waitingForMemorq() ? sectionLines("memory", ["loading…"], w) : memoryLines(memorqState, noteReads, w)),
+				summary: (frame) => (waitingForMemorq() ? undefined : memorySummary(memory, frame.depth)),
+				lines: (w, frame) =>
+					waitingForMemorq()
+						? ["loading…"]
+						: memoryBody(memory, w, frame.depth, { now: now(), hint: !prefs.depthKeyUsed, rows: frame.rows }),
 				unavailable: memoryUnavailable,
 				note: () => (waitingForMemorq() ? "loading…" : undefined),
 				hidden: memorqAbsent,
@@ -904,8 +1042,8 @@ export function orqHarness(deps: HarnessDeps) {
 			{
 				id: "routing",
 				title: "routing",
-				lines: (w) =>
-					routingLines(routingStats(trajectory.steps, priceOf, deps.routing?.pool.medium ?? "", deps.routing?.dryRun ?? false), w),
+				summary: () => routingSummary(routingNow()),
+				lines: () => routingBody(routingNow()),
 				// Drawn only while orq/auto picks the model, or once it has routed this session. Otherwise
 				// greyed in /sidebar with the way in, rather than left out where nobody would find it.
 				unavailable: () =>
@@ -915,7 +1053,7 @@ export function orqHarness(deps: HarnessDeps) {
 						: ROUTING_OFF,
 				hidden: () => !deps.routing,
 			},
-			{ id: "process", title: "process", lines: (w) => processLines(rss, rssPeak, w) },
+			{ id: "process", title: "process", summary: () => processSummary(rss), lines: (_w, frame) => processBody(rss, rssPeak, frame.depth) },
 		];
 		/**
 		 * The sidebar: a box as tall as its
@@ -925,9 +1063,20 @@ export function orqHarness(deps: HarnessDeps) {
 		const minimapView = (theme: { fg(token: string, text: string): string }): Component => {
 			// Rendering must never throw: an exception here takes the whole TUI down.
 			// A frame that fails keeps the last good one, as the footer does.
-			let lastFrame: string[] = [];
+			let lastFrame: FrameRow[] = [];
+			const failedFrame = (error: unknown, width: number) => {
+				const text = cutPlain(`sidebar error · ${printable(error instanceof Error ? error.message : String(error))}`, width);
+				try {
+					return theme.fg("error", text);
+				} catch {
+					// The theme is what failed: plain text still says it.
+					return text;
+				}
+			};
 			return {
 				invalidate() {},
+				/** The item each row of the last frame shows, row for row: what `/sidebar focus` will move between. */
+				items: () => lastFrame.map((row) => row.item),
 				// The wheel scrolls the trajectory (fullscreen routes mouse events to the component under
 				// the pointer). Back at the newest step it follows new steps again.
 				handleMouse(event) {
@@ -941,42 +1090,64 @@ export function orqHarness(deps: HarnessDeps) {
 				render(width: number): string[] {
 					try {
 						lastFrame = inspectorFrame(width);
-					} catch {
-						// Keep the last good frame.
+						frameItems = lastFrame.map((row) => row.item);
+					} catch (error) {
+						// Keep the last good frame. With none, say so in one line: a sidebar that fails on its first render
+						// would otherwise stay blank for the whole session with no trace of why.
+						if (lastFrame.length === 0) return [failedFrame(error, width)];
 					}
-					return lastFrame;
+					return lastFrame.map((row) => row.text);
 				},
-			};
-			function inspectorFrame(width: number): string[] {
+			} as Component;
+			function inspectorFrame(width: number): FrameRow[] {
 				const inner = Math.max(10, width - 2);
-				const rowPaint = {
-					bright: (text: string) => theme.fg("accent", text),
-					text: (text: string) => theme.fg("text", text),
-					dim: (text: string) => theme.fg("dim", text),
-					error: (text: string) => theme.fg("error", text),
-				};
+				// pi's theme.fg reads its own fields: passed on bare it throws, and a render swallows that into a blank sidebar.
+				const fg = (role: string, text: string) => theme.fg(role, text);
 				const found = signals(trajectory.steps, trajectory.turn);
 				// Under the trajectory: what needs attention, where the context goes, what memory knows,
 				// what orqi's process holds, then the lesson. Only the chosen ones, so the trajectory gets the rest.
 				const showTrajectory = prefs.sections.trajectory;
-				const drawn = sectionsToDraw(sections, prefs).flatMap((section) => {
-					if (section.id === "trajectory") return [];
-					const lines = section.lines(inner, { signals: found });
-					return lines.length ? [{ id: section.id, lines }] : [];
-				});
-				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				// The slot is the screen less what composeLayout keeps above and below it, or the overlay's
 				// margins (1 + 3) in regular mode. A frame taller than its slot loses its bottom: the last section, the hint.
 				const slot = (process.stdout.rows ?? 30) - (sideRoot ? sideRoot.reserved() : 4);
-				const height = showTrajectory ? Math.max(3, slot - FRAME_CHROME - below) : 0;
-				const rows = minimapRows(trajectory.steps, inner, height, minimapSelected, frame, rowPaint);
+				const build = (section: InspectorSection, rows: number) => {
+					const view: SectionFrame = { signals: found, depth: prefs.sidebarDepth?.[section.id] ?? "compact", rows };
+					const body = section.lines(inner - BODY_INDENT, view);
+					// Routing's content is not redesigned, so it keeps all its lines: the compact cap is for the others.
+					const cap = section.id === "routing" ? "expanded" : view.depth;
+					return body ? { id: section.id, lines: sectionBlock(section.title, section.summary?.(view), body, inner, cap) } : undefined;
+				};
+				const active = sectionsToDraw(sections, prefs).filter((section) => section.id !== "trajectory");
+				// Memory's expanded list takes the room the others leave, the trajectory keeping its minimum: it stops
+				// at what fits. The others come first because their size does not depend on it.
+				const others = active.map((section) => (section.id === "memory" ? undefined : build(section, Number.POSITIVE_INFINITY)));
+				const taken = others.reduce((n, block) => n + (block ? 1 + block.lines.length : 0), 0);
+				const spare = slot - FRAME_CHROME - (showTrajectory ? MIN_TRAJECTORY : 0) - taken - 2; // the blank row and the header
+				const drawn = active.flatMap((section, i) => {
+					const block = others[i] ?? build(section, Math.max(MIN_MEMORY_ROWS, spare));
+					return block ? [block] : [];
+				});
+				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
+				const height = showTrajectory ? Math.max(MIN_TRAJECTORY, slot - FRAME_CHROME - below) : 0;
+				// An item that has left the frame (an event pushed out, a section folded) is not drawn as the focus; the
+				// keys drop it when they next run (`onSideKey`), so a render changes no state.
+				const isDrawn = (item: ItemRef) =>
+					drawn.some(
+						(block) => block.id === item.section && block.lines.some((line) => typeof line !== "string" && line.item === item.key),
+					);
+				const selected = sideSelected && isDrawn(sideSelected) ? sideSelected : undefined;
+				const rows = minimapRows(
+					trajectory.steps,
+					inner,
+					height,
+					minimapSelected,
+					frame,
+					fg,
+					selected === undefined,
+					(path) => noteInfos.get(path).title,
+				);
 				const side = (line: string) => theme.fg("border", "│") + line + theme.fg("border", "│");
 				const blank = side(" ".repeat(inner));
-				const paintSection = ({ id, lines }: { id: SectionId; lines: string[] }) => [
-					blank,
-					side(theme.fg("dim", lines[0]!)),
-					...lines.slice(1).map((line) => side(theme.fg(sectionLineRole(id, line), line))),
-				];
 				const title = " sidebar ";
 				const fit = (text: string) => ` ${text}`.slice(0, inner).padEnd(inner);
 				const hint = minimapFocused
@@ -986,20 +1157,24 @@ export function orqHarness(deps: HarnessDeps) {
 						: showTrajectory
 							? "alt+s · /sidebar focus" // focus walks the trajectory
 							: "alt+s · /sidebar";
+				// Without the trajectory above it, the first section needs no blank line to set it apart.
+				const underneath = drawSections(drawn, inner, fg, undefined, selected).slice(showTrajectory ? 0 : 1);
 				// FRAME_CHROME counts the lines here that are neither trajectory rows nor sections.
-				return [
+				const chrome = [
 					theme.fg("border", "┌") + theme.fg("accent", title) + theme.fg("border", `${"─".repeat(Math.max(0, inner - title.length))}┐`),
 					...(showTrajectory
 						? [
-								side(theme.fg("dim", trajectoryTitle(trajectory.steps.length, trajectory.turn, inner))),
+								side(paintLine(trajectoryHeader(trajectory.steps.length, trajectory.turn, inner), fg, () => "dim")),
 								...rows.map(side),
 								...Array.from({ length: Math.max(0, height - rows.length) }, () => blank),
 							]
 						: []),
-					// Without the trajectory above it, the first section needs no blank line to set it apart.
-					...drawn.flatMap(paintSection).slice(showTrajectory ? 0 : 1),
-					side(theme.fg("dim", fit(hint))),
-					theme.fg("border", `└${"─".repeat(inner)}┘`),
+				].map((text): FrameRow => ({ text }));
+				return [
+					...chrome,
+					...underneath.map((row) => ({ ...row, text: side(row.text) })),
+					{ text: side(theme.fg("dim", fit(hint))) },
+					{ text: theme.fg("border", `└${"─".repeat(inner)}┘`) },
 				];
 			}
 		};
@@ -1098,8 +1273,100 @@ export function orqHarness(deps: HarnessDeps) {
 		/** Hand the keyboard back to the editor (and to any dialog over it). */
 		const blurMinimap = () => {
 			minimapFocused = false;
+			sideSelected = undefined;
 			releaseKeys?.();
 			releaseKeys = undefined;
+		};
+
+		/** Run an overlay of our own from `/sidebar focus`: while it is open the sidebar passes every key through to it. */
+		const whilePeeking = async (open: () => Promise<void> | void) => {
+			peeking = true;
+			try {
+				await open();
+			} finally {
+				peeking = false;
+			}
+		};
+
+		/**
+		 * The editor on a file, with pi's terminal handed over for as long as it runs. Async, as pi's own external editor
+		 * is (`spawn`, not `spawnSync`: a synchronous child can fight the editor for the console on Windows); no shell.
+		 */
+		const runEditor = async (command: string, args: string[]) => {
+			tuiRef?.stop();
+			try {
+				await new Promise<void>((resolve, reject) => {
+					const child = spawn(command, args, { stdio: "inherit" });
+					child.on("error", reject);
+					child.on("close", () => resolve());
+				});
+			} finally {
+				tuiRef?.start();
+				tuiRef?.requestRender(true);
+			}
+		};
+
+		/**
+		 * The whole note behind a memory event, in an overlay over the transcript. The file is read here, when it
+		 * opens and when ↑↓ moves to another event, never in a render. `o` opens the file in `$EDITOR`.
+		 */
+		const peekMemory = async (ctx: ExtensionContext, key: string) => {
+			const events = memory?.events ?? [];
+			const stores = memory?.state.stores;
+			let at = events.findIndex((event) => event.key === key);
+			if (at < 0 || !stores) return;
+			const { theme } = ctx.ui;
+			const paint = { bold: (text: string) => theme.bold(text), dim: (text: string) => theme.fg("dim", text) };
+			let live: Panel | undefined;
+			let shown = peekOf(events[at]!, stores, paint, now(), noteRoots());
+			const spec = (note?: string): PanelSpec => ({
+				title: "note",
+				badge: `${at + 1}/${events.length}`,
+				rows: shown.rows,
+				hint: note ?? `esc close · ${shown.path ? "o open in $EDITOR · " : ""}↑↓ other events`,
+				keys: {
+					o: async () => {
+						if (!shown.path) return;
+						// pi's choice: its externalEditor setting, then $VISUAL, then $EDITOR.
+						const configured = (deps.settingsManager?.getSettings() as { externalEditor?: string } | undefined)?.externalEditor;
+						const command = editorCommand(process.env, shown.path, configured);
+						if (!command) {
+							const message = "$EDITOR is not set (nor $VISUAL, nor pi's externalEditor): set one to open notes from here";
+							ctx.ui.notify(message, "warning");
+							// The hint keeps its keys: the long message is the notice's, the hint says the short form.
+							live?.update(spec("no $EDITOR set · esc close · ↑↓ other events"));
+							return;
+						}
+						try {
+							await (deps.openEditor ?? runEditor)(command.command, command.args);
+						} catch (error) {
+							ctx.ui.notify(`Could not start ${command.command}: ${error instanceof Error ? error.message : error}`, "warning");
+						}
+					},
+					up: () => move(-1),
+					down: () => move(1),
+				},
+			});
+			// ↑↓ go to the event above or below in the sidebar, and the sidebar's selection follows.
+			const move = (step: -1 | 1) => {
+				const next = events[at + step];
+				if (!next) return;
+				at += step;
+				shown = peekOf(next, stores, paint, now(), noteRoots());
+				sideSelected = { section: "memory", key: next.key };
+				live?.update(spec(), { top: true });
+				render();
+			};
+			await panel(ctx, spec(), 84, (opened) => {
+				live = opened;
+			});
+		};
+
+		/** Enter on an item below the trajectory: a memory event shows its note, the context section the /context table. */
+		const openItem = (ctx: ExtensionContext, item: ItemRef) => {
+			if (item.section === "context") return whilePeeking(() => views.showContext(ctx));
+			if (item.section === "memory") return whilePeeking(() => peekMemory(ctx, item.key));
+			return undefined;
 		};
 
 		/** Keyboard focus without stealing the editor: raw input is intercepted only while focused. */
@@ -1108,18 +1375,29 @@ export function orqHarness(deps: HarnessDeps) {
 			minimapFocused = true;
 			releaseKeys?.();
 			releaseKeys = ctx.ui.onTerminalInput((data) => {
+				// An overlay opened from here is on top: it takes the keys (esc closes it), not the sidebar.
+				if (peeking) return undefined;
 				const steps = trajectory.steps;
 				const current = minimapSelected ?? steps.length - 1;
+				// The item the focus was on may have left the frame since: then it is the newest step that moves.
+				if (sideSelected && !stopsOf(frameItems).some((stop) => sameItem(stop, sideSelected))) sideSelected = undefined;
+				const walk = (dir: -1 | 1) => {
+					const next: Focus = moveFocus({ step: minimapSelected, item: sideSelected }, dir, steps.length, stopsOf(frameItems));
+					minimapSelected = next.step;
+					sideSelected = next.item;
+				};
 				if (matchesKey(data, "escape")) {
 					minimapSelected = undefined;
 					blurMinimap();
 				} else if (matchesKey(data, "up")) {
-					minimapSelected = Math.max(0, current - 1);
+					walk(-1);
 				} else if (matchesKey(data, "down")) {
-					minimapSelected = current + 1 >= steps.length ? undefined : current + 1;
+					walk(1);
+				} else if (matchesKey(data, "enter") && sideSelected) {
+					void openItem(ctx, sideSelected);
 				} else if (matchesKey(data, "enter") && steps[current]) {
 					const { title, body } = peekLines(steps[current]!);
-					void panel(ctx, { title, rows: body, hint: "esc close" });
+					void whilePeeking(() => panel(ctx, { title, rows: body, hint: "esc close" }));
 				} else {
 					return undefined;
 				}
@@ -1177,6 +1455,7 @@ export function orqHarness(deps: HarnessDeps) {
 			realRoots = roots.map(real);
 			pi.events.emit("memorq:state?", undefined);
 			pi.events.emit("memorq:host", host);
+			compaction = undefined; // a resumed branch renumbers its turns
 			trajectory.fromMessages(branchMessages(ctx));
 			// Learns already on this branch are not recorded again; one memorq published before now is.
 			for (const entry of ctx.sessionManager.getBranch())
@@ -1238,8 +1517,30 @@ export function orqHarness(deps: HarnessDeps) {
 			stopDecisions?.();
 			stopDeciderCalls?.();
 		});
-		pi.on("session_tree", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
-		pi.on("session_compact", (_event, ctx) => trajectory.fromMessages(branchMessages(ctx)));
+		// The mark is keyed on turn numbers, which a rebuilt branch renumbers: it goes before the rebuild reads it.
+		pi.on("session_tree", (_event, ctx) => {
+			compaction = undefined;
+			trajectory.fromMessages(branchMessages(ctx));
+		});
+		/**
+		 * What the context holds right after a compaction: what is fixed (prompt, tools, skills; the last split's
+		 * parts bar the messages) plus pi's own estimate of the messages it kept and the summary. pi has no usage
+		 * to read until the next response. Undefined when the branch cannot be read.
+		 */
+		const sizeAfterCompaction = (ctx: ExtensionContext) => {
+			try {
+				const kept = ctx.sessionManager.buildSessionProjection().messages.reduce((n, message) => n + estimateTokens(message), 0);
+				return kept + (split ? contextUsed(split) - split.messages : 0);
+			} catch {
+				return undefined;
+			}
+		};
+		pi.on("session_compact", (event, ctx) => {
+			trajectory.fromMessages(branchMessages(ctx));
+			compaction = { before: event.compactionEntry.tokensBefore, after: sizeAfterCompaction(ctx), at: now(), turn: trajectory.turn };
+			measure(ctx);
+			render();
+		});
 		pi.on("message_end", (event) => trajectory.message(event.message as any));
 		pi.on("turn_start", (_event, ctx) => ctx.ui.setWorkingMessage(isAgentModel(ctx.model?.id) ? `${ctx.model!.id.slice(6)}` : "thinking"));
 		pi.on("tool_execution_start", (event, ctx) => {
@@ -1801,6 +2102,15 @@ export function orqHarness(deps: HarnessDeps) {
 		});
 
 		pi.registerShortcut("alt+s", { description: "toggle the orqi sidebar", handler: () => toggleMinimap() });
+		// pi binds neither (a test checks every orqi shortcut against pi's key table).
+		pi.registerShortcut("alt+c", {
+			description: "the sidebar's context section: more or less",
+			handler: (ctx) => toggleDepth(ctx, "context"),
+		});
+		pi.registerShortcut("alt+m", {
+			description: "the sidebar's memory section: more or less",
+			handler: (ctx) => toggleDepth(ctx, "memory"),
+		});
 
 		// ── plan mode ─────────────────────────────────────────────────────────
 		pi.registerTool(
@@ -1908,7 +2218,7 @@ export function orqHarness(deps: HarnessDeps) {
 
 		pi.registerCommand("sidebar", {
 			description:
-				"the sidebar's sections: /sidebar picks which show, /sidebar on|off shows or hides it (alt+s), /sidebar focus moves through the trajectory with ↑↓ and enter",
+				"the sidebar's sections: /sidebar picks which show, /sidebar on|off shows or hides it (alt+s), /sidebar focus moves through the trajectory, the context section and the memory events with ↑↓, and enter peeks",
 			handler: async (args, ctx) => {
 				const arg = args.trim();
 				if (arg === "focus") {
@@ -1932,7 +2242,17 @@ export function orqHarness(deps: HarnessDeps) {
 
 		// Not `/export trajectory`: `/export` is pi's (HTML export), and pi drops
 		// any extension command that collides with a built-in.
-		registerViewCommands(pi, { deps, trajectory, traces, panel, studio, measure, agentKey, split: () => split, returnTo: () => returnTo });
+		const views = registerViewCommands(pi, {
+			deps,
+			trajectory,
+			traces,
+			panel,
+			studio,
+			measure,
+			agentKey,
+			split: () => split,
+			returnTo: () => returnTo,
+		});
 
 		// ctrl+g in the model selector opens the garden; /garden is the direct jump.
 		// The opener goes through the session ctx: it is the only notify orqi has at

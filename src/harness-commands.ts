@@ -60,7 +60,13 @@ export interface ViewCommandDeps {
 	returnTo: () => { provider: string; id: string } | undefined;
 }
 
-export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void {
+/** What `/sidebar focus` calls into: the same code the commands run. */
+export interface ViewHandles {
+	/** `/context`: the table of where the tokens go, or a notice that nothing is measured yet. */
+	showContext(ctx: ExtensionContext): Promise<void>;
+}
+
+export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): ViewHandles {
 	const { deps, trajectory, traces, panel, studio, measure, agentKey } = h;
 	pi.registerCommand("trajectory", {
 		description: "/trajectory [path]: write this session as a Harbor ATIF trajectory.json",
@@ -555,28 +561,30 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 		handler: async (_args, ctx) => showTools(ctx),
 	});
 
+	const showContext = async (ctx: ExtensionContext) => {
+		measure(ctx);
+		const split = h.split();
+		if (!split) {
+			ctx.ui.notify("Context is not measured yet: send a message first.", "warning");
+			return;
+		}
+		const used = contextUsed(split);
+		await panel(
+			ctx,
+			{
+				title: "context",
+				badge: `${tokens(used)} of ${tokens(split.window)}${split.window ? ` · ${Math.round((used / split.window) * 100)}%` : ""}`,
+				rows: contextRows(split),
+				hint: "t open /tools · esc close",
+				keys: { t: () => void showTools(ctx) },
+			},
+			84,
+		);
+	};
+
 	pi.registerCommand("context", {
 		description: "where the context goes: prompt, tool schemas, skills, messages, and what would change each",
-		handler: async (_args, ctx) => {
-			measure(ctx);
-			const split = h.split();
-			if (!split) {
-				ctx.ui.notify("Context is not measured yet: send a message first.", "warning");
-				return;
-			}
-			const used = contextUsed(split);
-			await panel(
-				ctx,
-				{
-					title: "context",
-					badge: `${tokens(used)} of ${tokens(split.window)}${split.window ? ` · ${Math.round((used / split.window) * 100)}%` : ""}`,
-					rows: contextRows(split),
-					hint: "t open /tools · esc close",
-					keys: { t: () => void showTools(ctx) },
-				},
-				84,
-			);
-		},
+		handler: async (_args, ctx) => showContext(ctx),
 	});
 
 	const showTools = async (ctx: ExtensionContext) => {
@@ -994,4 +1002,6 @@ export function registerViewCommands(pi: ExtensionAPI, h: ViewCommandDeps): void
 			}));
 		},
 	});
+
+	return { showContext };
 }

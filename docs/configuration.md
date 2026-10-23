@@ -6,7 +6,7 @@ orqi works with nothing set. Everything here is optional.
 
 | Path | Holds |
 |---|---|
-| `~/.orqi/agent` | Credentials, settings, saved plans, and `orqi.json` (which sidebar sections show, the saved decider and routing models, `/compact-at`). Move it with `ORQI_AGENT_DIR` |
+| `~/.orqi/agent` | Credentials, settings, saved plans, and `orqi.json` (which sidebar sections show and which are expanded, the saved decider and routing models, `/compact-at`). Move it with `ORQI_AGENT_DIR` |
 | `.orqi/` in a project | That project's own settings (`.orqi/settings.json`, `.orqi/extensions`, `.orqi/agents`). Loaded only once you trust the project with `/trust` |
 
 orqi never touches `~/.pi`, and it ignores a project's `.pi/`.

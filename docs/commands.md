@@ -18,7 +18,7 @@ What orqi adds on top of the agent.
 | `/btw <question>` | A side answer on the cheapest model, not added to the conversation |
 | `/trajectory [path]` | Writes this session as a Harbor ATIF `trajectory.json` |
 | `/open` | Opens this session's thread in Studio. `/open trace` for the last answer, `/open agent` in agent mode |
-| `/sidebar` | Picks which sidebar sections show. `/sidebar on\|off` shows or hides it (also `alt+s`), `/sidebar focus` moves through the trajectory with ↑↓ and enter |
+| `/sidebar` | Picks which sidebar sections show. `/sidebar on\|off` shows or hides it (also `alt+s`), `/sidebar focus` moves with ↑↓ through the trajectory, then the context section and the memory events, and enter peeks: a step opens its detail, a memory event the whole note (`o` opens its file in `$EDITOR`, ↑↓ moves to the other events), the context section the `/context` table |
 | `/refresh` | Reloads the workspace's models and agents without restarting |
 
 ## orq.ai platform
@@ -67,6 +67,7 @@ The orq plugin adds its own commands too: `/quickstart`, `/traces`, `/analytics`
 | `!` | Runs a shell command |
 | `ctrl+o` | Expands a tool result to pretty-printed JSON |
 | `alt+s` | Shows or hides the sidebar |
+| `alt+c`, `alt+m` | Opens the sidebar's context or memory section to its expanded view, and back. Context expanded: a row per part with the lever that shrinks it, growth, cache and the compaction point. Memory expanded: the events newest first, each with its whole title and a detail line |
 | `alt+p` | Toggles plan mode |
 | mouse wheel | Scrolls the sidebar's trajectory |
 
@@ -76,14 +77,16 @@ It sits beside the transcript from 140 columns wide. `alt+s` forces it on or off
 
 | Section | Shows |
 |---|---|
-| trajectory | Every step: messages, tool calls, routing, memory. Its title counts steps and turns |
-| signals | Warnings such as a tool called three times with the same arguments, errors, calls that cannot be undone |
+| trajectory | Every step, one row each, read by its mark: `›` you, `▌` the model, `◇ ↳ +` a memory call, `⚙` any other tool. Its title counts steps and turns |
+| signals | Warnings such as a tool called three times with the same arguments, errors, calls that cannot be undone. Just `signals · ok` while there are none |
 | context | Where the context window goes, and the cache hit rate |
-| routing | Under `orq/auto`: picks per model, switches, the decider's cost, an estimated saving |
-| memory | With memorq installed: notes for this repository, notes in use, the last thing learned |
-| process | orqi's own memory use. Off until you turn it on |
+| routing | Under `orq/auto`: picks per model, switches, the decider's cost, an estimated saving. Its title names the slot answering now |
+| memory | With memorq installed: a bar of the notes read against the notes kept, recall and save counts, and the newest event. `alt+m` lists the events |
+| process | orqi's own memory use in its title; set `"process": "expanded"` under `sidebarDepth` in `orqi.json` for the last minute and the peak (no key does it). Off until you turn it on |
 
-`/sidebar` switches sections on and off, and the choice is saved.
+`/sidebar` switches sections on and off, and the choice is saved. Each title answers its section's
+question (`signals · ok`, `process · 174 MB`), and a section with nothing to say shows its title alone.
+`alt+c` and `alt+m` expand context and memory; which sections are expanded is saved too.
 
 ## Routing
 
@@ -152,11 +155,14 @@ thread link.
 
 ## Memory, with memorq
 
-When the memorq pi package is installed, the sidebar gains a memory section: how many notes memorq
-keeps for the repository, how many the prompt uses and how many the model opened, what was learned
-and after which trigger, and when the next review runs. Once the agent has recalled or saved a
-note this session, the first line counts notes, opened, recalled and saved, and the next two show the
-latest of those calls with their age. Each learn is also a step in the trajectory,
-priced in `/cost`. memorq's `/memory` screen picks the model it writes with from the workspace's chat
+When the memorq pi package is installed, the sidebar gains a memory section whose header says how many
+notes memorq keeps for the repository. Compact, it shows how many of them the model read (a bar and
+`3 of 22`), the recalls, misses and saves of the session, and the newest event with its age: a note
+read (`◇`), a recall (`↳`, with how many notes it found) or a save (`+`, or `=` when it was already
+saved). A review running, learning paused or a failed review takes the event's line. `alt+m` lists the
+events newest first, as many as fit: each with its whole title, and under it the note's trigger, a
+recall's top hit, or `memory has no note on this yet`. The `alt+m more` hint goes once you have used
+a depth key (it is remembered in `orqi.json`). Each learn is also a step in the trajectory,
+priced in `/cost`. In the trajectory a note the model read is a `◇ memory <title>` row, a recall `↳ recall "query" 3` and a save `+ save <title>`. memorq's `/memory` screen picks the model it writes with from the workspace's chat
 models, and `/doctor` says whether memorq is loaded and whether `python3`, which it runs on, is
 there. Without memorq, orqi shows none of this.

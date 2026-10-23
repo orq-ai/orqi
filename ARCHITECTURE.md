@@ -44,14 +44,17 @@ orqi
 | `src/frontmatter.ts` | `normalizeCommand`: quotes plugin command frontmatter that strict YAML would reject |
 | `src/update.ts` | `orqi update`: the release check, the launch notice text, the binary swap, or npm for an npm install |
 | `src/branding.ts` | Colours, mark, version, header line text |
-| `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the sidebar, working indicator, agent mode, exit summary, `alt+s`, and the commands that own state: `/route /sidebar /compact-at` |
+| `src/harness.ts` | The teaching harness extension: its state and pi events, footer, fixed header, the sidebar, working indicator, agent mode, exit summary, `alt+s` `alt+c` `alt+m`, and the commands that own state: `/route /sidebar /compact-at` |
 | `src/harness-commands.ts` | The harness's read-only commands, handed the state they read: `/trajectory /open /trace /traces /analytics /overview /learn /btw /tools /context /skills /cost /whatsnew /agent /agents` |
 | `src/harness-views.ts` | Pure views both share: the `/context` split and table, the `/cost` lines, model naming, opening a URL |
 | `src/gate.ts` | The one-way gate: a door per orq tool from its verb, the dialog before a call that cannot be undone, and plan mode's read-only allowlist |
 | `src/plan.ts` | Plan mode: what the model is told, the `exit_plan` tool and its approval dialog, where plans are saved |
 | `src/handoff.ts` | `/handoff <goal>`: pi's handoff example, adapted. Drafts a fresh session's first message from this branch on a plain chat model, points at the plan, keeps plan mode |
-| `src/prefs.ts` | `<agentDir>/orqi.json`: which sidebar sections show, the saved decider, `orq/auto`'s saved models and `/compact-at`'s percent, read forgivingly and written whole |
-| `src/memory-section.ts` | The memory section: memorq's `memorq:state` as lines, its types, which `read` calls opened a note, and `printable()` for any text memorq sends |
+| `src/prefs.ts` | `<agentDir>/orqi.json`: which sidebar sections show and which are expanded, the saved decider, `orq/auto`'s saved models and `/compact-at`'s percent, read forgivingly and written whole |
+| `src/context-section.ts` | The context section: its compact and expanded lines, the header summary and `contextEstimates` (growth, turns left, the cache's last move, a compaction), all worked out when state changes |
+| `src/memory-section.ts` | The memory section: memorq's `memorq:state` and the notes the model read as one list of events, compact and expanded, its types, which `read` calls opened a note |
+| `src/note-info.ts` | The title and trigger of a note file, read once per path (and again when its modified time moves), off the render path |
+| `src/note-peek.ts` / `src/sidebar-focus.ts` | `/sidebar focus`: the walk through the trajectory and then the items below it (`moveFocus`), and the whole note behind a memory event as an overlay's rows, read when it opens (`peekOf`), with the `$EDITOR` command for `o` |
 | `src/memorq-detect.ts` | Whether memorq is installed (pi's trust-aware package settings), the install command, `/doctor`'s memorq rows |
 | `src/model-picker.ts` | pi's `/model` selector over one kind of workspace model: chat models for memorq and `/route models`, classifiers for `/decider` |
 | `src/decider.ts` | The decider: the one decision model every Decisions call asks (`/decider`, `orqi.json`, `ORQI_ROUTE_CLASSIFIER`), the API adapter and the `orq-decisions` provider |
@@ -111,7 +114,7 @@ arguments in one turn, errors, irreversible calls), the context split (system pr
 skills index, messages, as characters over four, measured after each run and never in a render),
 routing (while `orq/auto` routes: picks per slot, model switches and the cache they lost, the
 decider's calls, and an estimated saving against the default model, `src/routing-section.ts`),
-memory (what memorq last published, below; once the agent recalls or saves a note, its totals and the two latest calls take the place of the "used this turn" line) and process (orqi's resident memory, sampled every 5 s
+memory (what memorq last published, below, and the notes the model read, as events: a bar of notes read, the recall and save counts and the newest event, or every event with its title in full once expanded) and process (orqi's resident memory, sampled every 5 s
 off the render path: now, the last minute, the peak). Each section is an `InspectorSection` in `src/harness.ts`; bare `/sidebar` lists them with a
 checkbox each, and the choice lives in `<agentDir>/orqi.json` (`src/prefs.ts`). Process starts off;
 the rest start on. A section that cannot show (an installed memorq that is silent or too old, routing while another
@@ -121,7 +124,7 @@ section is not listed.
 Memory comes from memorq, a separate pi package (orq-ai/memorq) that orqi neither
 carries nor installs. The two extensions share only pi's
 in-process event bus: memorq publishes `memorq:state` (notes, notes used this turn, the last learn,
-the next review, the folders it writes to) and asks `memorq:host?`; orqi answers with `memorq:host`
+the next review, the folders it writes to, `activity`: its recalls and saves, each with a `trigger`, a `path` and the top hit when it sends them, which the sidebar lists as memory events; and `context`: the tokens it injected, which the context section shows as its memory part) and asks `memorq:host?`; orqi answers with `memorq:host`
 (the panel row, the model picker and `decide`, which asks the user's decider) and asks `memorq:state?` at session start. The bus has no replay
 and memorq loads before orqi's own extension, so neither side relies on an event sent before it was
 listening. Each learn becomes an `orqi-memory` session entry and a trajectory step, priced in `/cost`

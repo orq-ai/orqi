@@ -121,3 +121,46 @@ test("orq/auto's saved slots round-trip; junk and unknown rungs are no pick", ()
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("sidebarDepth keeps the sections opened to expanded; compact, junk and unknown ids are the default", () => {
+	const dir = scratch();
+	try {
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, sidebarDepth: { context: "expanded" } });
+		expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS, sidebarDepth: { context: "expanded" } });
+		// The other keys survive a depth, and a depth survives them.
+		writePrefs(dir, { ...readPrefs(dir), compactAt: 70 });
+		expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS, compactAt: 70, sidebarDepth: { context: "expanded" } });
+		writeFileSync(
+			join(dir, "orqi.json"),
+			JSON.stringify({ sidebarDepth: { context: "huge", memory: "expanded", process: "compact", bogus: "expanded", signals: true } }),
+		);
+		expect(readPrefs(dir).sidebarDepth).toEqual({ memory: "expanded" });
+		for (const sidebarDepth of ["expanded", ["context"], null, 3, { context: "compact" }]) {
+			writeFileSync(join(dir, "orqi.json"), JSON.stringify({ sidebarDepth }));
+			expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS });
+		}
+		// Nothing expanded writes no key.
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, sidebarDepth: { context: "compact" } });
+		expect(JSON.parse(readFileSync(join(dir, "orqi.json"), "utf8"))).toEqual({ sections: DEFAULT_SECTIONS });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("depthKeyUsed remembers that a depth key was pressed, so the hint that names it can go; anything but true is not used", () => {
+	const dir = scratch();
+	try {
+		expect(readPrefs(dir).depthKeyUsed).toBeUndefined();
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, depthKeyUsed: true, compactAt: 70 });
+		expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS, compactAt: 70, depthKeyUsed: true });
+		for (const depthKeyUsed of [false, "true", 1, null, [true], {}]) {
+			writeFileSync(join(dir, "orqi.json"), JSON.stringify({ depthKeyUsed }));
+			expect(readPrefs(dir)).toEqual({ sections: DEFAULT_SECTIONS });
+		}
+		// Not used: no key in the file.
+		writePrefs(dir, { sections: { ...DEFAULT_SECTIONS }, depthKeyUsed: undefined });
+		expect(JSON.parse(readFileSync(join(dir, "orqi.json"), "utf8"))).toEqual({ sections: DEFAULT_SECTIONS });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

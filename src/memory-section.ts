@@ -1,7 +1,10 @@
 /**
  * The sidebar's memory section: what memorq last published on pi's event bus
- * (`memorq:state`), drawn as at most four lines, and which `read` calls opened
- * one of its notes. Pure: nothing here calls Python or reads a file.
+ * (`memorq:state`) and which `read` calls opened one of its notes, as one list of events (a note read, a
+ * recall, a save) newest first. Compact says whether memory is being used (the reads against the notes, the
+ * recalls and saves, the newest event); expanded lists the events with their titles whole. The view is
+ * worked out when state changes (`memoryView`), so a render only lays it out. Pure: nothing here calls Python
+ * or reads a file (`note-info.ts` reads the notes' titles, when a read is counted).
  *
  * The types are memorq's (orq-ai/memorq `integrations/pi/state.ts`), which
  * is the producer and owns the field names; they are copied, not imported,
@@ -9,21 +12,33 @@
  */
 
 import type { ClassifierContext, ClassifierResult } from "@earendil-works/pi-ai";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { sectionLines } from "./inspector-rows.ts";
+import { cutPlain, type Line, printable, type Role, type Row, type Seg } from "./inspector-rows.ts";
+import type { NoteInfo } from "./note-info.ts";
+import type { Depth } from "./prefs.ts";
+
+/** Text that came from memorq, safe to draw: inspector-rows.ts owns it now that every segment goes through it. */
+export { printable };
 
 /** A learn record's event, as memorq exports it. Another value (a newer memorq's) still draws, as `on <event>`. */
 export type Trigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
 
-/** One recall or save this session, as memorq reports it. `hits`: notes a recall returned; `saved`: false when the note already existed. */
+/**
+ * One recall or save this session, as memorq reports it. `hits`: notes a recall returned; `saved`: false when
+ * the note already existed. `trigger` and `path` are a save's (when the note applies, and its file), `top` a
+ * recall's (the title of its first hit); an older memorq sends none of them.
+ */
 export interface MemorqRecent {
 	kind: "recall" | "remember";
 	text: string;
 	at: number;
 	hits?: number;
 	saved?: boolean;
+	trigger?: string;
+	path?: string;
+	top?: string;
 }
 
 /** This session's `recall` and `remember` calls: totals, and the newest few (newest first, at most five). */
@@ -40,6 +55,8 @@ export interface MemorqState {
 	notes: number;
 	/** Index lines and ranked notes in this turn's prompt. */
 	usedThisTurn: number;
+	/** The tokens memorq injected into the prompt, when it says: the context section's memory part. A value orqi cannot read is ignored. */
+	context?: number;
 	/** `pct`: the context threshold a checkpoint learn fired at. */
 	learned?: { count: number; trigger: Trigger; at: number; costUsd?: number; pct?: number };
 	/**
@@ -67,7 +84,7 @@ export interface MemorqHost {
 	contextPercent?(): number | undefined;
 }
 
-const KINDS = new Set(["notes", "rules", "skills"]);
+const KINDS: readonly NoteKind[] = ["notes", "rules", "skills"];
 
 const TRIGGER: Record<string, string> = {
 	ship: "after git push",
@@ -112,6 +129,9 @@ export function isMemorqState(data: unknown): data is MemorqState {
 	// A malformed `learned` does not lose the state: readers check it with `isLearned` and drop it.
 	return true;
 }
+
+/** The tokens memorq says it injected, when it says it in a form orqi can read: a count, else nothing, and the state still draws. */
+export const injectedTokens = (state: MemorqState | undefined): number | undefined => (isCount(state?.context) ? state.context : undefined);
 
 /** A learn as memorq reports it and as an `orqi-memory` entry stores it: a count, a trigger, when, and maybe its cost. */
 export function isLearned(data: unknown): data is NonNullable<MemorqState["learned"]> {
@@ -158,113 +178,20 @@ function learnedLine(learned: NonNullable<MemorqState["learned"]>, width: number
 	const tail = ` · ${age(Math.max(0, now - learned.at))}`;
 	const trigger = learnPhrase(learned.trigger, learned.pct);
 	const room = Math.max(1, width - visibleWidth(head) - visibleWidth(tail));
-	return `${head}${truncateToWidth(trigger, room, "…")}${tail}`;
-}
-
-/**
- * Text that came from memorq, safe to draw: escape sequences (CSI, OSC, DCS, SOS, PM, APC, and any other
- * ESC pair) removed whole, a tab made a space (it would break a one-line row's width), then every other
- * control character (C0, DEL, C1) dropped. memorq is a
- * separate package, and a terminal acts on what it is sent: an OSC 52 in a trigger name would write the
- * clipboard.
- */
-export function printable(text: string): string {
-	return text
-		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-		.replace(/\x1b[\]PX^_][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
-		.replace(/\x1b[\s\S]?/g, "")
-		.replace(/\t/g, " ")
-		.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+	return `${head}${visibleWidth(trigger) <= room ? trigger : `${cutPlain(trigger, room - 1)}…`}${tail}`;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-function age(ms: number): string {
+export function age(ms: number): string {
 	if (ms < 60_000) return "now";
 	if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
 	if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
 	return `${Math.floor(ms / 86_400_000)}d`;
 }
 
-/**
- * `text` in at most `width` cells, `…` for what was cut. truncateToWidth wraps its ellipsis in resets, and a
- * reset inside a line would end the role's colour before the rest of it, so the activity view cuts with this.
- */
-const cut = (text: string, width: number) => truncateToWidth(text, width, "…").replace(/\x1b\[[0-9;]*m/g, "");
-
-/** The cells the quoted text keeps before its verb gives way to a short one (or the whole text, when it is shorter). */
-const MIN_TEXT = 12;
-
-/**
- * One activity entry in `width` cells: `<verb> "<text>"<result> · <age>`. The quoted text gives way first
- * (`…` inside the quotes, then gone altogether), never the age; and when the full verb would leave the text under `MIN_TEXT`
- * cells, the verb shrinks to its mark (`↳`, `+`, `=`) so the text keeps its room.
- */
-function recentLine(entry: MemorqRecent, width: number, now: number): string {
-	const [verb, mark] = entry.kind === "recall" ? ["↳ recalled", "↳"] : entry.saved === false ? ["= already saved", "="] : ["+ saved", "+"];
-	const text = printable(entry.text);
-	const result = entry.kind === "recall" && entry.hits !== undefined ? ` → ${entry.hits === 0 ? "nothing" : entry.hits}` : "";
-	const when = age(Math.max(0, now - entry.at));
-	const tail = `${result} · ${when}`;
-	const room = (head: string) => width - visibleWidth(head) - visibleWidth(tail) - 2;
-	const head = room(`${verb} `) >= Math.min(visibleWidth(text), MIN_TEXT) ? `${verb} ` : `${mark} `;
-	if (room(head) >= 1) return `${head}"${cut(text, room(head))}"${tail}`;
-	// No room for even one character of the text: it goes, then the mark, then the result, never the age.
-	const bare = [`${mark}${tail}`, tail.trimStart(), `${mark} · ${when}`, when];
-	return bare.find((line) => visibleWidth(line) <= width) ?? when;
-}
-
 /** Whether an entry can be drawn: well formed, and with some text left once memorq's escapes are taken out. */
 const drawable = (data: unknown): data is MemorqRecent => isRecent(data) && printable(data.text).trim() !== "";
-
-/**
- * The activity view's first line: `21 notes · 3 opened · 2 recalled · 1 saved`, a zero part left out
- * except the notes. When it does not fit it gives up, in turn: the word `notes`, the note count, the
- * `-ed` of `recalled`; when none fits, the second (`21 · 3 opened · …`) is cut by the caller, as the wireframe draws it.
- */
-function totalsLine(state: MemorqState, activity: { recalls: number; remembers: number }, reads: number, width: number): string {
-	const counts = (recalled: string) =>
-		[
-			reads > 0 ? `${reads} opened` : "",
-			activity.recalls > 0 ? `${activity.recalls} ${recalled}` : "",
-			activity.remembers > 0 ? `${activity.remembers} saved` : "",
-		].filter(Boolean);
-	const parts = counts("recalled");
-	const join = (...bits: string[]) => bits.join(" · ");
-	const fallbacks = [
-		join(plural(state.notes, "note"), ...parts),
-		join(String(state.notes), ...parts),
-		...(parts.length ? [join(...parts), join(...counts("recall"))] : []),
-	];
-	return fallbacks.find((line) => visibleWidth(line) <= width) ?? fallbacks[1]!;
-}
-
-/** A closing line and how urgent it is: lower stays when there is room for one. */
-interface Closer {
-	urgency: number;
-	line: string;
-}
-
-/**
- * The status line, at most one, in this order: why nothing is learned, the review running, failed or due.
- * A review running or learning stopped outranks the last learn when there is room for only one of them, a failed
- * review does not outrank it by much, and the next review's date is the least pressing.
- */
-function statusLine(state: MemorqState): Closer | undefined {
-	if (state.paused) return { urgency: 1, line: "learning paused · /memory" };
-	if (state.enabled === "readonly") return { urgency: 1, line: "read-only · learns nothing" };
-	if (state.review?.running === true) return { urgency: 0, line: `reviewing ${state.review.notes} notes…` };
-	if (typeof state.review?.failed === "string") return { urgency: 2, line: "last review failed" };
-	if (typeof state.review?.dueInSessions === "number")
-		return {
-			urgency: 4,
-			line:
-				state.review.dueInSessions > 0
-					? `next memory review in ${plural(state.review.dueInSessions, "session")}`
-					: "next memory review at next start",
-		};
-	return undefined;
-}
 
 /** This session's activity as the section draws it: the counts and the entries it can draw. Undefined when there is nothing to draw. */
 function readActivity(data: unknown): { recalls: number; remembers: number; recent: MemorqRecent[] } | undefined {
@@ -275,80 +202,423 @@ function readActivity(data: unknown): { recalls: number; remembers: number; rece
 		: undefined;
 }
 
+/** The kinds of file memorq keeps: a note, a rule and a skill. */
+export type NoteKind = "notes" | "rules" | "skills";
+
+/** A note the model read: its resolved path, when, and which kind of store it came from (absent: counted as a note). */
+export interface NoteRead {
+	path: string;
+	at: number;
+	kind?: NoteKind;
+}
+
+/** The distinct notes kept as read: more than a session opens, so only the very long one loses its oldest. */
+export const MAX_READS = 100;
+/** The recalls and saves kept from the states memorq sent: it sends the newest five each time. */
+export const MAX_SEEN = 60;
+
+/** `reads` with `path` read at `at`: newest first, a path once (the newest time), the oldest dropped past `MAX_READS`. */
+export function noteRead(reads: NoteRead[], path: string, at: number, kind?: NoteKind): NoteRead[] {
+	return [{ path, at, ...(kind ? { kind } : {}) }, ...reads.filter((read) => read.path !== path)].slice(0, MAX_READS);
+}
+
+const recentKey = (entry: MemorqRecent) => `${entry.kind}|${entry.at}|${entry.text}`;
+
+/** memorq's totals in a state: zero before its first call (no activity at all); undefined for an activity that is malformed. */
+function totalsOf(state: MemorqState): { recalls: number; remembers: number } | undefined {
+	if (state.activity === undefined || state.activity === null) return { recalls: 0, remembers: 0 };
+	return isActivity(state.activity) ? state.activity : undefined;
+}
+
 /**
- * The memory section, each line only when it has something to say. Before memorq reports any activity:
- *   47 notes for this repo
- *   using 3 this turn · read 1
- *   learned 2 after last git push · 3m
- *   next memory review in 2 sessions
- * Once the agent has recalled or saved something it is the session's activity, still at most four lines:
- *   47 notes · 3 opened · 2 recalled · 1 saved
- *   ↳ recalled "golden test clock" → 2 · now
- *   + saved "Golden test depends on the clock" · 3m
- *   learned 2 after last git push · 1h          (else the status line: paused, review, ...)
- * Nothing at all when memorq has not spoken or memory is off.
+ * `seen` with the recalls and saves of `state` it did not have, newest first. memorq sends the newest five each
+ * time and orqi hears every change, so over a session this holds more than five, and counts what memorq's own
+ * totals cannot (how many recalls found nothing). A total that went down since `before` means memorq started a
+ * new session of its own: what was seen belongs to the old one and is forgotten.
  */
-export function memoryLines(state: MemorqState | undefined, reads: number, width: number, now = Date.now()): string[] {
-	if (!state || state.enabled === "off") return [];
-	const why = state.paused ? "learning paused" : state.enabled === "readonly" ? "read-only" : undefined;
-	if (!state.stores.notes && !state.notes) return sectionLines("memory", ["not a git repo · nothing to learn"], width);
-	if (!state.notes) return sectionLines("memory", [`no notes yet · ${why ?? "learns as you work"}`], width);
-	// The body is indented two cells by sectionLines.
-	const inner = width - 2;
-	// The last learn and the status are today's closing lines, in today's order; `urgency` (lowest first) says
-	// which one stays when the activity view has room for only one.
-	const closing = [
-		isLearned(state.learned) ? { urgency: 3, line: learnedLine(state.learned, inner, now) } : undefined,
-		statusLine(state),
-	].filter((closer): closer is Closer => closer !== undefined);
+export function mergeRecent(seen: MemorqRecent[], state: MemorqState, before?: MemorqState): MemorqRecent[] {
+	const now = totalsOf(state);
+	const was = before && totalsOf(before);
+	if (now && was && (now.recalls < was.recalls || now.remembers < was.remembers)) seen = [];
 	const activity = readActivity(state.activity);
-	if (activity) {
-		const body = [totalsLine(state, activity, reads, inner), ...activity.recent.slice(0, 2).map((entry) => recentLine(entry, inner, now))];
-		const room = 4 - body.length;
-		const kept = closing.length <= room ? closing : [...closing].sort((a, b) => a.urgency - b.urgency).slice(0, room);
-		const lines = [...body, ...closing.filter((closer) => kept.includes(closer)).map((closer) => closer.line)];
-		return sectionLines(
-			"memory",
-			lines.map((line) => cut(line, inner)),
-			width,
-		);
+	const known = new Set(seen.map(recentKey));
+	const fresh = activity?.recent.filter((entry) => !known.has(recentKey(entry))) ?? [];
+	if (fresh.length === 0) return seen;
+	return [...fresh, ...seen].sort((a, b) => b.at - a.at).slice(0, MAX_SEEN);
+}
+
+/** One thing memory did, as the section lists it. `key` is stable across redraws: the row's item, for focus and peek. */
+export interface MemoryEvent {
+	key: string;
+	kind: "read" | "recall" | "save" | "dupe";
+	at: number;
+	/** A note's title, a save's name, or a recall's query (the section quotes it). */
+	title: string;
+	/** A recall's notes found: its result reads `→ 5` compact and `found 5` expanded. */
+	hits?: number;
+	/** The dim line under an expanded event: when the note applies, a recall's top hit, or why a recall found nothing. */
+	detail?: string;
+	/** The note file behind a read, or behind a save when memorq says where it wrote it: what peek opens. Absent otherwise. */
+	path?: string;
+	/** A recall's top hit, by title (memorq sends no path): peek looks for the note by it. */
+	top?: string;
+}
+
+/** Everything the section draws, worked out when state changes: the state, the events newest first and the counts. */
+export interface MemoryView {
+	state: MemorqState;
+	events: MemoryEvent[];
+	/** Distinct notes and rules read: the ones memorq counts in `notes`. A skill read is an event, not one of these. */
+	read: number;
+	recalls: number;
+	missed: number;
+	saved: number;
+}
+
+/** What a recall found, under it: nothing, or its first hit; silent when memorq did not say. */
+function recallDetail(hits: number | undefined, top: string): string | undefined {
+	if (hits === 0) return "memory has no note on this yet";
+	return top ? `top: ${top}` : undefined;
+}
+
+const clean = (value: unknown) => (typeof value === "string" ? printable(value).trim() : "");
+const when = (trigger: string | undefined) => (trigger ? `when: ${trigger}` : undefined);
+
+/**
+ * The section's view: the reads (`info` names their notes, from a cache filled when the read was counted) and
+ * memorq's recalls and saves (`seen`, or the state's own newest five) as one list, newest first. Undefined
+ * without a state. Nothing here reads a file.
+ */
+export function memoryView(
+	state: MemorqState | undefined,
+	reads: NoteRead[],
+	info: (path: string) => NoteInfo,
+	seen?: MemorqRecent[],
+): MemoryView | undefined {
+	if (!state) return undefined;
+	const activity = readActivity(state.activity);
+	const recent = seen ?? activity?.recent ?? [];
+	const events: MemoryEvent[] = [];
+	for (const read of reads) {
+		const note = info(read.path);
+		const title = clean(note.title);
+		if (title)
+			events.push({ key: `read:${read.path}`, kind: "read", at: read.at, title, detail: when(clean(note.trigger)), path: read.path });
 	}
-	const body = [`${plural(state.notes, "note")} for this repo`];
-	if (state.usedThisTurn > 0) body.push(`using ${state.usedThisTurn} this turn${reads > 0 ? ` · read ${reads}` : ""}`);
-	else if (reads > 0) body.push(`read ${reads} this session`);
-	return sectionLines("memory", [...body, ...closing.map((closer) => closer.line)], width);
+	for (const entry of recent) {
+		const text = clean(entry.text);
+		if (!text) continue;
+		if (entry.kind === "recall") {
+			const detail = recallDetail(entry.hits, clean(entry.top));
+			const top = clean(entry.top);
+			events.push({
+				key: `recall:${entry.at}:${text}`,
+				kind: "recall",
+				at: entry.at,
+				title: text,
+				hits: entry.hits,
+				detail,
+				...(top ? { top } : {}),
+			});
+			continue;
+		}
+		const path = clean(entry.path);
+		const key = `save:${entry.at}:${path || text}`;
+		const kind = entry.saved === false ? "dupe" : "save";
+		events.push({ key, kind, at: entry.at, title: text, detail: when(clean(entry.trigger)), ...(path ? { path } : {}) });
+	}
+	events.sort((a, b) => b.at - a.at);
+	const recalls = activity?.recalls ?? 0;
+	const missed = Math.min(recalls, recent.filter((entry) => entry.kind === "recall" && entry.hits === 0).length);
+	return { state, events, read: reads.filter((read) => read.kind !== "skills").length, recalls, missed, saved: activity?.remembers ?? 0 };
+}
+
+/** The header's answer: `22 notes`, and expanded, how many were read. */
+export function memorySummary(view: MemoryView | undefined, depth: Depth): string | undefined {
+	if (!view || view.state.enabled === "off") return undefined;
+	const { state } = view;
+	if (!state.stores.notes && !state.notes) return undefined;
+	if (!state.notes) return "no notes";
+	const notes = plural(state.notes, "note");
+	// Clamped like the compact row: paths read can outnumber the notes a store holds (a moved store, a copy).
+	const read = Math.min(view.read, state.notes);
+	return depth === "expanded" && read > 0 ? `${notes} · ${read} read` : notes;
+}
+
+/** Why a repository with no notes learns none, when it has a reason. */
+function whyNothing(state: MemorqState): string {
+	if (state.paused) return "learning paused";
+	if (state.enabled === "readonly") return "read-only";
+	return "learns as you work";
+}
+
+/** A status line and whether it is urgent: urgent ones take the compact view's event line. */
+interface Status {
+	text: string;
+	role: Role;
+	urgent: boolean;
 }
 
 /**
- * Whether the rest of a recall line (after its mark) ends in `→ nothing`. The result is whatever follows the
- * last quote, so quoted text cannot fake one; with no room for the text there is no quote and the rest is the result.
+ * The status line, at most one: why nothing is learned, the review running or failed, or when the next is due.
+ * Paused comes first (a review cannot run then) and a review running outranks one that failed. Read-only and
+ * the next review's date are not urgent: only the expanded footer says them.
  */
-function foundNothing(rest: string): boolean {
-	const result = rest.includes('"') ? rest.slice(rest.lastIndexOf('"') + 1) : rest;
-	return /^ ?→ nothing(?: · .*)?$/.test(result);
+function statusOf(state: MemorqState): Status | undefined {
+	if (state.paused) return { text: "‖ learning paused · /memory", role: "warning", urgent: true };
+	if (state.review?.running === true) return { text: `⟳ reviewing ${state.review.notes} notes…`, role: "accent", urgent: true };
+	if (typeof state.review?.failed === "string") return { text: "⚠ last review failed", role: "warning", urgent: true };
+	// The user's own setting, nothing to act on: a word in the expanded footer, never the compact event's row.
+	if (state.enabled === "readonly") return { text: "read-only", role: "dim", urgent: false };
+	const due = state.review?.dueInSessions;
+	if (typeof due !== "number") return undefined;
+	return { text: due > 0 ? `review in ${plural(due, "session")}` : "review at next start", role: "dim", urgent: false };
 }
 
-/** The theme role a memory line is drawn in; the marks and words carry the meaning, colour only helps. */
-export type MemoryRole = "muted" | "text" | "dim" | "accent" | "warning";
+const seg = (role: Role, text: string, flex?: true): Seg => (flex ? { role, text, flex } : { role, text });
+
+/** Neighbouring segments of one role become one (a wrapped title is built a word at a time); flexible ones stay apart. */
+function joined(segs: Seg[]): Seg[] {
+	const out: Seg[] = [];
+	for (const next of segs) {
+		const last = out.at(-1);
+		if (last && last.role === next.role && !last.flex && !next.flex) last.text += next.text;
+		else out.push({ ...next });
+	}
+	return out;
+}
+
+/** The mark of an event, and its role. A recall that found nothing warns; one that found notes (or does not say) does not. */
+function markOf(event: MemoryEvent): Seg {
+	if (event.kind === "read") return seg("accent", "◇");
+	if (event.kind === "save") return seg("success", "+");
+	if (event.kind === "dupe") return seg("dim", "=");
+	return seg(event.hits === 0 ? "warning" : "success", "↳");
+}
+
+/** The result of a recall, in the form the depth reads: `→ 5` compact, `found 5` expanded. */
+function resultOf(event: MemoryEvent, depth: Depth): Seg | undefined {
+	if (event.kind !== "recall" || event.hits === undefined) return undefined;
+	const found = event.hits === 0 ? "nothing" : String(event.hits);
+	return seg(event.hits === 0 ? "warning" : "text", depth === "compact" ? ` → ${found}` : ` found ${found}`);
+}
+
+/** Cells of the bar that says how much of the store was read. */
+const BAR = 12;
+
+/** `read ██░░░░░░░░░░    3 of 22`: the notes read of the notes there are, the numbers against the right edge. */
+function readRow(view: MemoryView, width: number): Row {
+	const total = Math.max(1, view.state.notes);
+	const read = Math.min(view.read, view.state.notes);
+	const filled = read === 0 ? 0 : Math.min(BAR, Math.max(1, Math.round((read / total) * BAR)));
+	const left = seg("muted", "read ");
+	const right = `${read} of ${view.state.notes}`;
+	const spacer = Math.max(1, width - visibleWidth(left.text) - BAR - right.length);
+	return {
+		segs: [
+			left,
+			seg("muted", "█".repeat(filled)),
+			seg("dim", `${"░".repeat(BAR - filled)}${" ".repeat(spacer)}`),
+			seg("text", String(read)),
+			seg("dim", ` of ${view.state.notes}`),
+		].filter((part) => part.text),
+	};
+}
 
 /**
- * The role for one line of the memory section (indented or not): the totals, the last learn and the next
- * review are `muted`; a recall that found something and a save are `text`, a recall that found nothing is
- * `warning` (a gap in memory); a save that was already saved is `dim`; a review running is `accent`; paused,
- * read-only and a failed review are `warning`. The narrow forms (`↳ "…"`, `+ "…"`) read the same.
+ * `recall 3 · 1 missed · saved 1`, a zero part left out. Too wide (three-digit counts), `missed` shortens to
+ * `miss` first, and only then do the dots close up (`recall 1234·1000 miss·saved 1000`).
  */
-export function memoryLineRole(line: string): MemoryRole {
-	const text = line.trim();
-	if (text.startsWith("↳")) return foundNothing(text.slice(1)) ? "warning" : "text";
-	if (text.startsWith("→")) {
-		if (foundNothing(text)) return "warning";
-		return /^→ \d/.test(text) ? "text" : "muted";
+function countsRow(view: MemoryView, width: number): Row | undefined {
+	const fit = (missed: string, dots: string) => {
+		const parts: Seg[][] = [];
+		if (view.recalls > 0) parts.push([seg("muted", "recall "), seg("text", String(view.recalls))]);
+		if (view.recalls > 0 && view.missed > 0) parts.push([seg("dim", `${view.missed} ${missed}`)]);
+		if (view.saved > 0) parts.push([seg("muted", "saved "), seg("text", String(view.saved))]);
+		const cells = parts.reduce((n, part) => n + visibleWidth(part.map((s) => s.text).join("")), 0) + dots.length * (parts.length - 1);
+		return { parts, dots, cells };
+	};
+	const tries = [fit("missed", " · "), fit("miss", " · "), fit("miss", "·")];
+	const best = tries.find((attempt) => attempt.cells <= width) ?? tries[2]!;
+	if (best.parts.length === 0) return undefined;
+	return { segs: joined(best.parts.flatMap((part, i) => (i === 0 ? part : [seg("dim", best.dots), ...part]))) };
+}
+
+/** `◇ Title    4m`: mark, title (gives way first), a recall's result, the age against the right edge. */
+function compactEvent(event: MemoryEvent, width: number, now: number): Row {
+	const ageText = age(Math.max(0, now - event.at));
+	const result = resultOf(event, "compact");
+	// A query keeps its quotes, in segments of their own around the text that gives way.
+	const quote = event.kind === "recall" ? [seg("text", '"')] : [];
+	const fixed = 2 + quote.length * 2 + (result ? visibleWidth(result.text) : 0) + visibleWidth(ageText);
+	const spacer = Math.max(1, width - fixed - visibleWidth(event.title));
+	return {
+		item: event.key,
+		segs: [
+			markOf(event),
+			seg("text", " "),
+			...quote,
+			seg("text", event.title, true),
+			...quote,
+			...(result ? [result] : []),
+			seg("dim", " ".repeat(spacer)),
+			seg("dim", ageText),
+		],
+	};
+}
+
+/** Event rows a title may wrap to, and a detail: a note title that is a paragraph must not take the section. */
+const TITLE_ROWS = 4;
+const DETAIL_ROWS = 2;
+
+/** Words laid out in rows: the first `first` cells wide, the rest `rest`. A word wider than a row is broken; a row never starts with a space. */
+function wrap(parts: Seg[], first: number, rest: number): Seg[][] {
+	const rows: Seg[][] = [[]];
+	let used = 0;
+	let limit = Math.max(1, first);
+	let pending: Role | undefined;
+	const add = (role: Role, text: string) => {
+		rows.at(-1)!.push(seg(role, text));
+		used += visibleWidth(text);
+	};
+	const next = () => {
+		rows.push([]);
+		used = 0;
+		limit = Math.max(1, rest);
+		pending = undefined;
+	};
+	for (const part of parts) {
+		for (const token of part.text.split(/(\s+)/).filter(Boolean)) {
+			if (/^\s+$/.test(token)) {
+				if (used > 0) pending = part.role;
+				continue;
+			}
+			let word = token;
+			while (word) {
+				const space = pending && used > 0 ? 1 : 0;
+				const cells = visibleWidth(word);
+				if (used + space + cells <= limit) {
+					if (space && pending) add(pending, " ");
+					add(part.role, word);
+					pending = undefined;
+					break;
+				}
+				if (used > 0) {
+					next();
+					continue;
+				}
+				const chunk = cutPlain(word, limit) || Array.from(word)[0]!;
+				add(part.role, chunk);
+				word = word.slice(chunk.length);
+				if (word) next();
+			}
+		}
 	}
-	if (/^\+ (saved "|"|·)/.test(text)) return "text";
-	if (/^= (already saved "|"|·)/.test(text)) return "dim";
-	if (/^reviewing \d+ notes…/.test(text)) return "accent";
-	if (/^(learning paused|read-only|last review failed)/.test(text)) return "warning";
-	return "muted";
+	return rows.filter((row) => row.length > 0).map(joined);
+}
+
+/** `rows` cut to `max`, the last one ending in `…` when anything was left out. */
+function capRows(rows: Seg[][], max: number, width: number): Seg[][] {
+	if (rows.length <= max) return rows;
+	const last = rows[max - 1]!;
+	const text = last.map((part) => part.text).join("");
+	return [...rows.slice(0, max - 1), [seg(last[0]?.role ?? "text", `${cutPlain(text, Math.max(0, width - 1)).trimEnd()}…`)]];
+}
+
+/**
+ * One event expanded: mark, the whole title wrapped under it (the age against the right edge of the first row),
+ * then its dim detail line. Every row carries the event's key.
+ */
+function expandedEvent(event: MemoryEvent, width: number, now: number): Row[] {
+	const ageText = age(Math.max(0, now - event.at));
+	const indent = seg("text", "  ");
+	const result = resultOf(event, "expanded");
+	const room = width - 2;
+	const title = capRows(
+		wrap(
+			[seg("text", event.kind === "recall" ? `"${event.title}"` : event.title), ...(result ? [result] : [])],
+			room - visibleWidth(ageText) - 1,
+			room,
+		),
+		TITLE_ROWS,
+		room,
+	);
+	const first = title[0] ?? [];
+	const spacer = Math.max(1, width - 2 - visibleWidth(first.map((part) => part.text).join("")) - visibleWidth(ageText));
+	const rows: Seg[][] = [
+		[markOf(event), seg("text", " "), ...first, seg("dim", " ".repeat(spacer)), seg("dim", ageText)],
+		...title.slice(1).map((row) => [indent, ...row]),
+	];
+	if (event.detail) rows.push(...capRows(wrap([seg("dim", event.detail)], room, room), DETAIL_ROWS, room).map((row) => [indent, ...row]));
+	return rows.map((segs) => ({ item: event.key, segs }));
+}
+
+/** What a body is drawn with: the clock, whether the key's hint is still wanted, and the rows the frame can spare. */
+export interface MemoryBodyOptions {
+	now: number;
+	hint?: boolean;
+	rows?: number;
+}
+
+/** The newest events that fit in `rows`, each a block of rows, a blank row between: at least the newest, whatever the room. */
+function eventRows(events: MemoryEvent[], width: number, now: number, rows: number): Line[] {
+	const out: Line[] = [];
+	for (const event of events) {
+		const block = expandedEvent(event, width, now);
+		const needs = block.length + (out.length > 0 ? 1 : 0);
+		if (out.length > 0 && out.length + needs > rows) break;
+		if (out.length > 0) out.push("");
+		out.push(...block);
+	}
+	return out;
+}
+
+/** The expanded section: the events newest first as many as fit, then the last learn, then the status and the key back. */
+function expandedBody(view: MemoryView, width: number, { now, rows = Number.POSITIVE_INFINITY }: MemoryBodyOptions): Line[] {
+	const { state } = view;
+	const status = statusOf(state);
+	const learned = isLearned(state.learned) ? { segs: [seg("dim", learnedLine(state.learned, width, now))] } : undefined;
+	const key = seg("dim", "alt+m less");
+	// The status and the key share a line when they fit, else the key has its own.
+	const together = status && visibleWidth(`${status.text} · ${key.text}`) <= width;
+	const footer: Row[] = [];
+	if (status && !together) footer.push({ segs: [seg(status.role, status.text)] }, { segs: [key] });
+	else footer.push({ segs: joined(status ? [seg(status.role, status.text), seg("dim", " · "), key] : [key]) });
+	const tail: Line[] = [...(learned ? [learned] : []), ...footer];
+	const events = eventRows(view.events, width, now, rows - tail.length - 1);
+	return [...events, ...(events.length ? [""] : []), ...tail];
+}
+
+/** The compact section: the reads against the notes, the counts, then the newest event, or the status that cannot wait. */
+function compactBody(view: MemoryView, width: number, { now, hint }: MemoryBodyOptions): Line[] {
+	const status = statusOf(view.state);
+	const urgent: Row | undefined = status?.urgent ? { segs: [seg(status.role, status.text)] } : undefined;
+	const counts = countsRow(view, width);
+	const newest = view.events[0];
+	if (!urgent && !counts && !newest) return [];
+	const lines: Line[] = [];
+	if (newest || counts) lines.push(readRow(view, width));
+	if (counts) lines.push(counts);
+	if (urgent) lines.push(urgent);
+	else if (newest) lines.push(compactEvent(newest, width, now));
+	if (hint) lines.push({ segs: [seg("dim", "alt+m more · enter: peek")] });
+	return lines;
+}
+
+/**
+ * The memory section's body for a body `width`, in the depth chosen: undefined when there is no section to draw
+ * (no state, or memory off), an empty body when there is nothing to say (the section folds to its header).
+ *
+ *   read ██░░░░░░░░░░         3 of 22
+ *   recall 2 · 1 missed · saved 1
+ *   + Run make test offline       now
+ */
+export function memoryBody(view: MemoryView | undefined, width: number, depth: Depth, options: MemoryBodyOptions): Line[] | undefined {
+	if (!view || view.state.enabled === "off") return undefined;
+	const { state } = view;
+	if (!state.stores.notes && !state.notes) return ["not a git repo · nothing to learn"];
+	if (!state.notes) return [`no notes yet · ${whyNothing(state)}`];
+	return depth === "expanded" ? expandedBody(view, width, options) : compactBody(view, width, options);
 }
 
 /** `inner` lies inside `dir` (not the folder itself). */
@@ -366,7 +636,7 @@ export function readPath(path: string, cwd: string): string {
 }
 
 /**
- * Whether a `read` of `path` opened a note, rule or skill. `stores` names only
+ * Which kind of file a `read` of `path` opened (a note, rule or skill), or undefined when it opened none. `stores` names only
  * the folder each kind is WRITTEN to, and a kind written to the repo is still
  * read from the machine store, so the machine roots (`roots`: ORQ_NOTES_HOME or
  * ~/.memorq, plus the legacy ~/.orq/knowledge) count as `<root>/<key>/<kind>/…`.
@@ -375,14 +645,22 @@ export function readPath(path: string, cwd: string): string {
  * The path is resolved as pi's read tool does (`readPath`); no realpath and no
  * git call here: the caller tests the real path as well, off the render path.
  */
-export function isNoteRead(path: string, stores: MemorqState["stores"], roots: string[], cwd = process.cwd()): boolean {
+export function noteKind(path: string, stores: MemorqState["stores"], roots: string[], cwd = process.cwd()): NoteKind | undefined {
 	const file = readPath(path, cwd);
-	if (Object.values(stores).some((dir) => dir && under(resolve(cwd, dir), file))) return true;
-	return roots.some((root) => {
+	for (const kind of KINDS) {
+		const dir = stores[kind];
+		if (dir && under(resolve(cwd, dir), file)) return kind;
+	}
+	for (const root of roots) {
 		const parts = under(resolve(root), file);
-		return parts !== undefined && parts.length >= 3 && KINDS.has(parts[1]!);
-	});
+		if (parts !== undefined && parts.length >= 3 && KINDS.includes(parts[1] as NoteKind)) return parts[1] as NoteKind;
+	}
+	return undefined;
 }
+
+/** Whether a `read` of `path` opened a note, rule or skill (`noteKind`). */
+export const isNoteRead = (path: string, stores: MemorqState["stores"], roots: string[], cwd = process.cwd()): boolean =>
+	noteKind(path, stores, roots, cwd) !== undefined;
 
 /** The machine roots a note can be read from: memorq's (ORQ_NOTES_HOME, else ~/.memorq) and the legacy one. */
 export function noteRoots(env: NodeJS.ProcessEnv = process.env): string[] {

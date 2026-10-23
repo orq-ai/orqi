@@ -11,7 +11,8 @@
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { contextBar, dollars, tokens } from "./footer.ts";
+import { dollars } from "./footer.ts";
+import type { Depth, SectionId } from "./prefs.ts";
 import type { Signals, Step } from "./trajectory.ts";
 
 export const MINIMAP_WIDTH = 38;
@@ -28,14 +29,10 @@ const ROLE: Record<Step["role"], string> = {
 	memory: "memory",
 };
 
-export interface RowPaint {
-	bright(text: string): string;
-	text(text: string): string;
-	dim(text: string): string;
-	error(text: string): string;
-}
+/** Paints a run of text in a theme role (`theme.fg`); the plain default leaves it as it is. */
+export type Paint = (role: string, text: string) => string;
 
-export const plainRows: RowPaint = { bright: (s) => s, text: (s) => s, dim: (s) => s, error: (s) => s };
+export const plainPaint: Paint = (_role, text) => text;
 
 function seconds(ms: number | undefined): string {
 	return ms === undefined ? "" : `${(ms / 1000).toFixed(1)}s`;
@@ -46,41 +43,119 @@ function descendants(step: Step): number {
 	return (step.children ?? []).reduce((n, child) => n + 1 + descendants(child), 0);
 }
 
+const seg = (role: Role, text: string, flex?: true): Seg => (flex ? { role, text, flex } : { role, text });
+
+/** Which memory mark a tool step wears: a note it read, a recall, a save; undefined for any other tool. */
+function memoryKind(step: Step): "note" | "recall" | "save" | undefined {
+	if (step.role !== "tool") return undefined;
+	if (step.note) return "note";
+	if (step.toolName === "memory_recall") return "recall";
+	if (step.toolName === "memory_write") return "save";
+	return undefined;
+}
+
+const argText = (step: Step, key: string) => {
+	const value = step.args?.[key];
+	return typeof value === "string" ? value : "";
+};
+
+/** What a recall found, after its query: nothing says so in warning, a count in text, no result yet nothing. */
+function foundSegs(hits: number | undefined): Seg[] {
+	if (hits === undefined) return [];
+	return hits === 0 ? [seg("warning", " nothing")] : [seg("text", ` ${hits}`)];
+}
+
 /**
- * One row, exactly `width` columns. `current` gets the `▌` gutter, `frame`
- * animates a running step.
+ * The mark of a step and the text after it. `end` is the outcome (` ✓`, ` ✗`, a gate's ` ?`), placed after the
+ * flexible text, so a long name or title gives way and the outcome stays.
  */
-export function minimapRow(step: Step, width: number, current: boolean, frame = 0, paint: RowPaint = plainRows): string {
-	const running = step.status === "running";
-	const glyph = running && step.role !== "user" ? SPINNER[frame % SPINNER.length]! : GLYPH[step.role];
-	const outcome = running ? "" : step.status === "error" ? " ✗" : step.role === "tool" || step.role === "subagent" ? " ✓" : "";
-	let body: string;
+function markAndBody(step: Step, titleOf: (path: string) => string, end: string): { mark: Seg; body: Seg[] } {
+	const tail = end ? [seg("dim", end)] : [];
+	switch (memoryKind(step)) {
+		case "note":
+			return { mark: seg("accent", "◇"), body: [seg("muted", "memory "), seg("text", titleOf(step.note!), true), ...tail] };
+		case "recall": {
+			const query = argText(step, "query");
+			return {
+				mark: seg(step.hits === 0 ? "warning" : "success", "↳"),
+				body: [seg("muted", "recall "), ...(query ? [seg("text", `"${query}"`, true)] : []), ...foundSegs(step.hits), ...tail],
+			};
+		}
+		case "save":
+			return {
+				mark: step.saved === false ? seg("dim", "=") : seg("success", "+"),
+				body: [seg("muted", "save "), seg("text", argText(step, "title"), true), ...tail],
+			};
+		default:
+	}
 	switch (step.role) {
+		case "user":
+			return { mark: seg("muted", GLYPH.user), body: [seg("text", step.detail, true)] };
+		case "assistant": {
+			// A managed agent's reply reads as the agent's, not orqi's: the one row that keeps a word.
+			const agent = step.model?.startsWith("agent/") ? [seg("muted", "agent ")] : [];
+			const placeholder = step.status === "running" ? "streaming…" : "(tool calls)";
+			const text = step.detail ? seg("text", step.detail, true) : seg("dim", placeholder, true);
+			return { mark: seg("syntaxFunction", GLYPH.assistant), body: [...agent, text] };
+		}
 		case "tool":
-			body = `${step.label}${step.gate === "waiting" ? " ?" : ""}${outcome}${step.durationMs !== undefined && step.durationMs >= 500 ? ` ${seconds(step.durationMs)}` : ""}`;
-			break;
+			return { mark: seg("dim", GLYPH.tool), body: [seg("dim", "tool "), seg("dim", step.label, true), ...tail] };
 		case "subagent": {
 			const n = descendants(step);
 			const cost = step.usage?.cost ? ` ${dollars(step.usage.cost)}` : "";
 			// While it runs, the call in flight: `investigator get_span +2`.
-			const live = running ? [...(step.children ?? [])].reverse().find((child) => child.status === "running") : undefined;
-			body = `${step.label}${live ? ` ${live.label}` : ""}${outcome}${n ? ` +${n}` : ""}${cost}`;
-			break;
+			const live = step.status === "running" ? [...(step.children ?? [])].reverse().find((child) => child.status === "running") : undefined;
+			return {
+				mark: seg("text", GLYPH.subagent),
+				body: [
+					seg("text", step.label, true),
+					...(live ? [seg("dim", ` ${live.label}`)] : []),
+					...tail,
+					...(n ? [seg("text", ` +${n}`)] : []),
+					...(cost ? [seg("dim", cost)] : []),
+				],
+			};
 		}
-		case "route":
 		case "memory":
-			body = `${step.label} ${step.detail}`;
-			break;
+			return { mark: seg("accent", GLYPH.memory), body: [seg("muted", "memory "), seg("text", `${step.label} ${step.detail}`, true)] };
 		default:
-			body = step.detail || (step.role === "assistant" ? (running ? "streaming…" : "(tool calls)") : "");
+			return { mark: seg("text", GLYPH.route), body: [seg("text", `${step.label} ${step.detail}`, true)] };
 	}
-	const gutter = current ? paint.bright("▌") : " ";
-	const tone = step.status === "error" ? paint.error : step.role === "user" ? paint.bright : step.role === "tool" ? paint.dim : paint.text;
-	// A managed agent's reply reads as the agent's, not orqi's.
-	const role = step.role === "assistant" && step.model?.startsWith("agent/") ? "agent" : ROLE[step.role];
-	const line = `${gutter}${tone(glyph)} ${paint.dim(role.padEnd(6))} ${tone(body)}`;
-	const fitted = truncateToWidth(line, width, "…");
-	return fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted)));
+}
+
+const basenameOf = (path: string) => path.split("/").pop() || path;
+
+/**
+ * One trajectory row as segments, exactly `width` columns: the gutter (`▌` in accent on the current row), a mark
+ * that says what happened, then the text. A tool reads as what it did: a note it read, a recall, a save; any other
+ * keeps `⚙ tool <name> ✓`. `titleOf` names a note from the cache filled when its read was counted, so a render
+ * opens no file. An error turns the whole row `error`. `frame` animates a running step.
+ */
+export function trajectoryRow(step: Step, width: number, current: boolean, frame = 0, titleOf: (path: string) => string = basenameOf): Row {
+	const running = step.status === "running";
+	const failed = step.status === "error";
+	const tool = step.role === "tool" || step.role === "subagent";
+	const settled = tool && !running && !memoryKind(step) ? " ✓" : "";
+	const slow = step.role === "tool" && !memoryKind(step) && step.durationMs !== undefined && step.durationMs >= 500;
+	const gate = step.role === "tool" && step.gate === "waiting" ? " ?" : "";
+	const end = `${gate}${failed ? " ✗" : settled}${slow && !running ? ` ${seconds(step.durationMs)}` : ""}`;
+	const { mark, body } = markAndBody(step, titleOf, end);
+	const shown = running && step.role !== "user" ? seg(mark.role, SPINNER[frame % SPINNER.length]!) : mark;
+	const gutter = current ? seg("accent", "▌") : seg("text", " ");
+	const segs = [gutter, shown, seg("text", " "), ...body].map((part): Seg => (failed ? { ...part, role: "error" } : part));
+	return { segs: fitSegs(segs, width) };
+}
+
+/** One row, painted, exactly `width` columns. */
+export function minimapRow(
+	step: Step,
+	width: number,
+	current: boolean,
+	frame = 0,
+	paint: Paint = plainPaint,
+	titleOf?: (path: string) => string,
+): string {
+	return paintLine(trajectoryRow(step, width, current, frame, titleOf), paint, () => "text");
 }
 
 const fit = (text: string, width: number) => {
@@ -98,36 +173,273 @@ export function minimapRows(
 	height: number,
 	selected?: number,
 	frame = 0,
-	paint: RowPaint = plainRows,
+	paint: Paint = plainPaint,
+	marked = true,
+	titleOf?: (path: string) => string,
 ): string[] {
-	if (steps.length === 0) return [paint.dim(fit(" no steps yet", width))];
+	if (steps.length === 0) return [paint("dim", fit(" no steps yet", width))];
 	const current = selected ?? steps.length - 1;
 	const end = Math.max(Math.min(steps.length, current + 1), Math.min(steps.length, height));
 	const start = Math.max(0, Math.min(current, end - height));
-	return steps.slice(start, start + height).map((step, i) => minimapRow(step, width, start + i === current, frame, paint));
+	// `marked` off: the focus is below the trajectory, on an item, so no step wears the gutter.
+	return steps
+		.slice(start, start + height)
+		.map((step, i) => minimapRow(step, width, marked && start + i === current, frame, paint, titleOf));
 }
 
-/** The panel's own footer: `15 steps · turn 3 · $0.113`, and `· ⚠ N` while a warning fires. */
 /**
  * The trajectory's title rule, with its counts: ` ─ trajectory · 9 steps · turn 3 ───`. Cost is the
  * footer's and warnings are the signals section's, so neither is repeated here. A long session
  * drops the word "steps" before the rule outgrows the panel.
  */
 export function trajectoryTitle(steps: number, turn: number, width: number): string {
-	if (!steps) return sectionLines("trajectory", [], width)[0]!;
-	const title = `trajectory · ${steps} steps · turn ${turn}`;
-	// Two columns of rule at least, so it still reads as a rule.
-	const fits = visibleWidth(` ─ ${title} `) + 2 <= width;
-	return fit(sectionLines(fits ? title : `trajectory · ${steps} · turn ${turn}`, [], width)[0]!, width);
+	return lineText(trajectoryHeader(steps, turn, width));
 }
+
+/** The trajectory's title rule as the frame paints it: in segments, like every section header. */
+export function trajectoryHeader(steps: number, turn: number, width: number): Row {
+	if (!steps) return sectionHeader("trajectory", undefined, width);
+	// Two columns of rule at least, so it still reads as a rule.
+	const fits = visibleWidth(` ─ trajectory · ${steps} steps · turn ${turn} `) + 2 <= width;
+	return sectionHeader("trajectory", fits ? `${steps} steps · turn ${turn}` : `${steps} · turn ${turn}`, width);
+}
+
+/** A section's title rule: ` ─ title ───`, as wide as the panel. */
+const rule = (title: string, width: number) => {
+	const head = ` ─ ${title} `;
+	return head + "─".repeat(Math.max(0, width - visibleWidth(head)));
+};
 
 /** A panel section under the minimap: a ` ─ title ───` rule, then the body indented. */
 export function sectionLines(title: string, body: string[], width: number, empty = "nothing yet"): string[] {
-	const rule = ` ─ ${title} `;
-	return [
-		rule + "─".repeat(Math.max(0, width - visibleWidth(rule))),
-		...(body.length ? body : [empty]).map((line) => fit(`  ${line}`, width)),
+	return [rule(title, width), ...(body.length ? body : [empty]).map((line) => fit(`${" ".repeat(BODY_INDENT)}${line}`, width))];
+}
+
+/** The cells the frame indents a section's body by: a section renders its body for the panel width less these. */
+export const BODY_INDENT = 2;
+
+/** The most body lines a section shows at compact depth; expanded shows them all. The trajectory is not capped. */
+export const COMPACT_LINES = 4;
+
+/** The theme roles a sidebar line is painted in: the ones all thirteen themes keep readable as text. */
+export type Role =
+	| "accent"
+	| "success"
+	| "warning"
+	| "error"
+	| "muted"
+	| "dim"
+	| "text"
+	| "syntaxFunction"
+	| "syntaxKeyword"
+	| "syntaxType";
+
+/**
+ * A run of text in one role. Its text is made printable before it is measured (`fitSegs`), so it can never
+ * carry an escape code of its own: the frame paints it. `flex` marks the segment that gives way first when
+ * the line is too long (a title, a query), so a right-hand age or number survives the cut.
+ */
+export type Seg = { role: Role; text: string; flex?: true };
+
+/**
+ * A line of segments. `item` names what the line shows (a note's path, a part of the context): every line
+ * of a wrapped event carries the same key, and it survives the cut and the compact cap, so `/sidebar focus`
+ * can map a drawn row to the item enter opens.
+ */
+export interface Row {
+	segs: Seg[];
+	item?: string;
+}
+
+/**
+ * One sidebar body line: a plain string, painted in one role as before, or a row of segments, each in its own
+ * role. A section moves from strings to rows on its own; the frame paints both.
+ */
+export type Line = string | Row;
+
+const graphemes = new Intl.Segmenter();
+
+/**
+ * Plain text cut to at most `cells`, by whole graphemes. pi-tui's `truncateToWidth` adds a reset code
+ * where it cuts, which a segment, painted afterwards, must not carry.
+ */
+export function cutPlain(text: string, cells: number): string {
+	let out = "";
+	let used = 0;
+	for (const { segment } of graphemes.segment(text)) {
+		const width = visibleWidth(segment);
+		if (used + width > cells) break;
+		out += segment;
+		used += width;
+	}
+	return out;
+}
+
+const segsText = (segs: Seg[]) => segs.map((seg) => seg.text).join("");
+
+export const lineText = (line: Line) => (typeof line === "string" ? line : segsText(line.segs));
+
+/**
+ * Text safe to draw, from anywhere (memorq sends titles and queries): escape sequences (CSI, OSC, DCS, SOS,
+ * PM, APC, and any other ESC pair) removed whole, a tab made a space (it would break a one-line row's
+ * width), then every other control character (C0, DEL, C1) dropped. A terminal acts on what it is sent:
+ * an OSC 52 in a trigger name would write the clipboard.
+ */
+export function printable(text: string): string {
+	return text
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\x1b[\]PX^_][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
+		.replace(/\x1b[\s\S]?/g, "")
+		.replace(/\t/g, " ")
+		.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+}
+
+/** The flexible segment cut by `over` cells plus one for the `…`, padded back if a wide character did not fit; undefined when it cannot give that much. */
+function shrinkFlex(segs: Seg[], over: number): Seg[] | undefined {
+	const at = segs.findIndex((seg) => seg.flex);
+	const flex = segs[at];
+	if (!flex) return undefined;
+	const keep = visibleWidth(flex.text) - over - 1;
+	if (keep < 0) return undefined;
+	const cut = `${cutPlain(flex.text, keep)}…`;
+	const text = cut + " ".repeat(Math.max(0, keep + 1 - visibleWidth(cut)));
+	return segs.map((seg, i) => (i === at ? { ...seg, text } : seg));
+}
+
+/** Cut from the right: the last cell is `…` in the role of the segment it cut. */
+function cutRight(segs: Seg[], width: number): Seg[] {
+	const out: Seg[] = [];
+	let room = Math.max(0, width - 1);
+	for (const seg of segs) {
+		const cells = visibleWidth(seg.text);
+		if (cells <= room) {
+			out.push(seg);
+			room -= cells;
+			continue;
+		}
+		out.push({ ...seg, text: `${cutPlain(seg.text, room)}…` });
+		break;
+	}
+	return out;
+}
+
+/**
+ * Segments made printable and cut to exactly `width` cells, measured on their plain text, so a cut never
+ * lands inside an escape code (the paint comes after). Too long, the flexible segment gives way first; with
+ * none, or not enough of it, the line is cut from the right. Short, the line is padded.
+ */
+export function fitSegs(segs: Seg[], width: number): Seg[] {
+	const clean = segs.map((seg) => ({ ...seg, text: printable(seg.text) }));
+	const total = visibleWidth(segsText(clean));
+	const out = total > width ? (shrinkFlex(clean, total - width) ?? cutRight(clean, width)) : clean;
+	const used = visibleWidth(segsText(out));
+	if (used < width) out.push({ role: out.at(-1)?.role ?? "text", text: " ".repeat(width - used) });
+	return out;
+}
+
+/** The role a plain string body line is painted in: `warning` behind a `⚠`, `muted` otherwise. Rows carry their own. */
+export const plainRole = (line: string): "warning" | "muted" => (line.trimStart().startsWith("⚠") ? "warning" : "muted");
+
+/**
+ * Paint a line already cut to width. A string keeps one role over the whole line (`roleOf` reads it), exactly
+ * as the frame painted strings before segments; a row's segments are painted each in its own role, and blank
+ * ones (indent, padding) are left unpainted.
+ */
+export function paintLine(line: Line, fg: (role: string, text: string) => string, roleOf: (text: string) => string): string {
+	if (typeof line === "string") return fg(roleOf(line), line);
+	return line.segs.map((seg) => (seg.text.trim() ? fg(seg.role, seg.text) : seg.text)).join("");
+}
+
+/**
+ * A section's header as a row: ` ─ ` and the rule `dim`, the name `accent`, the answer `text` (or its own
+ * segments). The answer gives way first when the header is too long, so the name stays whole.
+ */
+export function sectionHeader(title: string, summary: string | Seg[] | undefined, width: number): Row {
+	let answer: Seg[] = [];
+	if (typeof summary === "string") answer = [{ role: "text", text: summary, flex: true }];
+	else if (summary) answer = summary;
+	const head: Seg[] = [
+		{ role: "dim", text: " ─ " },
+		{ role: "accent", text: title },
+		...(answer.length ? [{ role: "dim", text: " · " } as Seg, ...answer] : []),
+		{ role: "dim", text: " " },
 	];
+	const rest = width - visibleWidth(printable(segsText(head)));
+	return { segs: fitSegs([...head, { role: "dim", text: "─".repeat(Math.max(0, rest)) }], width) };
+}
+
+/**
+ * One section as the frame draws it: the header ` ─ title · summary ───`, where the summary is the section's
+ * answer (`signals · ok`), then the body indented `BODY_INDENT` cells and cut to `width`, at most
+ * `COMPACT_LINES` of it at compact depth. An empty body folds the section to its header: a quiet section says
+ * so in one line. A row keeps its item through the cut and the cap.
+ */
+export function sectionBlock(
+	title: string,
+	summary: string | Seg[] | undefined,
+	body: Line[],
+	width: number,
+	depth: Depth = "expanded",
+): [Row, ...Line[]] {
+	const indent = " ".repeat(BODY_INDENT);
+	const shown = depth === "compact" ? body.slice(0, COMPACT_LINES) : body;
+	return [
+		sectionHeader(title, summary, width),
+		...shown.map((line) =>
+			typeof line === "string"
+				? fit(`${indent}${line}`, width)
+				: { ...line, segs: fitSegs([{ role: "text", text: indent }, ...line.segs], width) },
+		),
+	];
+}
+
+/**
+ * Every line of a body as a row of one item: a section that is one thing to focus (the context section, whose
+ * enter opens `/context`) names it once for all its lines. A string keeps the role it would have been painted in.
+ */
+export function asItem(body: Line[], key: string): Row[] {
+	return body.map((line) =>
+		typeof line === "string" ? { segs: [{ role: plainRole(line), text: line }], item: key } : { ...line, item: key },
+	);
+}
+
+/** A drawn sidebar row, unboxed, and the item it shows, if any: what `/sidebar focus` moves between. */
+export interface FrameRow {
+	text: string;
+	item?: { section: SectionId; key: string };
+}
+
+/**
+ * The sections under the trajectory as painted rows: a blank row, then each section's lines (from
+ * `sectionBlock`). A body string is painted in the role `roleOf` reads; a row in its segments' roles, and its
+ * item is kept beside it, so the frame can map a drawn row back to an item.
+ */
+export function drawSections(
+	sections: { id: SectionId; lines: [Row, ...Line[]] }[],
+	width: number,
+	fg: (role: string, text: string) => string,
+	roleOf: (text: string) => string = plainRole,
+	selected?: { section: SectionId; key: string },
+): FrameRow[] {
+	return sections.flatMap(({ id, lines: [header, ...body] }) => [
+		{ text: " ".repeat(width) },
+		{ text: paintLine(header, fg, () => "dim") },
+		...body.map((line): FrameRow => {
+			if (typeof line === "string" || !line.item) return { text: paintLine(line, fg, roleOf) };
+			const item = { section: id, key: line.item };
+			return {
+				text: paintLine(item.section === selected?.section && item.key === selected.key ? withGutter(line) : line, fg, roleOf),
+				item,
+			};
+		}),
+	]);
+}
+
+/** The selection's mark, the trajectory's own: a `▌` in accent in the first cell of the indent. */
+function withGutter(line: Row): Row {
+	const [indent, ...rest] = line.segs;
+	if (!indent?.text.startsWith(" ")) return line;
+	return { ...line, segs: [{ role: "accent", text: "▌" }, { ...indent, text: indent.text.slice(1) }, ...rest] };
 }
 
 /** Where the context goes, in tokens (chars / 4). What the context section and /context read. */
@@ -141,6 +453,10 @@ export interface ContextSplit {
 	tools: number;
 	hidden: number;
 	skills: number;
+	/** memorq's injected tokens, taken out of `prompt`; absent without memorq (or one that does not say). */
+	memory?: number;
+	/** The notes memorq holds, for the expanded row's lever note. */
+	memoryNotes?: number;
 	messages: number;
 	window: number;
 	/** Share of the last request's input that came from the cache, 0..1. */
@@ -150,56 +466,32 @@ export interface ContextSplit {
 	counts: { orq: number; builtin: number; hidden: string[]; skills: number; hinted: number; turns: number; results: number };
 }
 
-/** `5.1k`, one decimal up to a million: the section is narrow and 17.8k reads better than 18k. */
-const k = (n: number) => (n < 1000 ? `${n}` : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : tokens(n));
-
 export const contextUsed = (split: ContextSplit) =>
-	split.prompt + split.hints + split.project + split.tools + split.skills + split.messages;
+	split.prompt + split.hints + split.project + (split.memory ?? 0) + split.tools + split.skills + split.messages;
 
-/**
- *   prompt ▇▇▁▁▁▁▁▁  5.1k skills  1.9k
- *   tools  ▇▇▇▇▇▇▁▁ 17.8k msgs    2.4k
- *   cache 94% · 27.3k/1.1M · /context
- */
-export function contextLines(split: ContextSplit, width: number): string[] {
-	const used = contextUsed(split);
-	if (split.agent)
-		return sectionLines(
-			"context",
-			[`agent ${split.agent}: its prompt`, "and tools run on orq.ai", `msgs ${k(split.messages)}/${tokens(split.window)} · /context`],
-			width,
-		);
-	const bar = (n: number) => contextBar(used ? n / used : 0);
-	const prompt = split.prompt + split.hints + split.project;
-	return sectionLines(
-		"context",
-		[
-			`prompt ${bar(prompt)}${k(prompt).padStart(6)} skills${k(split.skills).padStart(6)}`,
-			`tools  ${bar(split.tools)}${k(split.tools).padStart(6)} msgs  ${k(split.messages).padStart(6)}`,
-			[split.cache !== undefined ? `cache ${Math.round(split.cache * 100)}%` : "", `${k(used)}/${tokens(split.window)}`, "/context"]
-				.filter(Boolean)
-				.join(" · "),
-		],
-		width,
-	);
+/** Nothing to look at: no loop, no failed call, nothing waiting on the gate. */
+const quiet = (signals: Signals) => !signals.loop && !signals.errors && !signals.pending;
+
+/** The signals header's answer: `ok` while nothing fires, so the section folds to `─ signals · ok`. */
+export function signalSummary(signals: Signals): string | undefined {
+	return quiet(signals) ? "ok" : undefined;
 }
 
-/** `⚠ tool loop  get_span ×4 same args`, then the counts; one calm line when nothing fires. */
-export function signalLines(signals: Signals, width: number): string[] {
+/** `⚠ tool loop  get_span ×4 same args`, then the counts; nothing while nothing fires. */
+export function signalBody(signals: Signals): string[] {
+	if (quiet(signals)) return [];
 	const body: string[] = [];
 	if (signals.loop) body.push(`⚠ tool loop  ${signals.loop.tool} ×${signals.loop.count} same args`);
-	if (!signals.loop && !signals.errors && !signals.pending) body.push(`no warnings · ${signals.oneWay} irreversible calls`);
-	else
-		body.push(
-			[
-				signals.errors ? `errors ${signals.errors}/${signals.tools}` : "",
-				`irreversible calls ${signals.oneWay}`,
-				signals.pending ? `pending ${signals.pending}` : "",
-			]
-				.filter(Boolean)
-				.join(" · "),
-		);
-	return sectionLines("signals", body, width);
+	body.push(
+		[
+			signals.errors ? `errors ${signals.errors}/${signals.tools}` : "",
+			`irreversible calls ${signals.oneWay}`,
+			signals.pending ? `pending ${signals.pending}` : "",
+		]
+			.filter(Boolean)
+			.join(" · "),
+	);
+	return body;
 }
 
 const SPARK = "▁▂▃▄▅▆▇█";
@@ -210,20 +502,25 @@ const megabytes = (bytes: number) => {
 	return mb < 1024 ? `${Math.round(mb)} MB` : `${(mb / 1024).toFixed(1)} GB`;
 };
 
+/** The process header's answer: orqi's resident memory now, `174 MB`. */
+export function processSummary(samples: number[]): string {
+	const now = samples.at(-1);
+	return now === undefined ? "measuring…" : megabytes(now);
+}
+
 /**
  *   184 MB  ▅▆▇▇████▇▇▇▇  peak 212 MB
- * The process section: orqi's resident memory now, the last twelve samples
- * scaled to the peak (a leak reads as a climb), and the peak since the session
- * started.
+ * The process section expanded: the resident memory now, the last twelve samples scaled to the peak (a
+ * leak reads as a climb), and the peak since the session started. Compact, the header says it all.
  */
-export function processLines(samples: number[], peak: number, width: number): string[] {
+export function processBody(samples: number[], peak: number, depth: Depth): string[] {
 	const now = samples.at(-1);
-	if (now === undefined) return sectionLines("process", [], width, "measuring…");
+	if (now === undefined || depth === "compact") return [];
 	const bars = samples
 		.slice(-12)
 		.map((rss) => SPARK[Math.min(SPARK.length - 1, Math.floor((rss / Math.max(1, peak)) * SPARK.length))])
 		.join("");
-	return sectionLines("process", [`${megabytes(now).padEnd(7)} ${bars.padEnd(12)}  peak ${megabytes(peak)}`], width);
+	return [`${megabytes(now).padEnd(7)} ${bars.padEnd(12)}  peak ${megabytes(peak)}`];
 }
 
 /** The peek view for one step: its header line and full content, wrapped by the caller. */
