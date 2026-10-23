@@ -1005,7 +1005,9 @@ export function orqHarness(deps: HarnessDeps) {
 					if (section.id === "trajectory") return [];
 					const view: SectionFrame = { signals: found, depth: prefs.sidebarDepth?.[section.id] ?? "compact" };
 					const body = section.lines(inner - BODY_INDENT, view);
-					return body ? [{ id: section.id, lines: sectionBlock(section.title, section.summary?.(view), body, inner, view.depth) }] : [];
+					// Routing's content is not redesigned, so it keeps all its lines: the compact cap is for the others.
+					const cap = section.id === "routing" ? "expanded" : view.depth;
+					return body ? [{ id: section.id, lines: sectionBlock(section.title, section.summary?.(view), body, inner, cap) }] : [];
 				});
 				const below = drawn.reduce((n, section) => n + 1 + section.lines.length, 0);
 				// The slot is the screen less what composeLayout keeps above and below it, or the overlay's

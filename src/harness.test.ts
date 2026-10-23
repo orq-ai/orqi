@@ -2962,6 +2962,8 @@ test("a resumed session's routing section counts the replayed decisions: the mar
 		expect(lines[at + 2]).toMatch(/^1 switch · lost cache ~\$0\.\d+$/);
 		expect(lines[at + 3]).toBe("1 unsure, kept the last model");
 		expect(lines[at + 4]).toBe("decider-4b 2× · 0.2 s · $0.00002");
+		// Routing keeps all its lines (its content is not redesigned): the saving survives the compact cap.
+		expect(lines[at + 5]).toMatch(/^(saved|costs) ~\$0\.\d+ (vs|more than) gpt-5\.6-terra$/);
 	} finally {
 		await h.stop();
 		rmSync(dir, { recursive: true, force: true });
