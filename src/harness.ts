@@ -57,6 +57,8 @@ import { toolGate } from "./gate.ts";
 import { registerHandoff } from "./handoff.ts";
 import { createExitPlanTool, PLAN_ENTRY, PLAN_OFF, PLAN_ON, planPath, runPrompt } from "./plan.ts";
 import type { PermissionMode } from "./permission-mode.ts";
+import type { AgentTypeProblem } from "./agent-types.ts";
+import type { AgentType } from "./subagent.ts";
 import {
 	confidenceFloor,
 	DIFFICULTY_QUESTION,
@@ -98,6 +100,8 @@ export interface HarnessDeps {
 	now?: () => number;
 	/** This session's pi settings, so `/compact-at` can move the compaction reserve in memory. */
 	settingsManager?: SettingsManager;
+	/** The subagent types and the files that did not load, for `/subagents`; absent, the built-ins only. */
+	agentTypes?: () => { types: Record<string, AgentType>; problems: AgentTypeProblem[] };
 }
 
 const ROUTE_ENTRY = "orqi-route";

@@ -91,6 +91,7 @@ export const ORQI_COMMANDS = [
 	"decider",
 	"tools",
 	"skills",
+	"subagents",
 	"context",
 	"plan",
 	"handoff",

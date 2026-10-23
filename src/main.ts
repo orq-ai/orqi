@@ -693,6 +693,7 @@ const makeServices = async () => {
 				commands,
 				orqHarness({
 					agentDir: AGENT_DIR,
+					agentTypes: loadedAgentTypes,
 					catalogue: () => models.catalogue,
 					modelRuntime,
 					memorq: () => (memorqPackage ? "installed" : "none"),

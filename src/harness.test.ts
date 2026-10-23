@@ -19,8 +19,10 @@ import {
 	sectionLineRole,
 	sectionRows,
 	sectionsToDraw,
+	type HarnessDeps,
 	type InspectorSection,
 } from "./harness.ts";
+import { AGENT_TYPES } from "./subagent.ts";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { breakdownRows, contextRows, contextSplit, costLines, repriced, topModel } from "./harness-views.ts";
 import {
@@ -687,6 +689,7 @@ function harnessOn(
 		settingsManager?: SettingsManager;
 		/** pi.exec, for the footer's git badges; absent, every call throws. */
 		exec?: (command: string, args: string[]) => Promise<{ stdout: string; code: number }>;
+		agentTypes?: HarnessDeps["agentTypes"];
 	} = {},
 ) {
 	const tools = new Map<string, any>();
@@ -738,6 +741,7 @@ function harnessOn(
 		permissionMode: options.permissionMode,
 		routing: options.routing as never,
 		settingsManager: options.settingsManager,
+		agentTypes: options.agentTypes,
 	})(pi as any);
 	const notices: string[] = [];
 	const widgets = new Map<string, unknown>();
@@ -2589,6 +2593,57 @@ test("plan mode lets reads through, asks for every Bash command and blocks the r
 	expect(await gate.onToolCall({ toolCallId: "b2", toolName: "bash", input: { command: "ls" } }, ui)).toBeUndefined();
 	expect(asked).toHaveLength(1);
 	expect(await gate.onToolCall({ toolCallId: "e2", toolName: "edit", input: {} }, ui)).toBeUndefined();
+});
+
+test("/subagents lists built-in, user and project types, then the files that did not load", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "orqi-subagents-"));
+	const custom = (description: string, source: string) => ({
+		description,
+		prompt: "You audit.\nCarefully.",
+		tools: ["list_evaluators", "get_span"],
+		rung: "hard" as const,
+		source,
+	});
+	const h = harnessOn(dir, {
+		agentTypes: () => ({
+			types: {
+				...AGENT_TYPES,
+				mine: custom("my own", join(dir, "agents", "mine.md")),
+				auditor: custom("audits evaluators", "/work/orqi/.orqi/agents/auditor.md"),
+			},
+			problems: [{ file: "/work/orqi/.orqi/agents/Bad.md", reason: "the file name must be lowercase letters, digits and dashes" }],
+		}),
+	});
+	try {
+		await h.start();
+		await h.commands.get("subagents")!("", h.ctx);
+		const panel = h.opened.panel!;
+		const rows = panelRows(panel);
+		expect(rows[0]).toMatch(/^investigator +built-in +finds the root cause/);
+		expect(rows).toContainEqual(expect.stringMatching(/^mine +user +my own$/));
+		expect(rows).toContainEqual(expect.stringMatching(/^auditor +project +audits evaluators$/));
+		expect(rows.at(-1)).toStartWith("✗ /work/orqi/.orqi/agents/Bad.md: the file name must");
+		// Enter on the project type: its contract and its prompt.
+		for (let i = 0; i < 4; i++) panel.handleInput("\x1b[B");
+		panel.handleInput("\r");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const detail = panelRows(h.opened.panel!);
+		expect(detail).toEqual([
+			"description",
+			"audits evaluators", // panelRows strips the two-space indent
+			"",
+			"tools  list_evaluators, get_span",
+			"rung   hard",
+			"path   /work/orqi/.orqi/agents/auditor.md",
+			"",
+			"prompt",
+			"You audit.",
+			"Carefully.",
+		]);
+	} finally {
+		await h.stop();
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("plan mode blocks a subagent's one-way call: a user-defined type cannot act while planning", async () => {
