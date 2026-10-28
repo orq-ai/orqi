@@ -10,16 +10,6 @@ curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh
 
 It downloads the latest release binary. No clone, no Bun.
 
-**Any platform with Node, and the supported way on Windows:**
-
-```bash
-npm install -g @orq-ai/orqi
-```
-
-npm installs only the binary for your platform: macOS arm64 or x64, Linux x64 or arm64, or Windows
-x64. Setting up the npm packages for a release is in
-[distribution/npm-install.md](distribution/npm-install.md).
-
 ## What you also need
 
 The [orq CLI](https://github.com/orq-ai/orq-cli) on your `PATH`. orqi asks it for the host and the
@@ -48,13 +38,12 @@ orqi update
 - If there is one, a notice above the editor shows the command to run. It clears after your first
   message.
 - `orqi update` never runs by itself.
-- For an npm install it updates through npm.
 - `ORQI_VERSION` pins a release. An older pin than the running version is refused unless you pass
   `--allow-downgrade`.
 
 ## Verifying a download
 
-Both installers check the download against the `.sha256` file published with each release, and
+`install.sh` and `orqi update` check the download against the `.sha256` file published with each release, and
 refuse to install on a mismatch.
 
 To prove which workflow run built a tarball:

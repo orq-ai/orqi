@@ -4,7 +4,7 @@
  *
  * The line format is the one `shasum -a 256` prints, `<hex>  <name>`, so
  * `shasum -a 256 -c` and `sha256sum -c` read the sidecars back unchanged
- * (release.yml checks the downloaded assets that way before staging npm).
+ * (release.yml's smoke test checks the linux tarball that way).
  */
 
 import { createHash } from "node:crypto";
