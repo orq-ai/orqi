@@ -1,5 +1,9 @@
 # npm distribution for orqi
 
+> **Paused.** `release.yml` no longer stages or publishes the npm packages, and the install docs no
+> longer offer npm. This page and `npm/` are kept for when it comes back; the removed jobs are in
+> git history.
+
 `npm i -g @orq-ai/orqi`. Like Homebrew, npm does not set `com.apple.quarantine`
 on what it installs, so this sidesteps Gatekeeper without a Developer ID
 certificate. Unlike Homebrew it also reaches people who have Node but not brew,

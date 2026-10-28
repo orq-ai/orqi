@@ -18,8 +18,6 @@ skills, already connected.
    curl -fsSL https://raw.githubusercontent.com/orq-ai/orqi/main/install.sh | sh
    ```
 
-   Or `npm install -g @orq-ai/orqi`, which is the one to use on Windows.
-
 2. **Run** `orqi`
 3. **Sign in** when it asks: in the browser, or paste an API key.
 4. **Type** `/learn` for six guided first prompts.
