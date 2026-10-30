@@ -196,7 +196,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
 - **Plan mode is enforced by the gate, not by the prompt.** pi's own plan-mode example relies on
   the prompt and a Bash allowlist; orqi's `planBlock` (`src/gate.ts`) is an allowlist of tools
   instead, read per call, so `/plan` bites mid-turn and a plugin tool nobody reviewed is blocked
-  rather than trusted. memorq's `memory_recall` is on the list (it only searches notes); `memory_write` is not.
+  rather than trusted. memorq's `memory_recall` is on the list (it only searches notes); `memory_write` and `memory_forget` (a note moved to `superseded/`) are not.
   Subagents' orq calls re-enter the gate through the parent's `executeTool`;
   `agent/<key>` is blocked because a managed agent runs its own tools server-side, and selecting an
   agent model switches plan mode off for the same reason. Bash always asks while planning, even
@@ -586,7 +586,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (a path once, with its newest time, capped), and the sidebar shows a note by the title in its file
   (`src/note-info.ts`: the first `# ` heading, `Trigger:` or `Use when:` for the detail line, else the file
   name's words). The file is read when the read is counted and again only when its modified time moved,
-  never in a render. memorq sends only its newest five recalls and saves, so orqi keeps every one it has
+  never in a render. memorq sends only its newest five recalls, saves and forgets (a forget event is `− <name>` with its reason under it, and peek shows the name, the reason and `moved to superseded/` without reading a file), so orqi keeps every one it has
   seen this session (`mergeRecent`): that is what counts the recalls that found nothing. The section's view
   (`memoryView`) is rebuilt when a state arrives or a note is read, and a render only lays it out. Expanded,
   the frame hands memory the rows the other sections leave (`SectionFrame.rows`), so it lists as many events as
@@ -594,7 +594,7 @@ Needs Bun and the [orq CLI](https://github.com/orq-ai/orq-cli) on PATH, plus eit
   (`depthKeyUsed` in `orqi.json`). The `read N of M` count is of notes and rules (what memorq's `notes` counts): a skill read
   is an event but not in it, and N never passes M. `mergeRecent` forgets what it saw when memorq's totals go
   down, which is memorq starting a session of its own.
-- **The trajectory's memory marks are session-local too.** A read becomes a `◇ memory <title>` row once it is counted (until then it is a plain `⚙ tool read`), and after a resume or a compaction rebuild the earlier reads stay tool rows: only recalls and saves are restored, from their tool results.
+- **The trajectory's memory marks are session-local too.** A read becomes a `◇ memory <title>` row once it is counted (until then it is a plain `⚙ tool read`), and after a resume or a compaction rebuild the earlier reads stay tool rows: only recalls, saves and forgets are restored, from their tool results (a forget is `− forget <name>`, `✓` once its result says the note moved).
 - **A learn is recorded once.** memorq republishes the same `learned` on every change and answers
   every `memorq:state?`, and a resume replays the `orqi-memory` entries, so each learn is keyed by
   `at|trigger|count`, seeded from the branch at session start; a learn published before that waits

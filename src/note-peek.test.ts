@@ -124,6 +124,30 @@ test("a note's text is made printable: no escape code, newline or control charac
 	});
 });
 
+test("a forget has no file to read: the name, that it moved to superseded/, and the reason", () => {
+	store((_dir, stores) => {
+		const forgotten: MemoryEvent = {
+			key: "forget:1:old-note.md",
+			kind: "forget",
+			at: NOW,
+			title: "old-note.md",
+			detail: "superseded by the new build",
+		};
+		// Not even a file that happens to sit under that name in a store is opened: the note was moved.
+		writeFileSync(join(stores.notes, "old-note.md"), "# Old\n\nstill here\n");
+		const peek = peekOf(forgotten, stores, plain, NOW, []);
+		expect(peek.path).toBeUndefined();
+		expect(peek.rows).toEqual(["old-note.md", "moved to superseded/", "", "superseded by the new build"]);
+		expect(peekOf(forgotten, stores, marked, NOW, []).rows).toEqual([
+			"<b>old-note.md</b>",
+			"<d>moved to superseded/</d>",
+			"",
+			"<d>superseded by the new build</d>",
+		]);
+		expect(peekOf({ ...forgotten, detail: undefined }, stores, plain, NOW, []).rows).toEqual(["old-note.md", "moved to superseded/"]);
+	});
+});
+
 test("a save names its file only when memorq sent it from inside a store; elsewhere it shows what is known", () => {
 	store((dir, stores) => {
 		const inside = join(stores.notes, "saved.md");

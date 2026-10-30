@@ -61,7 +61,8 @@ export function maskSecrets(value: unknown): unknown {
 
 /**
  * Tools that read and nothing else: what plan mode lets through besides benign orq calls. memorq's
- * `memory_recall` searches the notes and writes nothing; its `memory_write` stays blocked while planning.
+ * `memory_recall` searches the notes and writes nothing; its `memory_write` and `memory_forget` write
+ * (a note, a move to superseded/), so they stay blocked while planning.
  */
 const PLAN_READS = new Set(["read", "ask_user", "exit_plan", "web_search", "web_fetch", "memory_recall"]);
 

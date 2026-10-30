@@ -77,11 +77,11 @@ It sits beside the transcript from 140 columns wide. `alt+s` forces it on or off
 
 | Section | Shows |
 |---|---|
-| trajectory | Every step, one row each, read by its mark: `›` you, `▌` the model, `◇ ↳ +` a memory call, `⚙` any other tool. Its title counts steps and turns |
+| trajectory | Every step, one row each, read by its mark: `›` you, `▌` the model, `◇ ↳ + −` a memory call, `⚙` any other tool. Its title counts steps and turns |
 | signals | Warnings such as a tool called three times with the same arguments, errors, calls that cannot be undone. Just `signals · ok` while there are none |
 | context | Where the context window goes, and the cache hit rate |
 | routing | Under `orq/auto`: picks per model, switches, the decider's cost, an estimated saving. Its title names the slot answering now |
-| memory | With memorq installed: a bar of the notes read against the notes kept, recall and save counts, and the newest event. `alt+m` lists the events |
+| memory | With memorq installed: a bar of the notes read against the notes kept, recall, save and forget counts, and the newest event (a forget is `−`, a note memorq moved to `superseded/`). `alt+m` lists the events |
 | process | orqi's own memory use in its title; set `"process": "expanded"` under `sidebarDepth` in `orqi.json` for the last minute and the peak (no key does it). Off until you turn it on |
 
 `/sidebar` switches sections on and off, and the choice is saved. Each title answers its section's
@@ -160,11 +160,11 @@ thread link.
 When the memorq pi package is installed, the sidebar gains a memory section whose header says how many
 notes memorq keeps for the repository. Compact, it shows how many of them the model read (a bar and
 `3 of 22`), the recalls, misses and saves of the session, and the newest event with its age: a note
-read (`◇`), a recall (`↳`, with how many notes it found) or a save (`+`, or `=` when it was already
-saved). A review running, learning paused or a failed review takes the event's line. `alt+m` lists the
+read (`◇`), a recall (`↳`, with how many notes it found), a save (`+`, or `=` when it was already
+saved) or a forget (`−`, the note's file name, and its reason under it once expanded). A review running, learning paused or a failed review takes the event's line. `alt+m` lists the
 events newest first, as many as fit: each with its whole title, and under it the note's trigger, a
 recall's top hit, or `memory has no note on this yet`. The `alt+m more` hint goes once you have used
 a depth key (it is remembered in `orqi.json`). Each learn is also a step in the trajectory,
-priced in `/cost`. In the trajectory a note the model read is a `◇ memory <title>` row, a recall `↳ recall "query" 3` and a save `+ save <title>`. memorq's `/memory` screen picks the model it writes with from the workspace's chat
+priced in `/cost`. In the trajectory a note the model read is a `◇ memory <title>` row, a recall `↳ recall "query" 3`, a save `+ save <title>` and a forget `− forget <name>` (`✓` once the note has moved, `✗` when memorq refused). memorq's `/memory` screen picks the model it writes with from the workspace's chat
 models, and `/doctor` says whether memorq is loaded and whether `python3`, which it runs on, is
 there. Without memorq, orqi shows none of this.

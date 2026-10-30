@@ -124,7 +124,7 @@ section is not listed.
 Memory comes from memorq, a separate pi package (orq-ai/memorq) that orqi neither
 carries nor installs. The two extensions share only pi's
 in-process event bus: memorq publishes `memorq:state` (notes, notes used this turn, the last learn,
-the next review, the folders it writes to, `activity`: its recalls and saves, each with a `trigger`, a `path` and the top hit when it sends them, which the sidebar lists as memory events; and `context`: the tokens it injected, which the context section shows as its memory part) and asks `memorq:host?`; orqi answers with `memorq:host`
+the next review, the folders it writes to, `activity`: its recalls, saves and forgets (a forget's `text` is the note's file name, with its `reason`; `forgets` is absent from an older memorq and reads as 0), each with a `trigger`, a `path` and the top hit when it sends them, which the sidebar lists as memory events; and `context`: the tokens it injected, which the context section shows as its memory part) and asks `memorq:host?`; orqi answers with `memorq:host`
 (the panel row, the model picker and `decide`, which asks the user's decider) and asks `memorq:state?` at session start. The bus has no replay
 and memorq loads before orqi's own extension, so neither side relies on an event sent before it was
 listening. Each learn becomes an `orqi-memory` session entry and a trajectory step, priced in `/cost`

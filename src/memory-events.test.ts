@@ -7,6 +7,7 @@
 import { expect, test } from "bun:test";
 import { lineText, sectionBlock } from "./inspector-rows.ts";
 import {
+	isActivity,
 	MAX_READS,
 	MAX_SEEN,
 	type MemorqRecent,
@@ -62,7 +63,7 @@ const remember = (text: string, ago: number, extra: Partial<MemorqRecent> = {}):
 /** A state whose activity is `recent`; the totals are the entries' unless given. */
 const active = (recent: MemorqRecent[], recalls?: number, remembers?: number, over: Partial<MemorqState> = {}): MemorqState => {
 	const calls = recent.filter((entry) => entry.kind === "recall").length;
-	return state({ activity: { recalls: recalls ?? calls, remembers: remembers ?? recent.length - calls, recent }, ...over });
+	return state({ activity: { recalls: recalls ?? calls, remembers: remembers ?? recent.length - calls, forgets: 0, recent }, ...over });
 };
 
 interface Options {
@@ -183,6 +184,61 @@ test("recall, missed and saved together; a part that is zero is left out", () =>
 	expect(draw(active([remember("T", MIN)], 0, 3)).text[2]).toBe("  saved 3");
 });
 
+const forget = (text: string, ago: number, reason?: string): MemorqRecent => ({
+	kind: "forget",
+	text,
+	at: NOW - ago,
+	...(reason ? { reason } : {}),
+});
+/** A state whose activity carries forgets: `forgets` is memorq's total, apart from the entries. */
+const forgot = (recent: MemorqRecent[], forgets: number, recalls = 0, remembers = 0): MemorqState =>
+	state({ activity: { recalls, remembers, forgets, recent } });
+
+test("forgetting: a forget is `− name` in warning, the name in text, and the forgot count", () => {
+	const shown = draw(forgot([forget("old-note.md", 2 * MIN, "superseded by the new build")], 1));
+	expect(shown.text.slice(2)).toEqual(["  forgot 1", lr("− old-note.md", "2m")]);
+	expect(shown.runs.slice(2)).toEqual([
+		["muted:forgot", "text:1"],
+		["warning:−", "text:old-note.md", "dim:2m"],
+	]);
+	expect(shown.items[3]).toBe(`forget:${NOW - 2 * MIN}:old-note.md`);
+	// Expanded, the reason is the dim line under it.
+	const open = draw(forgot([forget("old-note.md", 2 * MIN, "superseded by the new build")], 1), "expanded");
+	expect(open.text.slice(1, 4)).toEqual([lr("− old-note.md", "2m"), "    superseded by the new build", ""]);
+	expect(open.runs.slice(1, 3)).toEqual([["warning:−", "text:old-note.md", "dim:2m"], ["dim:superseded by the new build"]]);
+	// A forget with no reason has no detail line.
+	expect(draw(forgot([forget("old-note.md", MIN)], 1), "expanded").text.slice(1, 3)).toEqual([lr("− old-note.md", "1m"), ""]);
+});
+
+test("forgets sort in with the other events, and the counts line says recall, missed, saved, forgot", () => {
+	const recent = [recall("a", MIN, 0), forget("n.md", 2 * MIN, "stale"), remember("T", 3 * MIN)];
+	const shown = draw(forgot(recent, 1, 1, 1), "expanded");
+	expect(shown.text.filter((row) => /^ {2}[↳−+]/.test(row)).map((row) => row.trim().split(" ")[0])).toEqual(["↳", "−", "+"]);
+	expect(draw(forgot(recent, 1, 1, 0)).text[2]).toBe("  recall 1 · 1 missed · forgot 1");
+	// All four parts are too wide for the body, so the missed word shortens and the dots close up, as for three digits.
+	expect(draw(forgot(recent, 1, 1, 1)).text[2]).toBe("  recall 1·1 miss·saved 1·forgot 1");
+	expect(draw(forgot(recent, 2, 1, 0)).text[2]).toBe("  recall 1 · 1 missed · forgot 2");
+});
+
+test("a forget total that went down means memorq began a session of its own: what was seen is forgotten", () => {
+	const before = forgot([forget("n.md", MIN)], 3, 0, 0);
+	const seen = mergeRecent([remember("old", 5 * MIN)], before);
+	expect(seen.map((entry) => entry.text)).toEqual(["n.md", "old"]);
+	expect(mergeRecent(seen, forgot([forget("m.md", 20_000)], 1), before).map((entry) => entry.text)).toEqual(["m.md"]);
+});
+
+test("a payload without `forgets` (an older memorq) still draws, with no forgot part", () => {
+	const older = state({ activity: { recalls: 2, remembers: 1, recent: [remember("T", MIN)] } as never }); // sent without `forgets`
+	expect(draw(older).text[2]).toBe("  recall 2 · saved 1");
+	expect(memoryView(older, [], info)?.events.map((event) => event.kind)).toEqual(["save"]);
+	// A forgets that is not a count is a malformed activity: no totals, no events, as for any odd count.
+	for (const bad of ["x", null, -1, 1.5]) {
+		const odd = state({ activity: { recalls: 1, remembers: 0, forgets: bad, recent: [recall("a", MIN, 1)] } as never });
+		expect(draw(odd).body).toEqual([]);
+		expect(isActivity((odd as { activity: unknown }).activity)).toBe(false);
+	}
+});
+
 test("misses are counted over the session, beyond the five entries memorq sends at a time", () => {
 	const seen = [...[1, 2, 3, 4, 5, 6].map((i) => recall(`miss ${i}`, i * MIN, 0)), recall("hit", 7 * MIN, 2)];
 	expect(draw(active(seen.slice(0, 5), 20, 0), "compact", { seen }).text[2]).toBe("  recall 20 · 6 missed");
@@ -192,18 +248,20 @@ test("misses are counted over the session, beyond the five entries memorq sends 
 
 test("busy: three-digit counts keep every number whole, the word shortening before the dots close up", () => {
 	const seen = Array.from({ length: 100 }, (_, i) => recall(`q${i}`, (i + 1) * MIN, 0));
-	const busy = draw(state({ notes: 456, activity: { recalls: 123, remembers: 100, recent: seen.slice(0, 5) } }), "compact", {
+	const busy = draw(state({ notes: 456, activity: { recalls: 123, remembers: 100, forgets: 0, recent: seen.slice(0, 5) } }), "compact", {
 		reads: reads(123),
 		seen,
 	});
 	expect(busy.text[1]).toBe(lr("read ███░░░░░░░░░", "123 of 456"));
 	expect(busy.text[2]).toBe("  recall 123 · 100 miss · saved 100");
 	// Without the saved part it fits with the whole word.
-	const fewer = draw(state({ notes: 456, activity: { recalls: 123, remembers: 0, recent: seen.slice(0, 5) } }), "compact", { seen });
+	const fewer = draw(state({ notes: 456, activity: { recalls: 123, remembers: 0, forgets: 0, recent: seen.slice(0, 5) } }), "compact", {
+		seen,
+	});
 	expect(fewer.text[2]).toBe("  recall 123 · 100 missed");
 	// Four digits: the dots close up as the last resort.
 	const huge = Array.from({ length: 1000 }, (_, i) => recall(`q${i}`, (i + 1) * 1000, 0));
-	const four = draw(state({ notes: 456, activity: { recalls: 1234, remembers: 1000, recent: huge.slice(0, 5) } }), "compact", {
+	const four = draw(state({ notes: 456, activity: { recalls: 1234, remembers: 1000, forgets: 0, recent: huge.slice(0, 5) } }), "compact", {
 		seen: huge,
 	});
 	expect(four.text[2]).toBe("  recall 1234·1000 miss·saved 1000");

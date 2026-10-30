@@ -358,6 +358,24 @@ test("a save is `+ save <title>`; one already known reads `= save`", () => {
 	expect(roles(known)).toStartWith(" <dim>=</dim> <muted>save </muted>");
 });
 
+test("a forget is `− forget <name>`: warning mark, muted label, the name gives way, ✓ once it is forgotten", () => {
+	const call = stepOf({ toolName: "memory_forget", label: "memory_forget", args: { name: "old-note.md", reason: "stale" } });
+	const asked = trajectoryRow({ ...call, status: "running" }, 36, false, 1);
+	expect(plain(asked.segs).trimEnd()).toBe(" ⠙ forget old-note.md");
+	const done = trajectoryRow({ ...call, forgot: true }, 36, false);
+	expect(plain(done.segs).trimEnd()).toBe(" − forget old-note.md ✓");
+	expect(roles(done)).toStartWith(" <warning>−</warning> <muted>forget </muted><text>old-note.md</text><dim> ✓</dim>");
+	// A long name gives way and the outcome stays; the escape codes in a name are not drawn.
+	const long = trajectoryRow({ ...call, args: { name: `${"n".repeat(40)}.md` }, forgot: true }, 36, false);
+	expect(plain(long.segs)).toStartWith(" − forget nnn");
+	expect(plain(long.segs)).toEndWith("… ✓");
+	expect(plain(trajectoryRow({ ...call, args: { name: "a\x1b[31mb.md" }, forgot: true }, 36, false).segs)).not.toContain("\x1b");
+	// A refused forget keeps the error mark like any failed tool: the whole row is error, no ✓.
+	const refused = trajectoryRow({ ...call, status: "error" }, 36, false);
+	expect(plain(refused.segs).trimEnd()).toBe(" − forget old-note.md ✗");
+	expect(refused.segs.filter((s) => s.text.trim()).every((s) => s.role === "error")).toBe(true);
+});
+
 test("any other tool keeps `⚙ tool <name> ✓` in dim; a long one still shows its ✓", () => {
 	const row = trajectoryRow(stepOf({ label: "orq_list_traces", durationMs: 800 }), 36, false);
 	expect(plain(row.segs).trimEnd()).toBe(" ⚙ tool orq_list_traces ✓ 0.8s");
@@ -398,6 +416,29 @@ test("minimap rows paint each segment in its own role; selection and scroll stil
 	expect(rows).toHaveLength(5);
 	expect(rows.find((row) => row.startsWith("<accent>▌</accent>"))).toContain("<dim>t7</dim>");
 	expect(strip(minimapRow(steps[0]!, 30, false, 0, ansi)).trimEnd()).toBe(" ⚙ tool t1 ✓");
+});
+
+test("a forget learns its outcome from the tool's result; a refusal does not", () => {
+	const trajectory = new Trajectory();
+	trajectory.toolStart("g1", "memory_forget", { name: "a.md", reason: "r" });
+	trajectory.message({
+		role: "toolResult",
+		toolCallId: "g1",
+		toolName: "memory_forget",
+		content: [{ type: "text", text: "✓ forgotten /n/a.md → superseded/ (it was in this repository: the removal shows in git)" }],
+	});
+	trajectory.toolStart("g2", "memory_forget", { name: "b.md", reason: "r" });
+	trajectory.message({
+		role: "toolResult",
+		toolCallId: "g2",
+		toolName: "memory_forget",
+		isError: true,
+		content: [{ type: "text", text: "✗ no note named b.md" }],
+	});
+	expect(trajectory.steps.map((s) => [s.status, s.forgot])).toEqual([
+		["ok", true],
+		["error", undefined],
+	]);
 });
 
 test("a recall and a save learn their outcome from the tool's result; a read learns its note from the harness", () => {

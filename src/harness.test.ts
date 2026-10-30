@@ -3022,6 +3022,7 @@ test("plan mode lets reads through, asks for every Bash command and blocks the r
 		"mcp__orq__update_agent",
 		"mcp__orq__delete_dataset",
 		"memory_write",
+		"memory_forget",
 		"some_plugin_tool",
 	])
 		expect(planBlock(tool, {})).toContain("Plan mode is read-only");
