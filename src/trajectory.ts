@@ -62,6 +62,8 @@ export interface Step {
 	hits?: number;
 	/** On a `memory_write`: false when the note was already there. */
 	saved?: boolean;
+	/** On a `memory_forget`: true once its result says the note was moved aside. A refusal leaves it unset. */
+	forgot?: boolean;
 }
 
 /** A routing decision in brief: the rung it named, the model a dry run would have used, whether it was an unsure stay or a retry. */
@@ -352,6 +354,7 @@ export class Trajectory {
 			if (step.toolName === "memory_write" && !message.isError && /^(✓ saved|= already saved) /.test(text.trim())) {
 				step.saved = text.trim().startsWith("✓");
 			}
+			if (step.toolName === "memory_forget" && !message.isError && text.trim().startsWith("✓ forgotten ")) step.forgot = true;
 			const note = this.notes.get(message.toolCallId ?? "");
 			if (note) step.note = note;
 			if (step.role === "subagent") {

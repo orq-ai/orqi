@@ -26,12 +26,13 @@ export { printable };
 export type Trigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
 
 /**
- * One recall or save this session, as memorq reports it. `hits`: notes a recall returned; `saved`: false when
+ * One recall, save or forget this session, as memorq reports it. `hits`: notes a recall returned; `saved`: false when
  * the note already existed. `trigger` and `path` are a save's (when the note applies, and its file), `top` a
- * recall's (the title of its first hit); an older memorq sends none of them.
+ * recall's (the title of its first hit), `reason` a forget's (why the note was moved aside; its `text` is the
+ * note's file name); an older memorq sends none of them.
  */
 export interface MemorqRecent {
-	kind: "recall" | "remember";
+	kind: "recall" | "remember" | "forget";
 	text: string;
 	at: number;
 	hits?: number;
@@ -39,12 +40,17 @@ export interface MemorqRecent {
 	trigger?: string;
 	path?: string;
 	top?: string;
+	reason?: string;
 }
 
-/** This session's `recall` and `remember` calls: totals, and the newest few (newest first, at most five). */
+/**
+ * This session's `recall`, `remember` and `forget` calls: totals, and the newest few (newest first, at most five).
+ * `forgets` is optional here only because an older memorq does not send it: it reads as 0.
+ */
 export interface MemorqActivity {
 	recalls: number;
 	remembers: number;
+	forgets?: number;
 	recent: MemorqRecent[];
 }
 
@@ -138,23 +144,37 @@ export function isLearned(data: unknown): data is NonNullable<MemorqState["learn
 	return isObject(data) && isCount(data.count) && isInstant(data.at) && typeof data.trigger === "string";
 }
 
-/** What `isActivity` knows of an activity: two counts and a list. The entries are unknown until `drawable` has checked each. */
+/** What `isActivity` knows of an activity: the counts and a list. The entries are unknown until `drawable` has checked each. */
 export interface ActivityShell {
 	recalls: number;
 	remembers: number;
+	forgets?: number;
 	recent: unknown[];
 }
 
-/** An activity as memorq reports it: two counts and a list. Its entries are checked one by one (`drawable`), not here. */
+/**
+ * An activity as memorq reports it: the counts and a list. `forgets` may be absent (an older memorq), never odd.
+ * Its entries are checked one by one (`drawable`), not here.
+ */
 export function isActivity(data: unknown): data is ActivityShell {
-	return isObject(data) && isCount(data.recalls) && isCount(data.remembers) && Array.isArray(data.recent);
+	return (
+		isObject(data) &&
+		isCount(data.recalls) &&
+		isCount(data.remembers) &&
+		(absent(data.forgets) || isCount(data.forgets)) &&
+		Array.isArray(data.recent)
+	);
 }
 
 /** An entry of `activity.recent` the section can draw: a known kind, text, a time, and `hits` / `saved` only when well formed. */
 function isRecent(data: unknown): data is MemorqRecent {
 	if (!isObject(data) || typeof data.text !== "string" || !isInstant(data.at)) return false;
-	if (data.kind !== "recall" && data.kind !== "remember") return false;
-	return (absent(data.hits) || isCount(data.hits)) && (absent(data.saved) || typeof data.saved === "boolean");
+	if (data.kind !== "recall" && data.kind !== "remember" && data.kind !== "forget") return false;
+	return (
+		(absent(data.hits) || isCount(data.hits)) &&
+		(absent(data.saved) || typeof data.saved === "boolean") &&
+		(absent(data.reason) || typeof data.reason === "string")
+	);
 }
 
 /**
@@ -194,11 +214,12 @@ export function age(ms: number): string {
 const drawable = (data: unknown): data is MemorqRecent => isRecent(data) && printable(data.text).trim() !== "";
 
 /** This session's activity as the section draws it: the counts and the entries it can draw. Undefined when there is nothing to draw. */
-function readActivity(data: unknown): { recalls: number; remembers: number; recent: MemorqRecent[] } | undefined {
+function readActivity(data: unknown): { recalls: number; remembers: number; forgets: number; recent: MemorqRecent[] } | undefined {
 	if (!isActivity(data)) return undefined;
 	const recent = data.recent.filter(drawable);
-	return data.recalls > 0 || data.remembers > 0 || recent.length > 0
-		? { recalls: data.recalls, remembers: data.remembers, recent }
+	const forgets = data.forgets ?? 0;
+	return data.recalls > 0 || data.remembers > 0 || forgets > 0 || recent.length > 0
+		? { recalls: data.recalls, remembers: data.remembers, forgets, recent }
 		: undefined;
 }
 
@@ -225,9 +246,9 @@ export function noteRead(reads: NoteRead[], path: string, at: number, kind?: Not
 const recentKey = (entry: MemorqRecent) => `${entry.kind}|${entry.at}|${entry.text}`;
 
 /** memorq's totals in a state: zero before its first call (no activity at all); undefined for an activity that is malformed. */
-function totalsOf(state: MemorqState): { recalls: number; remembers: number } | undefined {
-	if (state.activity === undefined || state.activity === null) return { recalls: 0, remembers: 0 };
-	return isActivity(state.activity) ? state.activity : undefined;
+function totalsOf(state: MemorqState): { recalls: number; remembers: number; forgets: number } | undefined {
+	if (state.activity === undefined || state.activity === null) return { recalls: 0, remembers: 0, forgets: 0 };
+	return isActivity(state.activity) ? { ...state.activity, forgets: state.activity.forgets ?? 0 } : undefined;
 }
 
 /**
@@ -239,7 +260,7 @@ function totalsOf(state: MemorqState): { recalls: number; remembers: number } | 
 export function mergeRecent(seen: MemorqRecent[], state: MemorqState, before?: MemorqState): MemorqRecent[] {
 	const now = totalsOf(state);
 	const was = before && totalsOf(before);
-	if (now && was && (now.recalls < was.recalls || now.remembers < was.remembers)) seen = [];
+	if (now && was && (now.recalls < was.recalls || now.remembers < was.remembers || now.forgets < was.forgets)) seen = [];
 	const activity = readActivity(state.activity);
 	const known = new Set(seen.map(recentKey));
 	const fresh = activity?.recent.filter((entry) => !known.has(recentKey(entry))) ?? [];
@@ -250,13 +271,13 @@ export function mergeRecent(seen: MemorqRecent[], state: MemorqState, before?: M
 /** One thing memory did, as the section lists it. `key` is stable across redraws: the row's item, for focus and peek. */
 export interface MemoryEvent {
 	key: string;
-	kind: "read" | "recall" | "save" | "dupe";
+	kind: "read" | "recall" | "save" | "dupe" | "forget";
 	at: number;
 	/** A note's title, a save's name, or a recall's query (the section quotes it). */
 	title: string;
 	/** A recall's notes found: its result reads `→ 5` compact and `found 5` expanded. */
 	hits?: number;
-	/** The dim line under an expanded event: when the note applies, a recall's top hit, or why a recall found nothing. */
+	/** The dim line under an expanded event: when the note applies, a recall's top hit, why a recall found nothing, or a forget's reason. */
 	detail?: string;
 	/** The note file behind a read, or behind a save when memorq says where it wrote it: what peek opens. Absent otherwise. */
 	path?: string;
@@ -273,6 +294,7 @@ export interface MemoryView {
 	recalls: number;
 	missed: number;
 	saved: number;
+	forgot: number;
 }
 
 /** What a recall found, under it: nothing, or its first hit; silent when memorq did not say. */
@@ -322,6 +344,17 @@ export function memoryView(
 			});
 			continue;
 		}
+		if (entry.kind === "forget") {
+			// The note is in superseded/ now: the name and the reason are all there is, so there is no path to open.
+			events.push({
+				key: `forget:${entry.at}:${text}`,
+				kind: "forget",
+				at: entry.at,
+				title: text,
+				detail: clean(entry.reason) || undefined,
+			});
+			continue;
+		}
 		const path = clean(entry.path);
 		const key = `save:${entry.at}:${path || text}`;
 		const kind = entry.saved === false ? "dupe" : "save";
@@ -330,7 +363,15 @@ export function memoryView(
 	events.sort((a, b) => b.at - a.at);
 	const recalls = activity?.recalls ?? 0;
 	const missed = Math.min(recalls, recent.filter((entry) => entry.kind === "recall" && entry.hits === 0).length);
-	return { state, events, read: reads.filter((read) => read.kind !== "skills").length, recalls, missed, saved: activity?.remembers ?? 0 };
+	return {
+		state,
+		events,
+		read: reads.filter((read) => read.kind !== "skills").length,
+		recalls,
+		missed,
+		saved: activity?.remembers ?? 0,
+		forgot: activity?.forgets ?? 0,
+	};
 }
 
 /** The header's answer: `22 notes`, and expanded, how many were read. */
@@ -393,6 +434,7 @@ function markOf(event: MemoryEvent): Seg {
 	if (event.kind === "read") return seg("accent", "◇");
 	if (event.kind === "save") return seg("success", "+");
 	if (event.kind === "dupe") return seg("dim", "=");
+	if (event.kind === "forget") return seg("warning", "−");
 	return seg(event.hits === 0 ? "warning" : "success", "↳");
 }
 
@@ -426,7 +468,7 @@ function readRow(view: MemoryView, width: number): Row {
 }
 
 /**
- * `recall 3 · 1 missed · saved 1`, a zero part left out. Too wide (three-digit counts), `missed` shortens to
+ * `recall 3 · 1 missed · saved 1 · forgot 1`, a zero part left out. Too wide (three-digit counts), `missed` shortens to
  * `miss` first, and only then do the dots close up (`recall 1234·1000 miss·saved 1000`).
  */
 function countsRow(view: MemoryView, width: number): Row | undefined {
@@ -435,6 +477,7 @@ function countsRow(view: MemoryView, width: number): Row | undefined {
 		if (view.recalls > 0) parts.push([seg("muted", "recall "), seg("text", String(view.recalls))]);
 		if (view.recalls > 0 && view.missed > 0) parts.push([seg("dim", `${view.missed} ${missed}`)]);
 		if (view.saved > 0) parts.push([seg("muted", "saved "), seg("text", String(view.saved))]);
+		if (view.forgot > 0) parts.push([seg("muted", "forgot "), seg("text", String(view.forgot))]);
 		const cells = parts.reduce((n, part) => n + visibleWidth(part.map((s) => s.text).join("")), 0) + dots.length * (parts.length - 1);
 		return { parts, dots, cells };
 	};

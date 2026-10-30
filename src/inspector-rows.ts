@@ -45,12 +45,13 @@ function descendants(step: Step): number {
 
 const seg = (role: Role, text: string, flex?: true): Seg => (flex ? { role, text, flex } : { role, text });
 
-/** Which memory mark a tool step wears: a note it read, a recall, a save; undefined for any other tool. */
-function memoryKind(step: Step): "note" | "recall" | "save" | undefined {
+/** Which memory mark a tool step wears: a note it read, a recall, a save, a forget; undefined for any other tool. */
+function memoryKind(step: Step): "note" | "recall" | "save" | "forget" | undefined {
 	if (step.role !== "tool") return undefined;
 	if (step.note) return "note";
 	if (step.toolName === "memory_recall") return "recall";
 	if (step.toolName === "memory_write") return "save";
+	if (step.toolName === "memory_forget") return "forget";
 	return undefined;
 }
 
@@ -85,6 +86,17 @@ function markAndBody(step: Step, titleOf: (path: string) => string, end: string)
 			return {
 				mark: step.saved === false ? seg("dim", "=") : seg("success", "+"),
 				body: [seg("muted", "save "), seg("text", argText(step, "title"), true), ...tail],
+			};
+		case "forget":
+			// `−` (U+2212) in warning, as memorq's own transcript draws the call; ✓ once the note has moved.
+			return {
+				mark: seg("warning", "−"),
+				body: [
+					seg("muted", "forget "),
+					seg("text", argText(step, "name"), true),
+					...(step.forgot && !end ? [seg("dim", " ✓")] : []),
+					...tail,
+				],
 			};
 		default:
 	}
@@ -127,7 +139,7 @@ const basenameOf = (path: string) => path.split("/").pop() || path;
 
 /**
  * One trajectory row as segments, exactly `width` columns: the gutter (`▌` in accent on the current row), a mark
- * that says what happened, then the text. A tool reads as what it did: a note it read, a recall, a save; any other
+ * that says what happened, then the text. A tool reads as what it did: a note it read, a recall, a save, a forget; any other
  * keeps `⚙ tool <name> ✓`. `titleOf` names a note from the cache filled when its read was counted, so a render
  * opens no file. An error turns the whole row `error`. `frame` animates a running step.
  */

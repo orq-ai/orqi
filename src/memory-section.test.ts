@@ -63,7 +63,7 @@ const eventsOf = (st: MemorqState) =>
 
 test("memorq's own types are states orqi accepts, and orqi's host is memorq's", () => {
 	// A hand copy of memorq's exported types. Re-copy them from orq-ai/memorq
-	// integrations/pi/state.ts (copied from memorq 00fb378, v0.13.x, where `activity` is) whenever memorq changes its payload.
+	// integrations/pi/state.ts (copied from memorq's memory-forget branch, where `forgets` is) whenever memorq changes its payload.
 	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
 	interface ProducerState {
 		version: string;
@@ -79,8 +79,9 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 		activity?: {
 			recalls: number;
 			remembers: number;
+			forgets: number;
 			recent: {
-				kind: "recall" | "remember";
+				kind: "recall" | "remember" | "forget";
 				text: string;
 				at: number;
 				hits?: number;
@@ -88,6 +89,7 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 				trigger?: string;
 				path?: string;
 				top?: string;
+				reason?: string;
 			}[];
 		};
 	}
@@ -96,16 +98,28 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 		pickModel(current: string): Promise<string | undefined>;
 	}
 	const produced: ProducerState[] = [
-		{ ...state(), context: 900, review: { dueInSessions: 3 } },
-		{ ...state(), learned: { count: 1, trigger: "manual", at: NOW, pct: 80 }, review: { dueInSessions: 0, failed: "boom" } },
-		{ ...state(), learned: { count: 3, trigger: "sweep", at: NOW, costUsd: 0.2 }, review: { running: true, notes: 47 } },
+		{ ...state(), activity: undefined, context: 900, review: { dueInSessions: 3 } },
+		{
+			...state(),
+			activity: undefined,
+			learned: { count: 1, trigger: "manual", at: NOW, pct: 80 },
+			review: { dueInSessions: 0, failed: "boom" },
+		},
+		{
+			...state(),
+			activity: undefined,
+			learned: { count: 3, trigger: "sweep", at: NOW, costUsd: 0.2 },
+			review: { running: true, notes: 47 },
+		},
 		{
 			...state(),
 			review: { dueInSessions: 2 },
 			activity: {
 				recalls: 2,
 				remembers: 1,
+				forgets: 1,
 				recent: [
+					{ kind: "forget", text: "old-note.md", at: NOW, reason: "superseded" },
 					{ kind: "recall", text: "golden test clock", at: NOW, hits: 2, top: "Golden test depends on the clock" },
 					{
 						kind: "remember",
@@ -380,7 +394,8 @@ test("a malformed entry is skipped, the rest still draw", () => {
 		recent: [
 			null,
 			{ kind: "recall", text: 5, at: NOW, hits: 1 },
-			{ kind: "forget", text: "x", at: NOW },
+			{ kind: "dream", text: "x", at: NOW }, // a kind from a newer memorq
+			{ kind: "forget", text: "bad reason", at: NOW, reason: 5 },
 			{ kind: "recall", text: "bad time", at: "now", hits: 1 },
 			{ kind: "recall", text: "bad hits", at: NOW, hits: -2 },
 			{ kind: "remember", text: "bad saved", at: NOW, saved: "yes" },

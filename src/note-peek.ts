@@ -148,7 +148,7 @@ export function findNoteByTitle(dirs: string[], title: string): string | undefin
 	return undefined;
 }
 
-/** What is known of an event that has no note file to show: a recall's query and result, a save's name. */
+/** What is known of an event that has no note file to show: a recall's query and result, a save's name, a forget's reason. */
 function knownRows(event: MemoryEvent, paint: PeekPaint, now: number): string[] {
 	const ago = age(Math.max(0, now - event.at));
 	const when = ago === "now" ? ago : `${ago} ago`;
@@ -157,6 +157,10 @@ function knownRows(event: MemoryEvent, paint: PeekPaint, now: number): string[] 
 		if (event.hits === 0) result = "found nothing · ";
 		else if (event.hits !== undefined) result = `found ${event.hits} · `;
 		return [paint.bold(`"${event.title}"`), paint.dim(`recall · ${result}${when}`), ...(event.detail ? ["", paint.dim(event.detail)] : [])];
+	}
+	// The note is in superseded/ now and nothing here reads it: the name, where it went and why.
+	if (event.kind === "forget") {
+		return [paint.bold(event.title), paint.dim("moved to superseded/"), ...(event.detail ? ["", paint.dim(event.detail)] : [])];
 	}
 	return [
 		paint.bold(event.title),
@@ -169,6 +173,8 @@ function knownRows(event: MemoryEvent, paint: PeekPaint, now: number): string[] 
 function pathOf(event: MemoryEvent, stores: MemorqState["stores"], roots: string[]): string | undefined {
 	// A read was counted only for a path inside a store, so it is trusted as it is (a link's real path is not under the link).
 	if (event.kind === "read") return event.path;
+	// A forgotten note was moved aside: there is no file under its name to open.
+	if (event.kind === "forget") return undefined;
 	if (event.kind === "recall") return event.top ? findNoteByTitle([stores.notes, stores.rules], event.top) : undefined;
 	// memorq sent this one: it opens only what is inside a store.
 	return event.path && noteKind(event.path, stores, roots) !== undefined ? event.path : undefined;
