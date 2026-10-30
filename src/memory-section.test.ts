@@ -43,7 +43,7 @@ const state = (over: Partial<MemorqState> = {}): MemorqState => ({
 	enabled: "on",
 	...over,
 });
-const activity = (over: Partial<MemorqActivity> = {}): MemorqActivity => ({ recalls: 2, remembers: 1, recent: [], ...over });
+const activity = (over: Partial<MemorqActivity> = {}): MemorqActivity => ({ recalls: 2, remembers: 1, forgets: 0, recent: [], ...over });
 
 /** The body of the section expanded at `width`, in plain text, one string per row. */
 const expanded = (st: MemorqState, width = 34) =>
@@ -63,7 +63,7 @@ const eventsOf = (st: MemorqState) =>
 
 test("memorq's own types are states orqi accepts, and orqi's host is memorq's", () => {
 	// A hand copy of memorq's exported types. Re-copy them from orq-ai/memorq
-	// integrations/pi/state.ts (copied from memorq's memory-forget branch, where `forgets` is) whenever memorq changes its payload.
+	// integrations/pi/state.ts (copied from orq-ai/memorq#87, where `forgets` is) whenever memorq changes its payload.
 	type ProducerTrigger = "compact" | "checkpoint" | "ship" | "idle" | "decision" | "session_end" | "manual" | "sweep";
 	interface ProducerState {
 		version: string;
@@ -98,16 +98,14 @@ test("memorq's own types are states orqi accepts, and orqi's host is memorq's", 
 		pickModel(current: string): Promise<string | undefined>;
 	}
 	const produced: ProducerState[] = [
-		{ ...state(), activity: undefined, context: 900, review: { dueInSessions: 3 } },
+		{ ...state(), context: 900, review: { dueInSessions: 3 } },
 		{
 			...state(),
-			activity: undefined,
 			learned: { count: 1, trigger: "manual", at: NOW, pct: 80 },
 			review: { dueInSessions: 0, failed: "boom" },
 		},
 		{
 			...state(),
-			activity: undefined,
 			learned: { count: 3, trigger: "sweep", at: NOW, costUsd: 0.2 },
 			review: { running: true, notes: 47 },
 		},

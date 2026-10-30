@@ -165,6 +165,6 @@ saved) or a forget (`−`, the note's file name, and its reason under it once ex
 events newest first, as many as fit: each with its whole title, and under it the note's trigger, a
 recall's top hit, or `memory has no note on this yet`. The `alt+m more` hint goes once you have used
 a depth key (it is remembered in `orqi.json`). Each learn is also a step in the trajectory,
-priced in `/cost`. In the trajectory a note the model read is a `◇ memory <title>` row, a recall `↳ recall "query" 3` a save `+ save <title>` and a forget `− forget <name>` (`✓` once the note has moved, `✗` when memorq refused). memorq's `/memory` screen picks the model it writes with from the workspace's chat
+priced in `/cost`. In the trajectory a note the model read is a `◇ memory <title>` row, a recall `↳ recall "query" 3`, a save `+ save <title>` and a forget `− forget <name>` (`✓` once the note has moved, `✗` when memorq refused). memorq's `/memory` screen picks the model it writes with from the workspace's chat
 models, and `/doctor` says whether memorq is loaded and whether `python3`, which it runs on, is
 there. Without memorq, orqi shows none of this.

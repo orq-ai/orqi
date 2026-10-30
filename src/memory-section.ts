@@ -45,12 +45,12 @@ export interface MemorqRecent {
 
 /**
  * This session's `recall`, `remember` and `forget` calls: totals, and the newest few (newest first, at most five).
- * `forgets` is optional here only because an older memorq does not send it: it reads as 0.
+ * An older memorq sends no `forgets`: `isActivity` accepts that and the readers take it as 0.
  */
 export interface MemorqActivity {
 	recalls: number;
 	remembers: number;
-	forgets?: number;
+	forgets: number;
 	recent: MemorqRecent[];
 }
 
@@ -148,12 +148,12 @@ export function isLearned(data: unknown): data is NonNullable<MemorqState["learn
 export interface ActivityShell {
 	recalls: number;
 	remembers: number;
-	forgets?: number;
+	forgets: number;
 	recent: unknown[];
 }
 
 /**
- * An activity as memorq reports it: the counts and a list. `forgets` may be absent (an older memorq), never odd.
+ * An activity as memorq reports it: the counts and a list. `forgets` may be absent (an older memorq, read as 0), never odd: `null` is odd.
  * Its entries are checked one by one (`drawable`), not here.
  */
 export function isActivity(data: unknown): data is ActivityShell {
@@ -161,7 +161,7 @@ export function isActivity(data: unknown): data is ActivityShell {
 		isObject(data) &&
 		isCount(data.recalls) &&
 		isCount(data.remembers) &&
-		(absent(data.forgets) || isCount(data.forgets)) &&
+		(data.forgets === undefined || isCount(data.forgets)) &&
 		Array.isArray(data.recent)
 	);
 }
@@ -217,7 +217,7 @@ const drawable = (data: unknown): data is MemorqRecent => isRecent(data) && prin
 function readActivity(data: unknown): { recalls: number; remembers: number; forgets: number; recent: MemorqRecent[] } | undefined {
 	if (!isActivity(data)) return undefined;
 	const recent = data.recent.filter(drawable);
-	const forgets = data.forgets ?? 0;
+	const forgets = data.forgets ?? 0; // typed required; an older memorq sends none
 	return data.recalls > 0 || data.remembers > 0 || forgets > 0 || recent.length > 0
 		? { recalls: data.recalls, remembers: data.remembers, forgets, recent }
 		: undefined;
